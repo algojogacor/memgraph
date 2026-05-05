@@ -373,7 +373,7 @@ void ExpectStableAcrossPermutations(std::array<TestPattern, N> const &patterns) 
     TestPatternsCompiler perm_compiler;
     auto compiled = perm_compiler.compile(permuted);
     auto code = compiled.code();
-    auto bytecode = disassemble(code, compiled.symbols());
+    auto bytecode = LazyDisassembly{code, compiled.symbols()};
 
     ExpectValidBytecode(compiled);
     EXPECT_EQ(code.size(), canonical_size) << "Permutation " << count << "\n" << bytecode;

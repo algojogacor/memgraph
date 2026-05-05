@@ -188,13 +188,13 @@ TEST_F(PatternVM_Trace, Deduplication_TracesBindDuplicate) {
   // First yields, second is rejected as duplicate.
   auto fails = check_fails();
   bool has_duplicate =
-      std::ranges::any_of(fails, [](auto const *e) { return e->details.find("duplicate") != std::string::npos; });
+      std::ranges::any_of(fails, [](auto const *e) { return e->details().find("duplicate") != std::string::npos; });
   EXPECT_TRUE(has_duplicate) << "Expected duplicate binding rejection\n" << trace_dump();
 
   // Verify the duplicate is followed by a backtrack
   for (std::size_t idx = 0; idx + 1 < tracer.events.size(); ++idx) {
     if (tracer.events[idx].type == EventType::CheckFail &&
-        tracer.events[idx].details.find("duplicate") != std::string::npos) {
+        tracer.events[idx].details().find("duplicate") != std::string::npos) {
       EXPECT_EQ(tracer.events[idx + 1].type, EventType::Backtrack)
           << "Expected Backtrack after duplicate binding at event[" << idx << "]\n"
           << trace_dump();
@@ -397,8 +397,8 @@ TEST_F(PatternVM_Trace, FullFeatureExercise_ThreePatternJoinWithMerge) {
     ASSERT_LT(i, ev.size()) << "Trace ended prematurely at index " << i << "\n" << trace_dump();
     EXPECT_EQ(ev[i].type, EventType::Instruction) << "event[" << i << "]\n" << trace_dump();
     EXPECT_EQ(ev[i].pc, pc) << "event[" << i << "] wrong pc\n" << trace_dump();
-    EXPECT_NE(ev[i].details.find(op_substr), std::string::npos)
-        << "event[" << i << "] expected " << op_substr << " got: " << ev[i].details << "\n"
+    EXPECT_NE(ev[i].details().find(op_substr), std::string::npos)
+        << "event[" << i << "] expected " << op_substr << " got: " << ev[i].details() << "\n"
         << trace_dump();
     ++i;
   };
@@ -407,8 +407,8 @@ TEST_F(PatternVM_Trace, FullFeatureExercise_ThreePatternJoinWithMerge) {
     ASSERT_LT(i, ev.size()) << "Trace ended prematurely at index " << i << "\n" << trace_dump();
     EXPECT_EQ(ev[i].type, type) << "event[" << i << "]\n" << trace_dump();
     EXPECT_EQ(ev[i].pc, pc) << "event[" << i << "] wrong pc\n" << trace_dump();
-    EXPECT_NE(ev[i].details.find(detail_substr), std::string::npos)
-        << "event[" << i << "] expected '" << detail_substr << "' got: " << ev[i].details << "\n"
+    EXPECT_NE(ev[i].details().find(detail_substr), std::string::npos)
+        << "event[" << i << "] expected '" << detail_substr << "' got: " << ev[i].details() << "\n"
         << trace_dump();
     ++i;
   };
