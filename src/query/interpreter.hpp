@@ -19,6 +19,7 @@
 #include "memory/db_arena_fwd.hpp"
 #include "query/context.hpp"
 #include "query/db_accessor.hpp"
+#include "query/plan_v2/egraph_converter.hpp"
 #include "query/query_logger.hpp"
 #include "query/stream.hpp"
 #include "query/trigger_context.hpp"
@@ -496,6 +497,11 @@ class Interpreter final {
   bool IsQueryLoggingActive() const;
   void LogQueryMessage(std::string message);
 
+  // Reused across queries so the planner-v2 extraction buffers (frontier map,
+  // selection, in-degree, topo order) keep their allocated capacity instead of
+  // being freed and re-grown each query.
+  plan::v2::QueryPlannerContext &query_planner_context() { return query_planner_context_; }
+
  private:
   void ResetInterpreter() {
     query_executions_.clear();
@@ -572,6 +578,8 @@ class Interpreter final {
   InterpreterContext *interpreter_context_;
 
   std::optional<FrameChangeCollector> frame_change_collector_;
+
+  plan::v2::QueryPlannerContext query_planner_context_;
 
   std::optional<storage::IsolationLevel> interpreter_isolation_level;
   std::optional<storage::IsolationLevel> next_transaction_isolation_level;

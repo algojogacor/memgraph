@@ -173,7 +173,8 @@ ParsedQuery ParseQuery(const std::string &query_string, UserParameters const &us
 }
 
 auto MakeLogicalPlan(AstStorage ast_storage, CypherQuery *query, const Parameters &parameters, DbAccessor *db_accessor,
-                     const std::vector<Identifier *> &predefined_identifiers) -> std::unique_ptr<LogicalPlan> {
+                     const std::vector<Identifier *> &predefined_identifiers,
+                     plan::v2::QueryPlannerContext &planner_context) -> std::unique_ptr<LogicalPlan> {
   // TODO: we need to make sure we decouple symbol position from frame position
   //       symbols are needed for debugging (a semantic name)
   //       during evaluation frame slots are dumping ground for temporary evaluation results
@@ -194,7 +195,7 @@ auto MakeLogicalPlan(AstStorage ast_storage, CypherQuery *query, const Parameter
       // Extraction produces a compact SymbolTable covering only the symbols in
       // the extracted plan; return it in place of the parse-time table so
       // downstream lookups target the authoritative one.
-      return ConvertToLogicalOperator(egraph, root);
+      return ConvertToLogicalOperator(egraph, root, planner_context);
     }
     auto planning_context = plan::MakePlanningContext(&ast_storage, &symbol_table, query, &vertex_counts);
     auto [plan, cost] = plan::MakeLogicalPlan(&planning_context, parameters, FLAGS_query_cost_planner);
@@ -210,7 +211,8 @@ auto MakeLogicalPlan(AstStorage ast_storage, CypherQuery *query, const Parameter
 std::shared_ptr<PlanWrapper> CypherQueryToPlan(frontend::StrippedQuery const &stripped_query, AstStorage ast_storage,
                                                CypherQuery *query, const Parameters &parameters,
                                                PlanCacheLRU *plan_cache, DbAccessor *db_accessor,
-                                               const std::vector<Identifier *> &predefined_identifiers) {
+                                               const std::vector<Identifier *> &predefined_identifiers,
+                                               plan::v2::QueryPlannerContext &planner_context) {
   // Skip plan cache when using experimental v2 planner - plans may change as v2 evolves
   const bool use_plan_cache = plan_cache && !flags::AreExperimentsEnabled(flags::Experiments::PLANNER_V2);
   if (use_plan_cache) {
@@ -235,7 +237,8 @@ std::shared_ptr<PlanWrapper> CypherQueryToPlan(frontend::StrippedQuery const &st
     }
   }
 
-  auto logical_plan = MakeLogicalPlan(std::move(ast_storage), query, parameters, db_accessor, predefined_identifiers);
+  auto logical_plan =
+      MakeLogicalPlan(std::move(ast_storage), query, parameters, db_accessor, predefined_identifiers, planner_context);
   auto plan = std::make_shared<PlanWrapper>(std::move(logical_plan));
 
   if (use_plan_cache) {

@@ -3513,7 +3513,9 @@ PreparedQuery PrepareCypherQuery(ParsedQuery parsed_query, std::map<std::string,
                                 cypher_query,
                                 parsed_query.parameters,
                                 plan_cache,
-                                dba);
+                                dba,
+                                {},
+                                interpreter.query_planner_context());
 
   auto hints = plan::ProvidePlanHints(&plan->plan(), plan->symbol_table());
   for (const auto &hint : hints) {
@@ -3630,7 +3632,9 @@ PreparedQuery PrepareExplainQuery(ParsedQuery parsed_query, std::vector<Notifica
                                              cypher_query,
                                              parsed_inner_query.parameters,
                                              plan_cache,
-                                             dba);
+                                             dba,
+                                             {},
+                                             interpreter.query_planner_context());
 
   auto hints = plan::ProvidePlanHints(&cypher_query_plan->plan(), cypher_query_plan->symbol_table());
   for (const auto &hint : hints) {
@@ -3736,7 +3740,9 @@ PreparedQuery PrepareProfileQuery(ParsedQuery parsed_query, bool in_explicit_tra
                                              cypher_query,
                                              parsed_inner_query.parameters,
                                              plan_cache,
-                                             dba);
+                                             dba,
+                                             {},
+                                             interpreter.query_planner_context());
 
 #ifdef MG_ENTERPRISE
   CheckParallelExecution(parallel_execution, cypher_query_plan->plan(), interpreter_context, notifications, dba);

@@ -35,6 +35,7 @@ namespace {
 using memgraph::query::plan::v2::ConvertToLogicalOperator;
 using memgraph::query::plan::v2::eclass;
 using memgraph::query::plan::v2::egraph;
+using memgraph::query::plan::v2::QueryPlannerContext;
 using memgraph::storage::ExternalPropertyValue;
 
 // Build a chain of N nested Bind layers, each binding a fresh symbol whose
@@ -76,8 +77,11 @@ static auto BuildBindChain(int64_t depth) -> std::pair<egraph, eclass> {
 
 static void BM_PlanV2_BindChain(benchmark::State &state) {
   auto [eg, root] = BuildBindChain(state.range(0));
+  // Hold the planner context outside the loop so iterations amortise the
+  // per-call buffer allocations the way a long-lived Interpreter would.
+  QueryPlannerContext planner_context;
   for (auto _ : state) {
-    benchmark::DoNotOptimize(ConvertToLogicalOperator(eg, root));
+    benchmark::DoNotOptimize(ConvertToLogicalOperator(eg, root, planner_context));
   }
   state.SetItemsProcessed(state.iterations() * state.range(0));
 }

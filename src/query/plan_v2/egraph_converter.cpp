@@ -528,7 +528,17 @@ struct Builder {
 ///
 /// If the invariant is violated, the function throws QueryException rather than invoking
 /// undefined behaviour.
-auto ConvertToLogicalOperator(egraph const &e, eclass root)
+struct QueryPlannerContext::Impl {
+  planner::core::extract::ExtractionContext<CostFrontier> ctx;
+};
+
+QueryPlannerContext::QueryPlannerContext() : impl_(std::make_unique<Impl>()) {}
+
+QueryPlannerContext::~QueryPlannerContext() = default;
+QueryPlannerContext::QueryPlannerContext(QueryPlannerContext &&) noexcept = default;
+QueryPlannerContext &QueryPlannerContext::operator=(QueryPlannerContext &&) noexcept = default;
+
+auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext &planner_context)
     -> std::tuple<std::unique_ptr<LogicalOperator>, double, AstStorage, SymbolTable> {
   auto const &impl = internal::get_impl(e);
 
@@ -536,12 +546,15 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root)
   auto const true_root = internal::to_core_id(root);
   namespace extract = planner::core::extract;
 
+  // Cleared on every call so capacity is preserved across queries but
+  // contents start empty.
+  auto &ctx = planner_context.impl().ctx;
+  ctx.clear();
+
   // Root-satisfiability precondition: ComputeFrontiers must have produced at
   // least one self-contained alternative for the root (required == {}).
   // We compute frontiers eagerly here so we can validate before resolve;
   // the same frontier map is then handed to Extract via the ExtractionContext.
-  // TODO: hold this context per session so buffers are reused across queries.
-  extract::ExtractionContext<CostFrontier> ctx;
   (void)extract::ComputeFrontiers(impl.egraph_, PlanCostModel{}, true_root, ctx.frontier_map);
 
   auto const root_it = ctx.frontier_map.find(true_root);
@@ -650,9 +663,7 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root)
   auto &result = *ptr;
 
   auto unique_result = result->Clone(&builder.ast_storage_);
-  // TODO: return real cost from resolved root once Selection::cost type stabilises
-  auto root_cost = 0.0;
-  if (auto it = ctx.selection.find(true_root); it != ctx.selection.end()) root_cost = it->second.cost;
+  auto root_cost = ctx.selection.at(true_root).cost;
   return {std::move(unique_result), root_cost, std::move(builder.ast_storage_), std::move(builder.symbol_table_)};
 }
 }  // namespace memgraph::query::plan::v2

@@ -165,11 +165,8 @@ struct DefaultResolver {
       assert(it != frontier_map.end() && it->second.has_value());
 
       auto const &frontier = *it->second;
-      // TODO: what is the relationship between DefaultResolver::operator() and CostResult::resolve_with_cost is there a
-      // high computational complexity?
       auto [enode_id, cost] = frontier.resolve_with_cost();
-      // TODO: better way to do this via emplace?
-      resolved[current] = Selection<CostType>{enode_id, cost};
+      resolved.try_emplace(current, enode_id, cost);
 
       auto const &enode = egraph.get_enode(enode_id);
       for (auto child : enode.children()) {

@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include "frontend/ast/ast_storage.hpp"
 #include "query/frontend/semantic/symbol_table.hpp"
 #include "query/plan_v2/egraph.hpp"
@@ -21,8 +23,36 @@ class LogicalOperator;
 
 namespace memgraph::query::plan::v2 {
 
+/// Per-session planner state.  Today this owns the ExtractionContext buffers
+/// (frontier map, selection, in-degree, topo order) so their allocated
+/// capacity is reused across queries instead of being freed and re-grown each
+/// time; it will grow to hold any other per-session planner state (caches,
+/// scratch arenas) as the planner v2 stabilises.  Hold one per Interpreter and
+/// pass it to ConvertToLogicalOperator.  Pimpl so callers don't see
+/// CostFrontier / Alternative.
+class QueryPlannerContext {
+ public:
+  QueryPlannerContext();
+  ~QueryPlannerContext();
+  QueryPlannerContext(QueryPlannerContext &&) noexcept;
+  QueryPlannerContext &operator=(QueryPlannerContext &&) noexcept;
+  QueryPlannerContext(QueryPlannerContext const &) = delete;
+  QueryPlannerContext &operator=(QueryPlannerContext const &) = delete;
+
+  struct Impl;
+
+  Impl &impl() { return *impl_; }
+
+ private:
+  std::unique_ptr<Impl> impl_;
+};
+
 /// Returns the extracted plan together with the SymbolTable to use for
 /// downstream lookups, in place of the parse-time SymbolTable.
-auto ConvertToLogicalOperator(egraph const &e, eclass root)
+///
+/// `planner_context` is required: callers must own one and pass it in.
+/// Long-lived owners (Interpreter) get amortised buffer allocations across
+/// queries; short-lived callers (triggers, tests) just declare a local one.
+auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext &planner_context)
     -> std::tuple<std::unique_ptr<LogicalOperator>, double, AstStorage, SymbolTable>;
 }  // namespace memgraph::query::plan::v2

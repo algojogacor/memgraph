@@ -174,7 +174,7 @@ class PlannerV2PipelineTest : public ::testing::TestWithParam<PipelineTestCase> 
     // The plan references AST nodes owned by plan_ast_storage_, and the compact
     // SymbolTable owns only the symbols surviving extraction. Replace the
     // parse-time symbol_table_ so downstream lookups see the authoritative table.
-    auto [plan, cost, new_ast_storage, new_symbol_table] = ConvertToLogicalOperator(eg, root);
+    auto [plan, cost, new_ast_storage, new_symbol_table] = ConvertToLogicalOperator(eg, root, planner_context_);
     plan_ast_storage_ = std::move(new_ast_storage);
     symbol_table_ = std::move(new_symbol_table);
 
@@ -194,6 +194,7 @@ class PlannerV2PipelineTest : public ::testing::TestWithParam<PipelineTestCase> 
   std::unique_ptr<storage::Storage::Accessor> storage_acc_;
   std::unique_ptr<DbAccessor> dba_;
   RewriteResult rewrite_result_;
+  plan::v2::QueryPlannerContext planner_context_;
 };
 
 TEST_P(PlannerV2PipelineTest, Pipeline) {
@@ -276,7 +277,8 @@ TEST(PlannerV2BuildCacheRehash, NoCacheCorruptionAtRehashThreshold) {
   }
   auto root = eg.MakeOutputs(current, std::move(named_outputs));
 
-  auto result = ConvertToLogicalOperator(eg, root);
+  plan::v2::QueryPlannerContext planner_context;
+  auto result = ConvertToLogicalOperator(eg, root, planner_context);
   ASSERT_NE(std::get<0>(result), nullptr);
 }
 
