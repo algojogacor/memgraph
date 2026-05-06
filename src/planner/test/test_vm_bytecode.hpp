@@ -86,36 +86,31 @@ class GTestReporter {
  public:
   template <typename... Args>
   void expect_true(bool cond, fmt::format_string<Args...> fmt, Args &&...args) {
-    if (cond) [[likely]]
-      return;
+    if (cond) return;
     EXPECT_TRUE(cond) << fmt::format(fmt, std::forward<Args>(args)...);
   }
 
   template <typename A, typename B, typename... Args>
   void expect_eq(A const &a, B const &b, fmt::format_string<Args...> fmt, Args &&...args) {
-    if (a == b) [[likely]]
-      return;
+    if (a == b) return;
     EXPECT_EQ(a, b) << fmt::format(fmt, std::forward<Args>(args)...);
   }
 
   template <typename A, typename B, typename... Args>
   void expect_lt(A const &a, B const &b, fmt::format_string<Args...> fmt, Args &&...args) {
-    if (a < b) [[likely]]
-      return;
+    if (a < b) return;
     EXPECT_LT(a, b) << fmt::format(fmt, std::forward<Args>(args)...);
   }
 
   template <typename A, typename B, typename... Args>
   void expect_ne(A const &a, B const &b, fmt::format_string<Args...> fmt, Args &&...args) {
-    if (a != b) [[likely]]
-      return;
+    if (a != b) return;
     EXPECT_NE(a, b) << fmt::format(fmt, std::forward<Args>(args)...);
   }
 
   template <typename A, typename B, typename... Args>
   void expect_gt(A const &a, B const &b, fmt::format_string<Args...> fmt, Args &&...args) {
-    if (a > b) [[likely]]
-      return;
+    if (a > b) return;
     EXPECT_GT(a, b) << fmt::format(fmt, std::forward<Args>(args)...);
   }
 
@@ -126,32 +121,28 @@ class GTestReporter {
 
   template <typename... Args>
   auto assert_true(bool cond, fmt::format_string<Args...> fmt, Args &&...args) -> bool {
-    if (cond) [[likely]]
-      return true;
+    if (cond) return true;
     EXPECT_TRUE(cond) << fmt::format(fmt, std::forward<Args>(args)...);
     return false;
   }
 
   template <typename A, typename B, typename... Args>
   auto assert_lt(A const &a, B const &b, fmt::format_string<Args...> fmt, Args &&...args) -> bool {
-    if (a < b) [[likely]]
-      return true;
+    if (a < b) return true;
     EXPECT_LT(a, b) << fmt::format(fmt, std::forward<Args>(args)...);
     return false;
   }
 
   template <typename A, typename B, typename... Args>
   auto assert_gt(A const &a, B const &b, fmt::format_string<Args...> fmt, Args &&...args) -> bool {
-    if (a > b) [[likely]]
-      return true;
+    if (a > b) return true;
     EXPECT_GT(a, b) << fmt::format(fmt, std::forward<Args>(args)...);
     return false;
   }
 
   template <typename A, typename B, typename... Args>
   auto assert_eq(A const &a, B const &b, fmt::format_string<Args...> fmt, Args &&...args) -> bool {
-    if (a == b) [[likely]]
-      return true;
+    if (a == b) return true;
     EXPECT_EQ(a, b) << fmt::format(fmt, std::forward<Args>(args)...);
     return false;
   }

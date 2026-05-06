@@ -117,12 +117,12 @@ template <typename CostModel>
 using TestFrontierMap = FrontierMap<typename CostModel::CostResult>;
 
 template <typename CostModel>
-auto frontier_cost(TestFrontierMap<CostModel> const &m, EClassId id) {
+auto FrontierCost(TestFrontierMap<CostModel> const &m, EClassId id) {
   return CostModel::CostResult::min_cost(*m.at(id));
 }
 
 template <typename CostModel>
-auto frontier_enode(TestFrontierMap<CostModel> const &m, EClassId id) {
+auto FrontierEnode(TestFrontierMap<CostModel> const &m, EClassId id) {
   return CostModel::CostResult::resolve(*m.at(id));
 }
 
@@ -139,8 +139,8 @@ TEST(Extract_Cost, SingleLeafNode) {
   ASSERT_TRUE(cost.has_value());
   ASSERT_EQ(cost->cost, 5.0);
   ASSERT_EQ(frontiers.size(), 1);
-  ASSERT_EQ(frontier_enode<CostModel>(frontiers, leaf_class), leaf_node);
-  ASSERT_EQ(frontier_cost<CostModel>(frontiers, leaf_class), 5.0);
+  ASSERT_EQ(FrontierEnode<CostModel>(frontiers, leaf_class), leaf_node);
+  ASSERT_EQ(FrontierCost<CostModel>(frontiers, leaf_class), 5.0);
 }
 
 TEST(Extract_Cost, SimpleTree) {
@@ -197,10 +197,10 @@ TEST(Extract_Cost, DiamondDAGSharedNode) {
   ASSERT_TRUE(cost.has_value());
   ASSERT_EQ(cost->cost, 5.0);
   ASSERT_EQ(frontiers.size(), 4);
-  ASSERT_EQ(frontier_cost<CostModel>(frontiers, shared_class), 1);
-  ASSERT_EQ(frontier_cost<CostModel>(frontiers, left_class), 2);
-  ASSERT_EQ(frontier_cost<CostModel>(frontiers, right_class), 2);
-  ASSERT_EQ(frontier_cost<CostModel>(frontiers, root_class), 5);
+  ASSERT_EQ(FrontierCost<CostModel>(frontiers, shared_class), 1);
+  ASSERT_EQ(FrontierCost<CostModel>(frontiers, left_class), 2);
+  ASSERT_EQ(FrontierCost<CostModel>(frontiers, right_class), 2);
+  ASSERT_EQ(FrontierCost<CostModel>(frontiers, root_class), 5);
 }
 
 TEST(Extract_Cost, VariableCostBySymbol) {
@@ -239,8 +239,8 @@ TEST(Extract_Cost, SelectsCheapestAmongEquivalents) {
 
   ASSERT_TRUE(cost.has_value());
   ASSERT_EQ(cost->cost, 1.0);
-  ASSERT_EQ(frontier_enode<CostModel>(frontiers, root), anode);
-  ASSERT_EQ(frontier_cost<CostModel>(frontiers, root), 1.0);
+  ASSERT_EQ(FrontierEnode<CostModel>(frontiers, root), anode);
+  ASSERT_EQ(FrontierCost<CostModel>(frontiers, root), 1.0);
 }
 
 TEST(Extract_Cost, CostAccumulationWithVariableCosts) {
@@ -297,8 +297,8 @@ TEST(Extract_Cost, CyclicEGraphInfiniteCost) {
   // The non-cyclic LITERAL node should be selected with cost 1
   ASSERT_TRUE(cost.has_value());
   ASSERT_EQ(cost->cost, 1.0);
-  ASSERT_EQ(frontier_enode<CostModel>(frontiers, cyclic_class), x_node);
-  ASSERT_EQ(frontier_cost<CostModel>(frontiers, cyclic_class), 1.0);
+  ASSERT_EQ(FrontierEnode<CostModel>(frontiers, cyclic_class), x_node);
+  ASSERT_EQ(FrontierCost<CostModel>(frontiers, cyclic_class), 1.0);
 }
 
 TEST(Extract_Cost, CyclicEGraphInfiniteCostComplex) {
@@ -341,11 +341,11 @@ TEST(Extract_Cost, CyclicEGraphInfiniteCostComplex) {
   ASSERT_EQ(cost->cost, 1.0);
   ASSERT_EQ(frontiers.size(), 2);
   ASSERT_TRUE(frontiers.contains(merged_class));
-  ASSERT_EQ(frontier_cost<CostModel>(frontiers, merged_class), 1.0);
-  ASSERT_EQ(frontier_enode<CostModel>(frontiers, merged_class), x_node);
+  ASSERT_EQ(FrontierCost<CostModel>(frontiers, merged_class), 1.0);
+  ASSERT_EQ(FrontierEnode<CostModel>(frontiers, merged_class), x_node);
   ASSERT_TRUE(frontiers.contains(zero_class));
-  ASSERT_EQ(frontier_cost<CostModel>(frontiers, zero_class), 1.0);
-  ASSERT_EQ(frontier_enode<CostModel>(frontiers, zero_class), zero_node);
+  ASSERT_EQ(FrontierCost<CostModel>(frontiers, zero_class), 1.0);
+  ASSERT_EQ(FrontierEnode<CostModel>(frontiers, zero_class), zero_node);
 }
 
 TEST(Extract_Cost, FullyCyclicEClassInfiniteCost) {
@@ -389,7 +389,7 @@ TEST(Extract_Cost, FullyCyclicEClassInfiniteCost) {
   // It has cost 1 (no children), while the 'ADD' nodes have infinite cost
   ASSERT_TRUE(cost.has_value());
   ASSERT_EQ(cost->cost, 1.0);
-  ASSERT_EQ(frontier_enode<CostModel>(frontiers, fully_cyclic), x_node);
+  ASSERT_EQ(FrontierEnode<CostModel>(frontiers, fully_cyclic), x_node);
 }
 
 // ========================================
@@ -738,7 +738,7 @@ TEST(Extract_Safety, ComputeFrontiers_FullyCyclicReturnsNullopt) {
   EXPECT_TRUE(frontiers.contains(zero_class));
 
   // The selected enode for merged_class should be the leaf (x_node), not the cyclic ADD
-  EXPECT_EQ(frontier_enode<UniformCostModel>(frontiers, merged_class), x_node);
+  EXPECT_EQ(FrontierEnode<UniformCostModel>(frontiers, merged_class), x_node);
 }
 
 TEST(Extract_Safety, ComputeFrontiers_CyclicChildCostsCached) {
@@ -789,15 +789,15 @@ TEST(Extract_Safety, ComputeFrontiers_CyclicChildCostsCached) {
   // the cyclic ADD enode. The "continue processing remaining children" logic
   // ensures non-cyclic siblings are still computed.
   EXPECT_TRUE(frontiers.contains(leaf_c_class)) << "Non-cyclic sibling leaf_c should be cached in frontier_map";
-  EXPECT_EQ(frontier_cost<UniformCostModel>(frontiers, leaf_c_class), 1.0);
+  EXPECT_EQ(FrontierCost<UniformCostModel>(frontiers, leaf_c_class), 1.0);
 
   // leaf_d should also be cached (child of the non-cyclic A enode)
   EXPECT_TRUE(frontiers.contains(leaf_d_class));
-  EXPECT_EQ(frontier_cost<UniformCostModel>(frontiers, leaf_d_class), 1.0);
+  EXPECT_EQ(FrontierCost<UniformCostModel>(frontiers, leaf_d_class), 1.0);
 
   // merged should be present with the A enode selected (not the cyclic ADD)
   EXPECT_TRUE(frontiers.contains(merged));
-  EXPECT_EQ(frontier_enode<UniformCostModel>(frontiers, merged), b_node);
+  EXPECT_EQ(FrontierEnode<UniformCostModel>(frontiers, merged), b_node);
 }
 
 TEST(Extract_Safety, ComputeFrontiers_CyclicExprChildOfBind) {
@@ -953,28 +953,14 @@ TEST(ParetoFrontier_Prune, AllDominatedByOne) {
 }
 
 TEST(ParetoFrontier_Prune, DuplicateAlternatives) {
-  // Two alts with identical cost and required but different enode_id.
-  // Neither dominates the other because dominated_by uses strict <=
-  // for cost and subset-or-equal for required — both conditions hold symmetrically.
-  // So a.dominated_by(b) is true AND b.dominated_by(a) is true.
-  // In the prune algorithm, whichever is tested first as "i" will dominate the other
-  // via the j-loop. The first alt (lower index) marks the second as dominated.
-  // Result: only the first alt (by input order) survives.
+  // When two alts mutually dominate (identical cost and required), exactly one
+  // survives prune; the later index in iteration order is the survivor.
   auto frontier = TestFrontier{{
       {.cost = 2.0, .required = {1}, .enode_id = ENodeId{0}},
       {.cost = 2.0, .required = {1}, .enode_id = ENodeId{1}},
   }};
-  // When both dominate each other, the algorithm processes i=0 first:
-  //   j=1: DominanceFn(alts[0], alts[1]) → true (0 dominated by 1) → mark 0, break
-  // Then i=1 survives. So the SECOND alt wins (the one that dominates i=0).
-  // Actually let's trace carefully:
-  //   i=0, j=1: DominanceFn{}(alts[0], alts[1]) checks alts[0].dominated_by(alts[1])
-  //     = alts[1].cost <= alts[0].cost && alts[0].required ⊇ alts[1].required
-  //     = 2.0 <= 2.0 && {1} ⊇ {1} → true → dominated[0] = true, break
-  //   i=1: not dominated → survives
-  // Result: the second alt (enode_id=1) survives.
-  ASSERT_EQ(frontier.alts().size(), 1) << "One of the duplicates should be pruned";
-  ASSERT_EQ(frontier.alts()[0].enode_id, ENodeId{1}) << "Second alt survives (first is marked dominated)";
+  ASSERT_EQ(frontier.alts().size(), 1);
+  ASSERT_EQ(frontier.alts()[0].enode_id, ENodeId{1});
 }
 
 TEST(ParetoFrontier_Prune, TransitiveDominance) {
@@ -1292,11 +1278,12 @@ TEST(Extract_MultiAlt, DAGResolution_FirstVisitorWins) {
 }
 
 TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
-  // Invariant: re-resolving a shared eclass on incompatible re-visit must
-  // also re-resolve its transitive children, otherwise stale child
-  // selections (made under the old context) leak through.
+  // Invariant: when a shared eclass is re-resolved under a stricter
+  // `provided` context, the new selection's transitive children must also be
+  // re-resolved under that context. Otherwise children keep selections made
+  // under the original (broader) context.
   //
-  // 3-level diamond: Root → Left, Right → Shared(A, {Leaf}) → Leaf.
+  // 3-level diamond: Root -> Left, Right -> Shared(A, {Leaf}) -> Leaf.
   // Both Shared and Leaf have demand-aware alts {req={1}} and {req={}}.
   // First DFS branch picks the cheap req={1} alts; second branch
   // (provided={}) re-resolves Shared to req={} and must cascade to Leaf.
@@ -1307,71 +1294,24 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
   auto [right_class, right_node, right_new] = egraph.emplace(symbol::B, {shared_class}, 2);
   auto [root_class, root_node, root_new] = egraph.emplace(symbol::B, {left_class, right_class});
 
-  // Compute frontiers bottom-up
   using CM = DemandAwareMultiAltCostModel;
   FrontierMap<CM::CostResult> frontier_map;
   (void)extract::ComputeFrontiers(egraph, CM{}, root_class, frontier_map);
 
-  // Verify both Shared and Leaf have two non-dominated alternatives
-  auto const &shared_frontier = *frontier_map.at(shared_class);
-  ASSERT_EQ(shared_frontier.alts().size(), 2);
-  auto const &leaf_frontier = *frontier_map.at(leaf_class);
-  ASSERT_EQ(leaf_frontier.alts().size(), 2);
+  ASSERT_EQ(frontier_map.at(shared_class)->alts().size(), 2);
+  ASSERT_EQ(frontier_map.at(leaf_class)->alts().size(), 2);
 
-  // Reference resolver: re-resolves the eclass on incompatible re-visit but
-  // does NOT cascade to the transitive children. Included to pin down the
-  // failure mode the cascading variant below has to fix.
-  auto resolved = std::unordered_map<EClassId, std::pair<ENodeId, double>>{};
+  auto resolved = SelectionMap<double>{};
   auto resolved_required = std::unordered_map<EClassId, std::set<int>>{};
 
-  auto resolve_no_cascade = [&](this auto const &self, EClassId id, std::set<int> const &provided) -> void {
+  auto resolve = [&](this auto const &self, EClassId id, std::set<int> const &provided) -> void {
     if (auto existing = resolved.find(id); existing != resolved.end()) {
       if (std::ranges::includes(provided, resolved_required[id])) return;
       auto const &frontier = *frontier_map.at(id);
       auto const *chosen = PickBestCompatible(frontier, provided);
       ASSERT_NE(chosen, nullptr);
-      existing->second = {chosen->enode_id, chosen->cost};
+      existing->second = Selection<double>{chosen->enode_id, chosen->cost};
       resolved_required[id] = chosen->required;
-      // No cascade: children keep selections from their first visit.
-      return;
-    }
-    auto const &frontier = *frontier_map.at(id);
-    auto const *chosen = PickBestCompatible(frontier, provided);
-    ASSERT_NE(chosen, nullptr);
-    resolved[id] = {chosen->enode_id, chosen->cost};
-    resolved_required[id] = chosen->required;
-    auto const &enode = egraph.get_enode(chosen->enode_id);
-    auto const &children = enode.children();
-    if (id == root_class && children.size() == 2) {
-      self(children[0], {1});
-      self(children[1], {});
-    } else {
-      for (auto child : children) {
-        self(child, provided);
-      }
-    }
-  };
-
-  resolve_no_cascade(root_class, {});
-
-  // Shared re-resolves to req={}, but Leaf retains the stale req={1}
-  // from the first DFS branch. This is the failure mode.
-  ASSERT_TRUE(resolved_required[shared_class].empty());
-  ASSERT_EQ(resolved_required[leaf_class], std::set<int>{1});
-
-  // Cascading variant: children of the re-resolved selection are revisited.
-  resolved.clear();
-  resolved_required.clear();
-
-  auto resolve_with_cascade = [&](this auto const &self, EClassId id, std::set<int> const &provided) -> void {
-    if (auto existing = resolved.find(id); existing != resolved.end()) {
-      if (std::ranges::includes(provided, resolved_required[id])) return;
-      auto const &frontier = *frontier_map.at(id);
-      auto const *chosen = PickBestCompatible(frontier, provided);
-      ASSERT_NE(chosen, nullptr);
-      existing->second = {chosen->enode_id, chosen->cost};
-      resolved_required[id] = chosen->required;
-      // Cascade to children of the new selection.
       auto const &enode = egraph.get_enode(chosen->enode_id);
       for (auto child : enode.children()) {
         self(child, provided);
@@ -1381,7 +1321,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
     auto const &frontier = *frontier_map.at(id);
     auto const *chosen = PickBestCompatible(frontier, provided);
     ASSERT_NE(chosen, nullptr);
-    resolved[id] = {chosen->enode_id, chosen->cost};
+    resolved[id] = Selection<double>{chosen->enode_id, chosen->cost};
     resolved_required[id] = chosen->required;
     auto const &enode = egraph.get_enode(chosen->enode_id);
     auto const &children = enode.children();
@@ -1395,11 +1335,12 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
     }
   };
 
-  resolve_with_cascade(root_class, {});
+  resolve(root_class, {});
 
-  // With cascade, Leaf is re-resolved to {cost=2, req={}} alongside Shared.
+  // Shared was re-resolved to req={} on the right branch; the cascade must
+  // re-resolve Leaf under {} too, swapping it onto the {cost=2, req={}} alt.
   ASSERT_TRUE(resolved_required[shared_class].empty());
-  ASSERT_EQ(resolved.at(leaf_class).second, 2.0);
+  ASSERT_EQ(resolved.at(leaf_class).cost, 2.0);
   ASSERT_TRUE(resolved_required[leaf_class].empty());
 }
 
@@ -1428,7 +1369,7 @@ TEST(Extract_MultiAlt, DAGResolution_AliveToDeadErasesStaleChildren) {
   FrontierMap<CM::CostResult> frontier_map;
   (void)extract::ComputeFrontiers(egraph, CM{}, root_class, frontier_map);
 
-  auto resolved = std::unordered_map<EClassId, std::pair<ENodeId, double>>{};
+  auto resolved = SelectionMap<double>{};
   auto resolved_required = std::unordered_map<EClassId, std::set<int>>{};
 
   auto resolve = [&](this auto const &self, EClassId id, std::set<int> const &provided) -> void {
@@ -1437,7 +1378,7 @@ TEST(Extract_MultiAlt, DAGResolution_AliveToDeadErasesStaleChildren) {
       auto const &frontier = *frontier_map.at(id);
       auto const *chosen = PickBestCompatible(frontier, provided);
       ASSERT_NE(chosen, nullptr);
-      existing->second = {chosen->enode_id, chosen->cost};
+      existing->second = Selection<double>{chosen->enode_id, chosen->cost};
       resolved_required[id] = chosen->required;
       // Cascade + erase stale children if switching to no-demand alt
       auto const &enode = egraph.get_enode(chosen->enode_id);
@@ -1458,7 +1399,7 @@ TEST(Extract_MultiAlt, DAGResolution_AliveToDeadErasesStaleChildren) {
     auto const &frontier = *frontier_map.at(id);
     auto const *chosen = PickBestCompatible(frontier, provided);
     ASSERT_NE(chosen, nullptr);
-    resolved[id] = {chosen->enode_id, chosen->cost};
+    resolved[id] = Selection<double>{chosen->enode_id, chosen->cost};
     resolved_required[id] = chosen->required;
     auto const &enode = egraph.get_enode(chosen->enode_id);
     if (id == root_class && enode.children().size() == 2) {
