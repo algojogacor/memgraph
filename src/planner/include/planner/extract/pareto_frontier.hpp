@@ -81,22 +81,25 @@ struct ParetoFrontier {
     return result;
   }
 
-  /// Beam limit: trim to the top-N alternatives by the given cost projection.
-  /// Pruned-invariant preserving (a subset of a Pareto-pruned set is still
-  /// Pareto-pruned).  No-op when max_alts == 0 or already within budget.
-  template <typename CostProjection>
-    requires std::invocable<CostProjection, Alt const &>
-  void beam(size_t max_alts, CostProjection &&proj) {
-    if (max_alts == 0 || alts_.size() <= max_alts) return;
-    std::partial_sort(alts_.begin(), alts_.begin() + max_alts, alts_.end(), [&](Alt const &a, Alt const &b) {
-      return proj(a) < proj(b);
-    });
-    alts_.resize(max_alts);
+  /// In-place mutation that the caller promises preserves the Pareto invariant.
+  /// Calls fn(alt) on each surviving alt; no re-prune is performed.
+  ///
+  /// Contract: fn must not change relative ordering under DominanceFn — i.e.,
+  /// for any two alts A and B in the frontier, the truth value of
+  /// DominanceFn{}(A, B) must be the same after fn(A) and fn(B) as before.
+  /// Adding a uniform constant to a `cost` field, or rewriting a field that
+  /// dominance does not read (e.g., enode_id), both satisfy this contract.
+  /// Mutations that could flip dominance must go through flat_map / merge /
+  /// combine instead, which re-prune.
+  template <typename Fn>
+    requires std::invocable<Fn, Alt &>
+  void mutate_pruning_invariant_preserving(Fn &&fn) {
+    for (auto &alt : alts_) std::forward<Fn>(fn)(alt);
   }
 
   /// Flat-map: for each alternative, produce zero or more new alternatives via a callback,
-  /// collect into a new frontier, then prune. This is the general pattern for conditional
-  /// transformations (e.g., Bind alive/dead branching).
+  /// collect into a new frontier, then prune. This is the general pattern for
+  /// per-alt conditional emission.
   /// @param fn  (Alt const&, auto emit) -> void — calls emit(Alt&&) to produce output alternatives.
   template <typename Fn>
   [[nodiscard]] static auto flat_map(ParetoFrontier const &input, Fn &&fn) -> ParetoFrontier {
@@ -149,12 +152,11 @@ struct ParetoFrontier {
     return result;
   }
 
- protected:
+ private:
   // std::vector chosen so ParetoFrontier moves stay pointer-swap; small_vector's
   // element-wise move dominates here because Alt is large with a non-trivial move.
   std::vector<Alt> alts_;
 
- private:
   /// Remove alternatives dominated by any other alternative in the frontier.
   /// Two-pass: first mark dominated indices, then erase. This avoids reading
   /// moved-from elements (std::erase_if/remove_if moves elements during its pass).
@@ -162,11 +164,10 @@ struct ParetoFrontier {
   /// external prune() calls would always be no-ops.
   void prune() { prune_with_pruned_prefix(0); }
 
-  /// Prune assuming `alts_[0..pruned_prefix)` is already Pareto-pruned.  Saves
-  /// the within-prefix pair checks (those would never find dominance because
-  /// the prefix is known pruned).  Used by `merge` where two pre-pruned sets
-  /// are concatenated — only A × B cross-pairs and within-B pairs need
-  /// checking, dropping merge's prune from O((M+K)²) to O(M·K + K²).
+  /// Prune assuming `alts_[0..pruned_prefix)` is already Pareto-pruned: avoids
+  /// re-checking pairs within the already-pruned prefix.  Used by `merge`
+  /// where two pre-pruned sets are concatenated — only cross-pairs and
+  /// within-suffix pairs need checking.
   void prune_with_pruned_prefix(size_t pruned_prefix) {
     auto const n = alts_.size();
     if (n - pruned_prefix == 0) return;                        // nothing newly added

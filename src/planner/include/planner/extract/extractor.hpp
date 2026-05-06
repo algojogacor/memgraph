@@ -142,9 +142,9 @@ concept Resolver =
 /// and walks every child of the chosen enode.  Safe for any cost model whose
 /// children are unconditionally part of the extracted tree.
 ///
-/// NOT safe for cost models with conditional child semantics (e.g., Bind
-/// alive/dead in query::plan::v2).  Those need a context-aware resolver such
-/// as PlanResolver.
+/// NOT safe for cost models where a chosen alt may exclude some of its
+/// enode's children from the extracted tree.  Those need a context-aware
+/// resolver.
 struct DefaultResolver {
   template <typename Symbol, typename Analysis, CostResultType CostResult>
   auto operator()(EGraph<Symbol, Analysis> const &egraph, FrontierMap<CostResult> const &frontier_map,
@@ -163,7 +163,10 @@ struct DefaultResolver {
       assert(it != frontier_map.end() && it->second.has_value());
 
       auto const &frontier = *it->second;
+      // TODO: what is the relationship between DefaultResolver::operator() and CostResult::resolve_with_cost is there a
+      // high computational complexity?
       auto [enode_id, cost] = CostResult::resolve_with_cost(frontier);
+      // TODO: better way to do this via emplace?
       resolved[current] = Selection<CostType>{enode_id, cost};
 
       auto const &enode = egraph.get_enode(enode_id);
@@ -179,12 +182,13 @@ struct DefaultResolver {
 };
 
 // ============================================================================
-// Extraction stages — internal, called by Extract().
+// Extraction stages
 // ============================================================================
-// Production callers should use Extract().  The stages survive in detail:: so
-// per-stage tests and downstream callers that need to interleave their own
-// work between ComputeFrontiers and resolve can compose them directly.
-namespace detail {
+// Convenience callers should use Extract().  The four stages below are also
+// public: per-stage tests and callers that interleave their own work between
+// ComputeFrontiers and resolve compose them directly (see
+// ConvertToLogicalOperator in plan_v2, which validates root satisfiability
+// between ComputeFrontiers and the resolver).
 
 /// In-degree map for topological sorting.
 using InDegreeMap = boost::unordered_flat_map<EClassId, int>;
@@ -266,8 +270,8 @@ template <typename Symbol, typename Analysis, typename CostResult>
 
     auto const &enode = egraph.get_enode(enode_it->second.enode_id);
     for (auto child : enode.children()) {
-      // Only walk children that were resolved — dead Bind's sym/expr are skipped
-      // (Resolver contract: absent children are deliberately excluded).
+      // Only walk children present in the selection (Resolver contract:
+      // absent children are deliberately excluded).
       if (!enode_selection.contains(child)) continue;
       ++in_degree[child];
       if (visited.insert(child).second) {
@@ -319,8 +323,6 @@ template <typename Symbol, typename Analysis, typename CostResult>
   return result;
 }
 
-}  // namespace detail
-
 // ============================================================================
 // Extract — single deep entry point
 // ============================================================================
@@ -335,7 +337,7 @@ template <CostResultType CostResult>
 struct ExtractionContext {
   FrontierMap<CostResult> frontier_map;
   SelectionMap<typename CostResult::cost_t> selection;
-  detail::InDegreeMap in_degree;
+  InDegreeMap in_degree;
   std::vector<std::pair<EClassId, ENodeId>> order;
 
   void clear() {
@@ -354,14 +356,6 @@ struct ExtractView {
   CostResult::cost_t root_cost;
 };
 
-/// Owned extraction result — independent of any ExtractionContext.
-/// Returned by the convenience overload that doesn't take a ctx.
-template <CostResultType CostResult>
-struct ExtractResult {
-  std::vector<std::pair<EClassId, ENodeId>> order;
-  CostResult::cost_t root_cost;
-};
-
 /// Primary entry point.  Caller owns `ctx`; the returned view points into
 /// ctx-owned storage and is valid until the next Extract() call on `ctx`.
 template <typename Symbol, typename Analysis, typename CostModel, typename ResolverFn>
@@ -377,17 +371,17 @@ template <typename Symbol, typename Analysis, typename CostModel, typename Resol
   // Stage 1: bottom-up cost propagation.  Reserve up-front so the recursive
   // descent doesn't re-hash as eclasses are inserted.
   ctx.frontier_map.reserve(egraph.num_classes());
-  (void)detail::ComputeFrontiers(egraph, cost_model, root, ctx.frontier_map);
+  (void)ComputeFrontiers(egraph, cost_model, root, ctx.frontier_map);
 
   // Stage 2: top-down resolution.  Resolver is responsible for the contract
   // documented above (chosen-coverage selection map).
   ctx.selection = resolver(egraph, ctx.frontier_map, root);
 
   // Stage 3: count in-degrees over the resolver-chosen child set.
-  ctx.in_degree = detail::CollectDependencies(egraph, ctx.selection, root);
+  ctx.in_degree = CollectDependencies(egraph, ctx.selection, root);
 
   // Stage 4: topological sort.
-  ctx.order = detail::TopologicalSort(egraph, ctx.selection, std::move(ctx.in_degree));
+  ctx.order = TopologicalSort(egraph, ctx.selection, std::move(ctx.in_degree));
 
   auto root_cost = typename CostResult::cost_t{};
   if (auto it = ctx.selection.find(root); it != ctx.selection.end()) {
@@ -395,19 +389,6 @@ template <typename Symbol, typename Analysis, typename CostModel, typename Resol
   }
 
   return ExtractView<CostResult>{ctx.order, root_cost};
-}
-
-/// Convenience overload — single-shot, returns owned data.  Suitable for tests
-/// and one-shot callers that don't want to manage an ExtractionContext.
-template <typename Symbol, typename Analysis, typename CostModel, typename ResolverFn>
-  requires CostResultType<typename CostModel::CostResult> &&
-           Resolver<ResolverFn, Symbol, Analysis, typename CostModel::CostResult>
-[[nodiscard]] auto Extract(EGraph<Symbol, Analysis> const &egraph, EClassId root, CostModel const &cost_model,
-                           ResolverFn resolver) -> ExtractResult<typename CostModel::CostResult> {
-  using CostResult = CostModel::CostResult;
-  ExtractionContext<CostResult> ctx;
-  auto view = Extract(egraph, root, cost_model, std::move(resolver), ctx);
-  return ExtractResult<CostResult>{std::move(ctx.order), view.root_cost};
 }
 
 }  // namespace memgraph::planner::core::extract

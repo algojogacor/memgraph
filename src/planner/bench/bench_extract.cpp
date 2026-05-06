@@ -11,7 +11,7 @@
 
 // Microbenchmarks for the extraction pipeline (planner::core::extract).
 //
-// Targets `detail::ComputeFrontiers` under three shapes:
+// Targets `ComputeFrontiers` under three shapes:
 //   * deep linear chain          — recursion depth, single enode per eclass.
 //   * wide multi-enode eclasses  — exercises ParetoFrontier merge across enodes.
 //   * shared-DAG re-visit        — exercises the frontier_map cache.
@@ -122,7 +122,7 @@ static void BM_Extract_DeepChain(benchmark::State &state) {
   for (auto _ : state) {
     frontier_map.clear();
     benchmark::DoNotOptimize(
-        memgraph::planner::core::extract::detail::ComputeFrontiers(egraph, CostModel{}, root, frontier_map));
+        memgraph::planner::core::extract::ComputeFrontiers(egraph, CostModel{}, root, frontier_map));
   }
   state.SetItemsProcessed(state.iterations() * state.range(0));
 }
@@ -161,7 +161,7 @@ static void BM_Extract_WideMerge(benchmark::State &state) {
   for (auto _ : state) {
     frontier_map.clear();
     benchmark::DoNotOptimize(
-        memgraph::planner::core::extract::detail::ComputeFrontiers(egraph, CostModel{}, root, frontier_map));
+        memgraph::planner::core::extract::ComputeFrontiers(egraph, CostModel{}, root, frontier_map));
   }
   state.SetItemsProcessed(state.iterations() * state.range(0));
 }

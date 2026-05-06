@@ -608,7 +608,7 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root)
   // the same frontier map is then handed to Extract via the ExtractionContext.
   // TODO: hold this context per session so buffers are reused across queries.
   extract::ExtractionContext<CostFrontier> ctx;
-  (void)extract::detail::ComputeFrontiers(impl.egraph_, PlanCostModel{}, true_root, ctx.frontier_map);
+  (void)extract::ComputeFrontiers(impl.egraph_, PlanCostModel{}, true_root, ctx.frontier_map);
 
   auto const root_it = ctx.frontier_map.find(true_root);
   if (root_it == ctx.frontier_map.end() || !root_it->second.has_value()) {
@@ -628,8 +628,8 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root)
   // populated ctx.frontier_map; Extract picks up there and runs the rest of
   // the pipeline.
   ctx.selection = PlanResolver{}(impl.egraph_, ctx.frontier_map, true_root);
-  ctx.in_degree = extract::detail::CollectDependencies(impl.egraph_, ctx.selection, true_root);
-  ctx.order = extract::detail::TopologicalSort(impl.egraph_, ctx.selection, std::move(ctx.in_degree));
+  ctx.in_degree = extract::CollectDependencies(impl.egraph_, ctx.selection, true_root);
+  ctx.order = extract::TopologicalSort(impl.egraph_, ctx.selection, std::move(ctx.in_degree));
   auto const &selection = ctx.order;
 
   /// STAGE: Build selected (LogicalOperator, Expression *, Symbol, NamedExpression *, etc)
