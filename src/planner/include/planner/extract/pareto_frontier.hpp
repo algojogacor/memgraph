@@ -247,6 +247,13 @@ struct CostResultBase : ParetoFrontier<Alt, DominanceFn> {
   /// non-pruned frontier from outside the class hierarchy.
   CostResultBase(std::initializer_list<Alt> init) : Base(Base::from_unpruned(std::vector<Alt>(init))) {}
 
+  /// Vector construction prunes on construction.  Sibling of the
+  /// initializer-list ctor for callers that build alts at runtime; replaces
+  /// an explicit `from_unpruned` factory so callers don't have to repeat the
+  /// derived type as a template argument.
+  // NOLINTNEXTLINE(google-explicit-constructor)
+  CostResultBase(std::vector<Alt> alts) : Base(Base::from_unpruned(std::move(alts))) {}
+
   /// Hides Base::merge so the return type matches the deduced Self
   /// (required by CostResultType concept).
   template <typename Self>
@@ -259,15 +266,6 @@ struct CostResultBase : ParetoFrontier<Alt, DominanceFn> {
   template <typename Self>
   [[nodiscard]] auto merge(this Self &&self, Self &&other) -> Self {
     return Self{Base::merge(std::move(static_cast<Base &>(self)), std::move(static_cast<Base &>(other)))};
-  }
-
-  /// Self-returning analogue of Base::from_unpruned.  Tests and benches use
-  /// this to seed Pareto-pruned frontiers from raw alternative lists.  Self
-  /// must be supplied explicitly (factories cannot use deducing-this).
-  template <typename Self>
-    requires std::derived_from<Self, CostResultBase>
-  [[nodiscard]] static auto from_unpruned(std::vector<Alt> alts) -> Self {
-    return Self{Base::from_unpruned(std::move(alts))};
   }
 
   template <typename Self>

@@ -80,7 +80,7 @@ struct CostModel {
       for (auto const &a : child.alts()) {
         out.push_back({.cost = a.cost + 1.0, .required = a.required, .enode_id = enode_id});
       }
-      return CostResult::from_unpruned<CostResult>(std::move(out));
+      return CostResult{std::move(out)};
     }
     // Two-child: cartesian product, +1 per pair.
     std::vector<DemandAlt> out;
@@ -93,7 +93,7 @@ struct CostModel {
         out.push_back({.cost = 1.0 + l.cost + r.cost, .required = std::move(req), .enode_id = enode_id});
       }
     }
-    return CostResult::from_unpruned<CostResult>(std::move(out));
+    return CostResult{std::move(out)};
   }
 };
 
