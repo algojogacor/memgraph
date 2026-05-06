@@ -46,11 +46,11 @@
 namespace memgraph::planner::core::pattern::vm {
 
 // ============================================================================
-// LazyDisassembly — defers `disassemble()` until a failure message is rendered
+// LazyDisassembly: defers `disassemble()` until a failure message is rendered
 // ============================================================================
 //
 // Holding code+symbols by reference lets the formatter call `disassemble()`
-// only when a fmt argument is actually rendered — i.e. on the failure path.
+// only when a fmt argument is actually rendered, i.e. on the failure path.
 // The happy path skips disassembly entirely.
 template <typename Symbol>
 struct LazyDisassembly {

@@ -216,8 +216,7 @@ concept HasDescriptor = requires {
 
 /// Fold the concept check across the canonical sequence.  Defined as a
 /// function template so the fold is *not* instantiated by merely including
-/// this header — only the TU that actually evaluates this function pays the
-/// cost.  The check fires from src/query/plan_v2/private_symbol.cpp.
+/// this header; only the TU that evaluates this function pays the cost.
 template <symbol... Ss>
 constexpr auto AllHaveDescriptorsImpl(symbol_sequence<Ss...>) -> bool {
   return (HasDescriptor<Ss> && ...);
@@ -247,14 +246,8 @@ constexpr std::size_t unary_expr_op_count_v = detail::CountUnaryExprImpl(AllSymb
 // Runtime symbol → CostClass dispatch.
 // ============================================================================
 //
-// Maps a runtime symbol value to the descriptor's cost_class.  Used by
-// PlanCostModel to dispatch expression operators uniformly: one switch arm in
-// the cost model handles all binary expression operators by routing through
-// this helper, instead of three separate case-groups (arithmetic / comparison /
-// boolean) that would each need updating per new operator.
-//
-// Implemented as a fold over AllSymbolsSeq so adding a symbol's descriptor is
-// the only edit needed; this function picks up the new entry automatically.
+// Fold over AllSymbolsSeq, so a new symbol's descriptor is the only edit
+// needed; this function picks up the new entry automatically.
 
 namespace detail {
 

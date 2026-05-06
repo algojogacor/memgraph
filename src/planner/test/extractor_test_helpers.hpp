@@ -11,12 +11,8 @@
 
 #pragma once
 
-// Compatibility shim.  DefaultCostResult and the generic resolver were
-// previously test-only; both are now promoted to the production extract::
-// namespace as reference adapters for CostResultType / Resolver.
-//
-// New code should refer to extract::DefaultCostResult and extract::DefaultResolver
-// directly.  This file remains so that existing tests continue to compile.
+// Test-only thin wrappers around extract::DefaultResolver.  Prefer
+// extract::DefaultResolver{} directly in new tests.
 
 #include "planner/extract/extractor.hpp"
 

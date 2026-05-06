@@ -56,18 +56,11 @@ struct CostFrontier : planner::core::extract::CostResultBase<CostFrontier, Alter
 };
 
 /// Resolver-side tie-break: cheapest feasible alive vs dead Bind cost under
-/// the resolver's `provided` context.  Sole caller: PlanResolver::visit_bind_children.
-///
-/// PlanCostModel::Bind does NOT use this — it builds the full alive/dead frontier
-/// directly via flat_map (no demand filtering at frontier-build time).
+/// the resolver's `provided` context.
 ///
 /// Filtering: a non-empty `provided` enables the required-subset check on input
-/// (and on expr in the alive branch).  Empty `provided` means "no demand context"
-/// and skips filtering — the resolver will rely on the per-eclass pick_compatible
-/// pass to enforce feasibility on the chosen branch.
-///
-/// The alive/dead algebra (predicate, cost formulas, kSymbolCost invariant) lives
-/// in bind:: — see src/query/plan_v2/bind_semantics.hpp.
+/// (and on expr in the alive branch).  Empty `provided` skips filtering and
+/// defers feasibility to the per-eclass pick_compatible pass.
 ///
 /// Tie-break rule: ties go to dead (less work). Callers compare with strict `<`.
 struct BindBranchCosts {
@@ -124,9 +117,6 @@ static auto BestBindBranchCostsForResolve(CostFrontier const &input_frontier, do
 }
 
 // Combine two frontiers with cost summation and required-set union.
-// Stateless functor — set_union's intermediate buffer is stack-allocated per
-// call.  Typical demand-union sizes fit in the inline capacity; queries that
-// exceed it pay one extra heap event over the SymbolSet's own allocation.
 struct CombineAltsFn {
   double extra_cost;
   planner::core::ENodeId enode_id;
@@ -147,11 +137,8 @@ auto CombineAlts(double extra_cost, planner::core::ENodeId enode_id) -> CombineA
 }
 
 /// Map over a single frontier — adjust each alternative's cost by `extra_cost`
-/// and re-stamp `enode_id`.  The 1-frontier sibling of CombineAlts; used for
-/// pass-through nodes (unary operators, Output's input child) where the output
-/// frontier shape mirrors a single input.  The transformation is monotone in
-/// cost and preserves the required-set, so the Pareto invariant is preserved
-/// — from_unpruned's prune pass is a no-op on already-Pareto-pruned input.
+/// and re-stamp `enode_id`.  Single-frontier sibling of CombineAlts.
+/// Pareto invariant is preserved (monotone in cost, same required-set).
 auto MapAlts(CostFrontier const &input, double extra_cost, planner::core::ENodeId enode_id) -> CostFrontier {
   std::vector<Alternative> out;
   out.reserve(input.alts().size());
@@ -242,9 +229,7 @@ struct PlanCostModel {
 
       // Output: re-stamp child[0]'s frontier (no extra cost) so all alternatives
       // dispatch through this Output enode in the Builder, then fold in each
-      // NamedOutput child via CombineAlts (which re-stamps again per pair).
-      // The MapAlts pass is required when children.size() == 1 (no NamedOutputs);
-      // otherwise CombineAlts would handle re-stamping on its own.
+      // NamedOutput child via CombineAlts.
       case symbol::Output: {
         auto result = MapAlts(children[0], 0.0, enode_id);
         for (size_t i = 1; i < children.size(); ++i) {
@@ -263,12 +248,9 @@ struct PlanCostModel {
   }
 };
 
-/// Context-aware top-down resolution of demand frontiers.
-/// Propagates a "provided" set (symbols bound by Bind ancestors) to ensure
-/// child selections are consistent with parent alive/dead decisions.
-/// Bind-aware Resolver adapter.  Default-constructible, stateless; each
-/// operator() call constructs an Impl scoped to the call that owns the
-/// recursion-shared `resolved` map.
+/// Context-aware top-down resolver: propagates a "provided" set (symbols
+/// bound by Bind ancestors) so child selections stay consistent with parent
+/// alive/dead decisions.  Stateless functor; per-call state lives on Impl.
 struct PlanResolver {
   using EClassId = planner::core::EClassId;
   using Selection = planner::core::extract::Selection<double>;
@@ -325,7 +307,6 @@ struct PlanResolver {
     }
 
     /// Bind-specific child visitation with alive/dead logic.
-    /// Branch selection uses BestBindBranchCostsForResolve under the current `bind_provided`.
     void visit_bind_children(EClassId input_eclass, EClassId sym_eclass, EClassId expr_eclass,
                              SymbolSet const &bind_provided) {
       auto input_it = frontier_map.find(input_eclass);
@@ -354,10 +335,9 @@ struct PlanResolver {
         auto alive_provided = bind_provided;
         alive_provided.insert(sym_eclass);
         resolve_impl(input_eclass, alive_provided);
-        // sym_eclass is a leaf Symbol with required={} (asserted above); compatible
-        // with any provided set. We pass bind_provided (not alive_provided) because
-        // Symbol does not demand the symbol it defines — observationally equivalent
-        // to alive_provided under the leaf invariant, but more honest about intent.
+        // sym_eclass is a leaf Symbol with required={}; compatible with any
+        // provided set.  Pass bind_provided rather than alive_provided: Symbol
+        // does not demand the symbol it defines.
         resolve_impl(sym_eclass, bind_provided);
         resolve_impl(expr_eclass, bind_provided);
       } else {
@@ -682,18 +662,10 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root)
   //       span of refs into build_cache; we materialise its return into a
   //       local BEFORE the LHS [] runs.
   //
-  // Belt-and-braces: we reserve(selection.size()) up-front.  A single
-  // reservation sized to the final entry count means the loop's [] inserts
-  // can never trigger a rehash, so the constraints above can never fire in
-  // practice.  Both protections matter — the reserve makes the bug
-  // structurally impossible at our current call sites; the read-then-assign
-  // pattern is what keeps it impossible if a future caller forgets the
-  // reserve, or if the reserve count is ever wrong.
-  //
-  // Original bug surfaced as "Planner error, child node is incorrect type"
-  // at chain depths past the first rehash (≥ 31 in the focused bench),
-  // because the corrupted variant in the cache no longer held the type the
-  // parent's Build expected.  Caught by tests/benchmark/query/plan_v2_extract.cpp.
+  // Belt-and-braces: reserve(selection.size()) up-front so the loop's []
+  // inserts can never rehash.  The reserve makes the bug structurally
+  // impossible at the current call sites; the read-then-assign pattern keeps
+  // it impossible if a future caller forgets the reserve or sizes it wrong.
   auto build_cache = boost::unordered_flat_map<planner::core::EClassId, BuildResult>{};
   build_cache.reserve(selection.size());
 

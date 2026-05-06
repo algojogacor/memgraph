@@ -255,7 +255,7 @@ TEST(PlannerV2BuildCacheRehash, NoCacheCorruptionAtRehashThreshold) {
   //
   // To exercise the rehash, build an egraph with > 64 selected eclasses so
   // the threshold is crossed regardless of small load-factor tweaks, then
-  // run ConvertToLogicalOperator end-to-end — both the up-front
+  // run ConvertToLogicalOperator end-to-end. Both the up-front
   // build_cache.reserve() and any per-call defensive copy must hold.
   egraph eg;
   eclass current = eg.MakeOnce();
@@ -586,9 +586,9 @@ INSTANTIATE_TEST_SUITE_P(
             .min_rewrites = 1,
             .should_saturate = true,
         },
-        // Chained: b = a + 2, r = b * 3. The DemandCostModel determines that full inlining
-        // (cost=8) is cheaper than keeping Bind_b alive (cost=11), because the Bind/Produce
-        // overhead exceeds the per-node savings of Identifier(b) over Add(1,2).
+        // Chained: b = a + 2, r = b * 3. DemandCostModel inlines b fully because
+        // the Bind/Produce overhead exceeds the per-node saving of Identifier(b)
+        // over Add(1,2).
         PipelineTestCase{
             .name = "InlineChainedWithOperators",
             .query = "WITH 1 AS a WITH a + 2 AS b RETURN b * 3 AS r;",

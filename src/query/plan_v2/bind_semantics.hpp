@@ -12,24 +12,12 @@
 #pragma once
 
 // ============================================================================
-// Bind semantics — shared algebra for the three pipeline sites.
+// Bind semantics: shared algebra for "compute expr, bind to sym, run input".
 // ============================================================================
 //
-// A `Bind(input, sym, expr)` enode represents "compute `expr`, bind it to
-// `sym`, then run `input` in that scope."  The same algebra surfaces in three
-// pipeline sites and used to be repeated three times:
-//
-//   1. PlanCostModel::Bind       — bottom-up frontier construction.
-//   2. BestBindBranchCostsForResolve — top-down resolver tie-break.
-//   3. PlanResolver::Impl::visit_bind_children — Bind-aware child visitation.
-//
-// Plus the Builder's dead-Bind detection in ConvertToLogicalOperator, which is
-// *not* part of this algebra: it observes the resolver's decision via
-// build_cache membership rather than re-deciding alive vs dead.  Bind alive vs
-// dead is a *resolution* decision; the build phase consumes its outcome.
-//
-// All five values live here so a future scoped-binding form (Let, scoped
-// projection) can reuse the algebra by writing one new caller.
+// Bind alive vs dead is a *resolution* decision (does input demand sym?); the
+// cost model and resolver both consume this algebra.  Build-time consumers
+// observe the resolver's outcome rather than re-deciding.
 
 #include <algorithm>
 #include <ranges>
@@ -49,28 +37,14 @@ using SymbolSet = boost::container::flat_set<planner::core::EClassId, std::less<
 
 /// Cost of a Symbol leaf alternative.
 ///
-/// Invariant — every Symbol eclass has exactly one alternative
-/// `{cost = kSymbolCost, required = ∅}`.  Three sites depend on this:
-///   * PlanCostModel emits Symbol leaves with this shape.
-///   * PlanCostModel::Bind collapses the sym child frontier to a scalar via
-///     min_cost (correct only because the frontier has a single alt).
-///   * PlanResolver::Impl::visit_bind_children asserts the leaf shape on
-///     entry, surfacing the violation if a future rewrite produces multiple
-///     Symbol alternatives.
-///
-/// If Symbol ever gains alternatives, sym_cost must become a frontier and the
-/// alive-branch cost in BestBindBranchCostsForResolve / PlanCostModel::Bind
-/// must enumerate it alongside expr.  The assert in visit_bind_children is the
-/// loud canary.
+/// Invariant: every Symbol eclass has exactly one alternative
+/// `{cost = kSymbolCost, required = ∅}`.  Cost-model and resolver collapse
+/// the sym child to a scalar on this assumption; the resolver asserts the
+/// leaf shape on entry as the canary if the invariant ever weakens.
 inline constexpr double kSymbolCost = 1.0;
 
-/// Predicate — is an alternative's `required` satisfied by `provided`?
-///
-/// The subset test `required ⊆ provided` says: every symbol this alternative
-/// demands has been bound by some ancestor in the resolver's `provided`
-/// context.  Used by pick_compatible (filtering frontier alts to feasible
-/// candidates) and by BestBindBranchCostsForResolve (excluding alts whose
-/// demands the current Bind branch can't satisfy).
+/// `required ⊆ provided`: every symbol this alternative demands has been
+/// bound by some ancestor in the resolver's `provided` context.
 inline auto IsCompatible(SymbolSet const &required, SymbolSet const &provided) -> bool {
   return std::ranges::includes(provided, required);
 }
@@ -97,13 +71,6 @@ inline auto DeadCost(double input_cost) -> double { return input_cost; }
 ///
 /// Removing `sym` reflects that the Bind itself supplies that symbol; whatever
 /// `expr` demands flows up because the binding does not satisfy expr's needs.
-///
-/// The two inputs are sorted (flat_set invariant); the merged output is
-/// sorted-unique so the resulting flat_set is constructed via
-/// `ordered_unique_range`, skipping the redundant sort.  The intermediate
-/// buffer is stack-allocated — typical demand-union sizes sit well within the
-/// inline capacity, and queries that exceed it pay one extra heap event over
-/// the SymbolSet's own allocation.
 inline auto AliveRequired(SymbolSet const &input_required, planner::core::EClassId sym, SymbolSet const &expr_required)
     -> SymbolSet {
   boost::container::small_vector<planner::core::EClassId, 16> buf;

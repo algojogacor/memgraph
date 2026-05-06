@@ -148,7 +148,7 @@ struct NullTracer final : VMTracer {
 /// Recording tracer - captures execution trace for testing.
 ///
 /// Event payloads are stored as typed values; `details()` formats lazily.
-/// Tests record many events but inspect only a few — eager formatting was
+/// Tests record many events but inspect only a few; eager formatting was
 /// the dominant allocation cost.
 struct RecordingTracer final : VMTracer {
   struct InstructionPayload {

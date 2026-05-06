@@ -12,18 +12,13 @@
 // Focused benchmarks for the extraction + PlanResolver pipeline.
 //
 // Bypasses the Cypher parser by building the egraph directly through the
-// public Make* API and calling ConvertToLogicalOperator(egraph, root).  That
+// public Make* API and calling ConvertToLogicalOperator(egraph, root), which
 // invokes all five extraction stages in egraph_converter.cpp:
-//   1. ComputeFrontiers        — bottom-up Pareto frontier propagation
-//   2. PlanResolver            — top-down Bind-aware selection (the focus)
-//   3. CollectDependencies     — in-degree counting over selected enodes
-//   4. TopologicalSort         — Kahn-order materialisation
-//   5. Builder                 — AST emission per selected enode
-//
-// The pipeline integration test (tests/unit/query_plan_v2_pipeline.cpp) is
-// dominated by ANTLR parsing for the small Cypher queries it exercises, so
-// extraction-side perf deltas are below the noise floor there.  This bench
-// puts the whole iteration budget into the planner.
+//   1. ComputeFrontiers       (bottom-up Pareto frontier propagation)
+//   2. PlanResolver           (top-down Bind-aware selection, the focus)
+//   3. CollectDependencies    (in-degree counting over selected enodes)
+//   4. TopologicalSort        (Kahn-order materialisation)
+//   5. Builder                (AST emission per selected enode)
 
 #include <string>
 #include <vector>
@@ -43,28 +38,16 @@ using memgraph::query::plan::v2::egraph;
 using memgraph::storage::ExternalPropertyValue;
 
 // Build a chain of N nested Bind layers, each binding a fresh symbol whose
-// expression is an arithmetic chain of literals (no unresolved Identifiers —
-// production rewrites inline those before extraction; we skip the rewrite
-// pipeline here and build the post-rewrite shape directly).
+// expression is a literal-only arithmetic chain.
 //
-// Resulting shape per layer i (0-indexed):
+// Per layer i (0-indexed):
 //   sym_i  = Symbol(pos=i, "s_i")
 //   expr_i = Add(Add(Add(Lit(i), Lit(i+1)), Lit(i+2)), Lit(i+3))   // 4 ops
 //   layer_i = Bind(prev_layer, sym_i, expr_i)
 // Final root = Output(layer_{N-1}, [NamedOutput(o_i, sym_i', Lit(i)) for i in 0..N])
 //
-// Every Bind has expr.required == {} (literals only), and Output's
-// named_outputs are also required-free.  All paths therefore have a
-// self-contained alternative at the root.  Binds are "dead" w.r.t. the input
-// (no demand-set propagation upward), so this exercises:
-//   - ComputeFrontiers across N+1 eclasses with cartesian products in expr
-//   - PlanResolver's recursive descent + per-eclass cache
-//   - CollectDependencies / TopologicalSort over the selected enodes
-//   - Builder constructing one AST per selected enode
-//
-// What it doesn't exercise: the alive-Bind alive/dead branch decision.  To
-// hit that we'd need the rewrite layer to inline Identifiers; that lives
-// outside the public Make* API and is harder to spool up here.
+// All Binds are "dead" (no demand propagation), so this exercises the full
+// pipeline cost without engaging the alive/dead branch decision.
 static auto BuildBindChain(int64_t depth) -> std::pair<egraph, eclass> {
   egraph eg;
   eclass current = eg.MakeOnce();

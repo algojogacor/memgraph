@@ -21,8 +21,6 @@ import memgraph.planner.core.egraph;
 
 using namespace memgraph::planner::core;
 using namespace memgraph::planner::core::extract;
-// DefaultCostResult is in extract:: directly (already in scope via using-namespace).
-// ResolveSelection survives as a free-function shim in extract::testing for legacy callers.
 using memgraph::planner::core::extract::testing::ResolveSelection;
 
 enum struct symbol : std::uint8_t { A, B, ADD, LITERAL };
@@ -66,7 +64,7 @@ struct SymbolCostModel {
   }
 };
 
-// Helper: replaces the removed Extractor struct. Runs the full pipeline.
+// Test helper: runs the full extraction pipeline.
 template <typename CostModel>
 auto Extract(EGraph<symbol, analysis> const &egraph, CostModel cost_model, EClassId root)
     -> std::vector<std::pair<EClassId, ENodeId>> {
@@ -118,9 +116,7 @@ struct SimpleCostModel {
   }
 };
 
-// Helper: keep test assertions readable.
-// FrontierMap<CostResult> is now provided by extract::; the test-local typedef
-// keyed by CostModel is a thin convenience around it.
+// Convenience alias: FrontierMap keyed by CostModel rather than CostResult.
 template <typename CostModel>
 using TestFrontierMap = FrontierMap<typename CostModel::CostResult>;
 
@@ -1271,7 +1267,7 @@ TEST(Extract_MultiAlt, ThreeNonDominatedAlternatives) {
 
 // Invariant: when a DAG-shared eclass is reached from contexts with
 // different provided sets, the final selection must be feasible for every
-// visiting context — not just the first one.
+// visiting context, not just the first one.
 //
 // Diamond DAG: Root → Left, Right; both depend on Shared (symbol A) whose
 // frontier has two non-dominated alts: {cost=1, req={1}} and {cost=2, req={}}.
@@ -1369,7 +1365,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
   ASSERT_EQ(leaf_frontier.alts().size(), 2);
 
   // Reference resolver: re-resolves the eclass on incompatible re-visit but
-  // does NOT cascade to the transitive children — included to pin down the
+  // does NOT cascade to the transitive children. Included to pin down the
   // failure mode the cascading variant below has to fix.
   auto resolved = std::unordered_map<EClassId, std::pair<ENodeId, double>>{};
   auto resolved_required = std::unordered_map<EClassId, std::set<int>>{};
@@ -1382,7 +1378,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
       ASSERT_NE(chosen, nullptr);
       existing->second = {chosen->enode_id, chosen->cost};
       resolved_required[id] = chosen->required;
-      // No cascade — children keep selections from their first visit.
+      // No cascade: children keep selections from their first visit.
       return;
     }
     auto const &frontier = *frontier_map.at(id);
@@ -1405,11 +1401,11 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
   resolve_no_cascade(root_class, {});
 
   // Shared re-resolves to req={}, but Leaf retains the stale req={1}
-  // from the first DFS branch — this is the failure mode.
+  // from the first DFS branch. This is the failure mode.
   ASSERT_TRUE(resolved_required[shared_class].empty());
   ASSERT_EQ(resolved_required[leaf_class], std::set<int>{1});
 
-  // Cascading variant — children of the re-resolved selection are revisited.
+  // Cascading variant: children of the re-resolved selection are revisited.
   resolved.clear();
   resolved_required.clear();
 

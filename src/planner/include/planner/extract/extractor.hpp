@@ -93,11 +93,6 @@ using EClassFrontier = std::optional<CostResult>;
 
 /// Map from EClassId to its computed frontier.  Part of the Resolver contract:
 /// resolvers receive `FrontierMap<CR> const &` after ComputeFrontiers populates it.
-///
-/// boost::unordered_flat_map (open-addressing) gives much better cache locality
-/// than std::unordered_map (chained buckets, one heap node per entry) — the
-/// recursive ComputeFrontiers walk is dominated by the lookup pattern, and the
-/// per-iter clear() in production's ExtractionContext keeps reuse common.
 template <typename CostResult>
 using FrontierMap = boost::unordered_flat_map<EClassId, EClassFrontier<CostResult>>;
 
@@ -117,8 +112,8 @@ using SelectionMap = boost::unordered_flat_map<EClassId, Selection<CostType>>;
 // ============================================================================
 //
 // A Resolver is a stateless functor `r(egraph, frontier_map, root)` that
-// returns a SelectionMap.  It chooses one enode per eclass (typically by cost),
-// and decides which children of that enode are part of the extracted tree.
+// returns a SelectionMap.  It chooses one enode per eclass and decides which
+// of that enode's children are part of the extracted tree.
 //
 // Contract on the returned SelectionMap:
 //   - root is in the map.
@@ -131,10 +126,9 @@ using SelectionMap = boost::unordered_flat_map<EClassId, Selection<CostType>>;
 // — that is how the contract surfaces in the rest of the pipeline.
 //
 // Two production adapters:
-//   * DefaultResolver       — walks all children of the chosen enode.
-//   * PlanResolver (in query::plan::v2) — Bind-aware; honours alive/dead and
-//                                          re-resolves shared eclasses on
-//                                          incompatible re-visits.
+//   * DefaultResolver: walks all children of the chosen enode.
+//   * A context-aware variant downstream that honours alive/dead semantics
+//     and re-resolves shared eclasses on incompatible re-visits.
 
 template <typename R, typename Symbol, typename Analysis, typename CostResult>
 concept Resolver =

@@ -119,17 +119,9 @@ struct ParetoFrontier {
     return result;
   }
 
-  /// Rvalue overload — moves alts from both inputs instead of copying.  Hot path:
-  /// extractor.hpp's ComputeFrontiers folds owned `enode_frontier` into the
-  /// running `merged_frontier` and discards both, so moving avoids two
-  /// vector copies per multi-enode eclass.
-  ///
-  /// Both inputs are already Pareto-pruned, so the merged result only needs
-  /// cross-pair checks (a-elements vs b-elements) plus within-b pair checks
-  /// (a is fully pruned, but b might be revealed as needing internal
-  /// dominance work after we've removed some a-elements... actually no, b was
-  /// pruned in isolation, and removing a-elements doesn't introduce
-  /// within-b dominance).  prune_with_pruned_prefix(M) handles this.
+  /// Rvalue overload: moves alts from both inputs instead of copying.
+  /// Both inputs are already Pareto-pruned; only cross-pairs need re-checking
+  /// (see prune_with_pruned_prefix).
   [[nodiscard]] static auto merge(ParetoFrontier &&a, ParetoFrontier &&b) -> ParetoFrontier {
     auto result = ParetoFrontier{std::move(a)};
     auto const pruned_prefix = result.alts_.size();
@@ -158,15 +150,8 @@ struct ParetoFrontier {
   }
 
  protected:
-  // Storage: std::vector, NOT small_vector.  Tried small_vector<Alt, N> for
-  // N ∈ {1, 4} to absorb typical 1–4-alt frontiers without heap; both
-  // regressed 5–50% across DeepChain and WideMerge benches.  Reason: Alt is
-  // ~100B with non-trivial move (SymbolSet contains its own small_vector),
-  // and ParetoFrontier objects are moved frequently (frontier_map inserts,
-  // merge rvalue overload, MapAlts return).  std::vector's move is a
-  // pointer-swap; small_vector with inline storage requires element-wise
-  // moves.  The inline-storage saving on heap allocs was outweighed by the
-  // per-move cost.
+  // std::vector chosen so ParetoFrontier moves stay pointer-swap; small_vector's
+  // element-wise move dominates here because Alt is large with a non-trivial move.
   std::vector<Alt> alts_;
 
  private:
@@ -231,12 +216,8 @@ struct ParetoFrontier {
 };
 
 /// Concept for alternatives usable with CostResultBase.  Beyond what
-/// ParetoFrontier needs (copyable; a totally-ordered cost), CostResultBase
-/// projects via `&Alt::cost` in resolve_with_cost — so `cost` must be a
-/// non-static data member (not a property/function).  The concept doesn't
-/// spell that out directly because the constraint is exercised at use site
-/// in resolve_with_cost; a non-member `cost` would produce a clear error
-/// pointing at the projection.
+/// `cost` must be a non-static data member (not a property/function);
+/// resolve_with_cost projects via `&Alt::cost`.
 template <typename Alt>
 concept ParetoAlt = std::copyable<Alt> && requires(Alt const &a) {
   { a.cost } -> std::totally_ordered;
@@ -286,10 +267,6 @@ struct CostResultBase : ParetoFrontier<Alt, DominanceFn> {
 
   static auto resolve(Derived const &f) noexcept -> decltype(Alt::enode_id) { return resolve_with_cost(f).first; }
 
-  /// Asserts non-empty (consistent with resolve / resolve_with_cost). An empty
-  /// frontier at the cost-model layer indicates a structural bug in the caller
-  /// (e.g., handing in a child enode with zero alternatives) — we want a loud
-  /// failure, not a silent +infinity that propagates upward and corrupts costs.
   static auto min_cost(Derived const &f) noexcept -> cost_t { return resolve_with_cost(f).second; }
 };
 
