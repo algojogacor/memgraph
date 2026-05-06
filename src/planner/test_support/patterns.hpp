@@ -34,22 +34,12 @@ inline constexpr PatternVar kVarY{1};
 inline constexpr PatternVar kVarZ{2};
 inline constexpr PatternVar kVarW{3};
 
-// Short aliases used in benchmarks (kept in sync with the kVar* names above)
-inline constexpr PatternVar kX = kVarX;
-inline constexpr PatternVar kY = kVarY;
-inline constexpr PatternVar kZ = kVarZ;
-
 // Root binding variables
 inline constexpr PatternVar kVarRoot{10};
 inline constexpr PatternVar kVarDoubleNegRoot{11};
 inline constexpr PatternVar kVarAddRoot{12};
 inline constexpr PatternVar kVarMulRoot{13};
-
-// Bench-aliased root bindings (used by bench_common builders)
-inline constexpr PatternVar kRootDoubleNeg = kVarDoubleNegRoot;
-inline constexpr PatternVar kRootAdd = kVarAddRoot;
-inline constexpr PatternVar kRootMul = kVarMulRoot;
-inline constexpr PatternVar kRootNeg{14};
+inline constexpr PatternVar kVarNegRoot{14};
 
 // Chain/join test variables
 inline constexpr PatternVar kVarRootP1{20};
@@ -57,29 +47,29 @@ inline constexpr PatternVar kVarRootP2{21};
 inline constexpr PatternVar kVarRootP3{22};
 
 // Bind/Ident join variables
-inline constexpr PatternVar kVarSym{20};
-inline constexpr PatternVar kVarExpr{21};
-inline constexpr PatternVar kBindRoot{22};
-inline constexpr PatternVar kIdentRoot{23};
+inline constexpr PatternVar kVarSym{30};
+inline constexpr PatternVar kVarExpr{31};
+inline constexpr PatternVar kBindRoot{32};
+inline constexpr PatternVar kIdentRoot{33};
 
 // Alternative generic variables (?a, ?b, ?c) for multi-pattern tests
-inline constexpr PatternVar kVarA{30};
-inline constexpr PatternVar kVarB{31};
-inline constexpr PatternVar kVarC{32};
+inline constexpr PatternVar kVarA{40};
+inline constexpr PatternVar kVarB{41};
+inline constexpr PatternVar kVarC{42};
 
 // Eclass-level hoisting variables
-inline constexpr PatternVar kHoistR{30};  // ?r = F(?x) root binding
-inline constexpr PatternVar kHoistY{31};  // Mul(?r, ?y) sibling binding
+inline constexpr PatternVar kHoistR{50};  // ?r = F(?x) root binding
+inline constexpr PatternVar kHoistY{51};  // Mul(?r, ?y) sibling binding
 
 // Root bindings for join/multi-pattern tests
-inline constexpr PatternVar kVarRootA{33};
-inline constexpr PatternVar kVarRootB{34};
-inline constexpr PatternVar kVarRootC{35};
-inline constexpr PatternVar kVarRootConst{36};
-inline constexpr PatternVar kVarRootNeg{37};
+inline constexpr PatternVar kVarRootA{63};
+inline constexpr PatternVar kVarRootB{64};
+inline constexpr PatternVar kVarRootC{65};
+inline constexpr PatternVar kVarRootConst{66};
+inline constexpr PatternVar kVarRootNeg{67};
 
 // Arbitrary IDs for testing variable ID handling
-inline constexpr PatternVar kVarArbitrary{42};
+inline constexpr PatternVar kVarArbitrary{99};
 inline constexpr PatternVar kTestRoot{100};
 
 // ============================================================================
@@ -105,34 +95,34 @@ inline auto make_double_neg_pattern() -> TestPattern {
 
 // Named pattern factories used by benchmarks.
 
-inline auto PatternAdd() { return TestPattern::build(Op::Add, {Var{kX}, Var{kY}}); }
+inline auto PatternAdd() { return TestPattern::build(Op::Add, {Var{kVarX}, Var{kVarY}}); }
 
-inline auto PatternAddSameVar() { return TestPattern::build(Op::Add, {Var{kX}, Var{kX}}); }
+inline auto PatternAddSameVar() { return TestPattern::build(Op::Add, {Var{kVarX}, Var{kVarX}}); }
 
-inline auto PatternDoubleNeg() { return TestPattern::build(kRootDoubleNeg, Op::Neg, {Sym(Op::Neg, Var{kX})}); }
+inline auto PatternDoubleNeg() { return TestPattern::build(kVarDoubleNegRoot, Op::Neg, {Sym(Op::Neg, Var{kVarX})}); }
 
-inline auto PatternSelective() { return TestPattern::build(Op::Add, {Sym(Op::Neg, Var{kX}), Var{kY}}); }
+inline auto PatternSelective() { return TestPattern::build(Op::Add, {Sym(Op::Neg, Var{kVarX}), Var{kVarY}}); }
 
 inline auto PatternNestedNeg(int depth) -> TestPattern {
   auto b = TestPattern::Builder{};
-  auto cur = b.var(kX);
+  auto cur = b.var(kVarX);
   for (int i = 0; i < depth; ++i) cur = b.sym(Op::Neg, {cur});
   return std::move(b).build();
 }
 
-inline auto PatternNeg() { return TestPattern::build(Op::Neg, {Var{kX}}); }
+inline auto PatternNeg() { return TestPattern::build(Op::Neg, {Var{kVarX}}); }
 
-inline auto PatternNestedF() { return TestPattern::build(Op::F, {Sym(Op::F, Var{kX})}); }
+inline auto PatternNestedF() { return TestPattern::build(Op::F, {Sym(Op::F, Var{kVarX})}); }
 
-inline auto PatternShallowF() { return TestPattern::build(Op::F, {Var{kX}}); }
+inline auto PatternShallowF() { return TestPattern::build(Op::F, {Var{kVarX}}); }
 
-inline auto PatternDeepNestedF() { return TestPattern::build(Op::F, {Sym(Op::F, Sym(Op::F, Sym(Op::F, Var{kX})))}); }
+inline auto PatternDeepNestedF() { return TestPattern::build(Op::F, {Sym(Op::F, Sym(Op::F, Sym(Op::F, Var{kVarX})))}); }
 
 inline auto PatternBind() { return TestPattern::build(kBindRoot, Op::Bind, {Wildcard{}, Var{kVarSym}, Var{kVarExpr}}); }
 
 inline auto PatternIdent() { return TestPattern::build(kIdentRoot, Op::Ident, {Var{kVarSym}}); }
 
-inline auto PatternHoistAnchor() { return TestPattern::build(kHoistR, Op::F, {Var{kX}}); }
+inline auto PatternHoistAnchor() { return TestPattern::build(kHoistR, Op::F, {Var{kVarX}}); }
 
 inline auto PatternHoistJoined() { return TestPattern::build(Op::Mul, {Var{kHoistR}, Var{kHoistY}}); }
 
