@@ -18,8 +18,8 @@
 #include <sys/resource.h>
 
 // Death tests fork() and abort() the child; the kernel then pipes a core dump
-// to apport, which dominates wall time of CycleDetection_IncompleteResult.
-// Setting PR_SET_DUMPABLE=0 makes the kernel skip core-dump generation for this
+// to apport, which dominates wall time when many death tests run.
+// PR_SET_DUMPABLE=0 makes the kernel skip core-dump generation for this
 // process and its forked children, regardless of /proc/sys/kernel/core_pattern.
 // RLIMIT_CORE=0 is also set as a belt-and-braces fallback.
 static auto disable_core_dumps = [] {

@@ -147,10 +147,9 @@ struct NullTracer final : VMTracer {
 
 /// Recording tracer - captures execution trace for testing.
 ///
-/// Event payloads are stored as typed values; `details()` formats them on
-/// demand. Tests run hundreds of thousands of events on the hot path but
-/// inspect only a handful, so eager formatting was the dominant allocation
-/// cost (see HoistCostAnalysis_VaryingEnodesAndParents heaptrack data).
+/// Event payloads are stored as typed values; `details()` formats lazily.
+/// Tests record many events but inspect only a few — eager formatting was
+/// the dominant allocation cost.
 struct RecordingTracer final : VMTracer {
   struct InstructionPayload {
     Instruction instr;

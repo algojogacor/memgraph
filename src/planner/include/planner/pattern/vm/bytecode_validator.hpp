@@ -49,11 +49,9 @@ namespace memgraph::planner::core::pattern::vm {
 // LazyDisassembly — defers `disassemble()` until a failure message is rendered
 // ============================================================================
 //
-// Validators receive `bc` and forward it as a `{}` argument to fmt format
-// strings only on the failure path. Holding code+symbols by reference lets us
-// skip the expensive disassembly entirely when assertions pass — which is the
-// common case (e.g. JoinOrder_HubsAndLeaves_AllPermutations runs the validator
-// 720 times on the happy path).
+// Holding code+symbols by reference lets the formatter call `disassemble()`
+// only when a fmt argument is actually rendered — i.e. on the failure path.
+// The happy path skips disassembly entirely.
 template <typename Symbol>
 struct LazyDisassembly {
   std::span<Instruction const> code;

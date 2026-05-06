@@ -80,9 +80,7 @@ void VerifyBytecode(std::span<Instruction const> code, std::span<Symbol const> s
 // ============================================================================
 
 /// Reporter that delegates to gtest EXPECT_* macros.
-/// Messages are formatted lazily — fmt::format is only called on the failure
-/// path. Validators run hundreds of expect_* calls per test on the happy path,
-/// so eager formatting was the dominant cost (see HubsAndLeaves benchmark).
+/// Messages are formatted lazily — fmt::format runs only on the failure path.
 /// assert_* methods return false on failure so validators can early-return.
 class GTestReporter {
  public:
