@@ -36,7 +36,11 @@ namespace memgraph::planner::core::extract {
 //
 // Every cost model defines:
 //   using CostResult = ...;
-//   operator()(ENode const &, ENodeId, span<CostResult const>) -> CostResult
+//   operator()(ENode const &, ENodeId, span<CostResult>) -> CostResult
+//
+// `children` is a mutable span: cost models may move-from individual entries
+// to consume child frontiers in place.  The extractor does not reuse the span
+// after the cost-model call returns, so consumed entries are safely discarded.
 //
 // CostResult must satisfy CostResultType (defined below).  ParetoFrontier-based
 // cost models derive from CostResultBase (planner/extract/pareto_frontier.hpp).

@@ -68,7 +68,7 @@ struct CostModel {
 
   // Per-symbol cost; trivial since we only care about the pipeline shape.
   auto operator()(memgraph::planner::core::ENode<Op> const &node, ENodeId enode_id,
-                  std::span<CostResult const> children) const -> CostResult {
+                  std::span<CostResult> children) const -> CostResult {
     if (children.empty()) {
       return CostResult{{{.cost = 1.0, .required = {}, .enode_id = enode_id}}};
     }

@@ -83,21 +83,25 @@ auto CombineAlts(double extra_cost, planner::core::ENodeId enode_id) -> CombineA
 
 /// Map over a single frontier — adjust each alternative's cost by `extra_cost`
 /// and re-stamp `enode_id`.  Single-frontier sibling of CombineAlts.
-/// Pareto invariant is preserved (monotone in cost, same required-set).
-auto MapAlts(CostFrontier const &input, double extra_cost, planner::core::ENodeId enode_id) -> CostFrontier {
-  std::vector<Alternative> out;
-  out.reserve(input.alts().size());
-  for (auto const &alt : input.alts()) {
-    out.push_back({.cost = alt.cost + extra_cost, .required = alt.required, .enode_id = enode_id});
-  }
-  return CostFrontier::from_unpruned(std::move(out));
+/// Pareto invariant is preserved: a uniform cost shift does not change relative
+/// ordering, `required` is untouched, and dominance does not read enode_id or
+/// is_alive.  This lets us mutate in place without re-pruning or copying the
+/// per-alt SymbolSet.  Callers used only for non-Bind enodes, so is_alive is
+/// reset to false (it is meaningful only when the alt's enode is a Bind).
+auto MapAlts(CostFrontier input, double extra_cost, planner::core::ENodeId enode_id) -> CostFrontier {
+  input.mutate_pruning_invariant_preserving([&](Alternative &alt) {
+    alt.cost += extra_cost;
+    alt.enode_id = enode_id;
+    alt.is_alive = false;
+  });
+  return input;
 }
 
 struct PlanCostModel {
   using CostResult = CostFrontier;
 
   auto operator()(planner::core::ENode<symbol> const &current, planner::core::ENodeId enode_id,
-                  std::span<CostResult const> children) const -> CostResult {
+                  std::span<CostResult> children) const -> CostResult {
     switch (current.symbol()) {
       // Leaf nodes: single alternative, no demand
       case symbol::Once:
@@ -174,14 +178,14 @@ struct PlanCostModel {
       case symbol::UnaryMinus:
       case symbol::UnaryPlus: {
         auto const cost = expression_cost::FromClass(CostClassOf(current.symbol()));
-        return MapAlts(children[0], cost, enode_id);
+        return MapAlts(std::move(children[0]), cost, enode_id);
       }
 
       // Output: re-stamp child[0]'s frontier (no extra cost) so all alternatives
       // dispatch through this Output enode in the Builder, then fold in each
       // NamedOutput child via CombineAlts.
       case symbol::Output: {
-        auto result = MapAlts(children[0], 0.0, enode_id);
+        auto result = MapAlts(std::move(children[0]), 0.0, enode_id);
         for (size_t i = 1; i < children.size(); ++i) {
           result = CostFrontier::combine(result, children[i], CombineAlts(0.0, enode_id));
         }

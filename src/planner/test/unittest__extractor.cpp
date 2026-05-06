@@ -41,7 +41,7 @@ auto Add(EGraph &egraph, EClassId left, EClassId right) {
 struct UniformCostModel {
   using CostResult = DefaultCostResult<double>;
 
-  static auto operator()(ENode<symbol> const & /*current*/, ENodeId enode_id, std::span<CostResult const> children)
+  static auto operator()(ENode<symbol> const & /*current*/, ENodeId enode_id, std::span<CostResult> children)
       -> CostResult {
     auto child_sum = std::ranges::fold_left(
         children, 0.0, [](double acc, CostResult const &c) { return acc + CostResult::min_cost(c); });
@@ -54,8 +54,7 @@ struct SymbolCostModel {
   double a_cost;
   double b_cost;
 
-  auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult const> children) const
-      -> CostResult {
+  auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult> children) const -> CostResult {
     auto child_sum = std::ranges::fold_left(
         children, 0.0, [](double acc, CostResult const &c) { return acc + CostResult::min_cost(c); });
     return CostResult{(current.symbol() == symbol::A ? a_cost : b_cost) + child_sum, enode_id};
@@ -106,8 +105,7 @@ struct SimpleCostModel {
   using CostResult = DefaultCostResult<double>;
   Fn fn;
 
-  auto operator()(ENode<symbol> const &enode, ENodeId enode_id, std::span<CostResult const> children) const
-      -> CostResult {
+  auto operator()(ENode<symbol> const &enode, ENodeId enode_id, std::span<CostResult> children) const -> CostResult {
     auto child_sum = std::ranges::fold_left(
         children, 0.0, [](double acc, CostResult const &c) { return acc + CostResult::min_cost(c); });
     return CostResult{fn(enode) + child_sum, enode_id};
@@ -889,7 +887,7 @@ inline auto PickBestCompatible(TestFrontier const &frontier, std::set<int> const
 struct SimpleMultiAltCostModel {
   using CostResult = TestFrontier;
 
-  static auto operator()(ENode<symbol> const & /*current*/, ENodeId enode_id, std::span<CostResult const> children)
+  static auto operator()(ENode<symbol> const & /*current*/, ENodeId enode_id, std::span<CostResult> children)
       -> CostResult {
     auto child_cost = std::ranges::fold_left(
         children, 0.0, [](double acc, CostResult const &c) { return acc + CostResult::min_cost(c); });
@@ -900,8 +898,7 @@ struct SimpleMultiAltCostModel {
 struct DemandAwareMultiAltCostModel {
   using CostResult = TestFrontier;
 
-  static auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult const> children)
-      -> CostResult {
+  static auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult> children) -> CostResult {
     auto child_cost = std::ranges::fold_left(
         children, 0.0, [](double acc, CostResult const &c) { return acc + CostResult::min_cost(c); });
     if (current.symbol() == symbol::A) {
@@ -1172,7 +1169,7 @@ TEST(Extract_MultiAlt, ThreeNonDominatedAlternatives) {
   struct ThreeAltCostModel {
     using CostResult = TestFrontier;
 
-    static auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult const> children)
+    static auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult> children)
         -> CostResult {
       auto child_cost = std::ranges::fold_left(
           children, 0.0, [](double acc, CostResult const &c) { return acc + CostResult::min_cost(c); });
