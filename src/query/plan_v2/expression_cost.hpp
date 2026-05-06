@@ -11,6 +11,9 @@
 
 #pragma once
 
+#include <cassert>
+#include <utility>
+
 #include "query/plan_v2/private_symbol.hpp"
 
 // ============================================================================
@@ -72,12 +75,13 @@ inline constexpr auto FromClass(CostClass c) -> double {
       return kIdentifier;
     case CostClass::Structural:
     case CostClass::Leaf:
-      // These classes don't map to a per-operator constant — PlanCostModel
-      // scores them directly.  Surfacing 0.0 here would silently wrong-answer
-      // a future caller that forgot the distinction; assert instead.
-      return 0.0;
+      // Structural and Leaf are scored directly by PlanCostModel; reaching
+      // them here means a caller forgot the distinction.  Returning 0.0
+      // would silently corrupt costs upstream.
+      assert(false && "FromClass: Structural/Leaf are not per-operator constants");
+      std::unreachable();
   }
-  return 0.0;
+  std::unreachable();
 }
 
 }  // namespace memgraph::query::plan::v2::expression_cost
