@@ -9,15 +9,15 @@
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
 
-// Explicit template instantiation definitions for bench types.
-// These match the extern template declarations in bench_common.hpp,
-// so each template is instantiated exactly once across all bench TUs.
+// Explicit template instantiation definitions matching the extern template
+// declarations in test_support/types.hpp. Compiled into both the unit-test
+// and benchmark binaries so each binary instantiates the templates once.
 
-#include "bench_common.hpp"
+#include "test_support/types.hpp"
 
 namespace {
-using memgraph::planner::bench::NoAnalysis;
-using memgraph::planner::bench::Op;
+using memgraph::planner::core::test::NoAnalysis;
+using memgraph::planner::core::test::Op;
 }  // namespace
 
 template struct memgraph::planner::core::EGraph<Op, NoAnalysis>;

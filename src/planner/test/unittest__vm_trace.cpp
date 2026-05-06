@@ -29,7 +29,7 @@
 #include "planner/pattern/vm/executor.hpp"
 #include "planner/pattern/vm/tracer.hpp"
 #include "test_egraph_fixture.hpp"
-#include "test_patterns.hpp"
+#include "test_support/patterns.hpp"
 
 import memgraph.planner.core.egraph;
 

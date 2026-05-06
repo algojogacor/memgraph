@@ -12,7 +12,7 @@
 #pragma once
 
 #include "planner/pattern/pattern.hpp"
-#include "test_symbols.hpp"
+#include "test_support/types.hpp"
 
 namespace memgraph::planner::core::test {
 
@@ -23,23 +23,21 @@ using pattern::dsl::Var;
 using pattern::dsl::Wildcard;
 
 // ============================================================================
-// Common Pattern Variables
+// Pattern Variable IDs
 // ============================================================================
-//
-// Named pattern variables for use in tests. Using named constants instead of
-// raw PatternVar{0} improves readability and prevents ID collisions.
-//
-// Naming conventions:
-//   kVarX, kVarY, kVarZ: generic variables (?x, ?y, ?z)
-//   kVarA, kVarB, kVarC: alternative naming when x/y/z are awkward
-//   kVarRoot*: for binding pattern roots to variables
-// ============================================================================
+// Named PatternVar constants for tests and benchmarks. Using named constants
+// instead of raw PatternVar{N} improves readability and prevents ID collisions.
 
-// Pattern variables (?x, ?y, ?z, ?w)
+// Generic variables (?x, ?y, ?z, ?w)
 inline constexpr PatternVar kVarX{0};
 inline constexpr PatternVar kVarY{1};
 inline constexpr PatternVar kVarZ{2};
 inline constexpr PatternVar kVarW{3};
+
+// Short aliases used in benchmarks (kept in sync with the kVar* names above)
+inline constexpr PatternVar kX = kVarX;
+inline constexpr PatternVar kY = kVarY;
+inline constexpr PatternVar kZ = kVarZ;
 
 // Root binding variables
 inline constexpr PatternVar kVarRoot{10};
@@ -47,15 +45,31 @@ inline constexpr PatternVar kVarDoubleNegRoot{11};
 inline constexpr PatternVar kVarAddRoot{12};
 inline constexpr PatternVar kVarMulRoot{13};
 
+// Bench-aliased root bindings (used by bench_common builders)
+inline constexpr PatternVar kRootDoubleNeg = kVarDoubleNegRoot;
+inline constexpr PatternVar kRootAdd = kVarAddRoot;
+inline constexpr PatternVar kRootMul = kVarMulRoot;
+inline constexpr PatternVar kRootNeg{14};
+
 // Chain/join test variables
 inline constexpr PatternVar kVarRootP1{20};
 inline constexpr PatternVar kVarRootP2{21};
 inline constexpr PatternVar kVarRootP3{22};
 
+// Bind/Ident join variables
+inline constexpr PatternVar kVarSym{20};
+inline constexpr PatternVar kVarExpr{21};
+inline constexpr PatternVar kBindRoot{22};
+inline constexpr PatternVar kIdentRoot{23};
+
 // Alternative generic variables (?a, ?b, ?c) for multi-pattern tests
 inline constexpr PatternVar kVarA{30};
 inline constexpr PatternVar kVarB{31};
 inline constexpr PatternVar kVarC{32};
+
+// Eclass-level hoisting variables
+inline constexpr PatternVar kHoistR{30};  // ?r = F(?x) root binding
+inline constexpr PatternVar kHoistY{31};  // Mul(?r, ?y) sibling binding
 
 // Root bindings for join/multi-pattern tests
 inline constexpr PatternVar kVarRootA{33};
@@ -69,21 +83,9 @@ inline constexpr PatternVar kVarArbitrary{42};
 inline constexpr PatternVar kTestRoot{100};
 
 // ============================================================================
-// Type Aliases
-// ============================================================================
-
-using TestPattern = pattern::Pattern<Op>;
-
-// ============================================================================
 // Pattern Helpers
 // ============================================================================
 
-/**
- * @brief Create a variable-only pattern: ?var
- *
- * Variable patterns match any e-class and are useful for testing
- * wildcard matching behavior.
- */
 inline auto make_var_pattern(PatternVar var) -> TestPattern {
   auto builder = TestPattern::Builder{};
   builder.var(var);
@@ -96,14 +98,42 @@ inline auto make_wildcard_pattern() -> TestPattern {
   return std::move(builder).build();
 }
 
-/**
- * @brief Create a double negation pattern: Neg(Neg(?x))
- *
- * Binds the outer Neg to kVarDoubleNegRoot and the inner variable to kVarX.
- * Used for double negation elimination: Neg(Neg(?x)) -> ?x
- */
+/// Neg(Neg(?x)) bound to kVarDoubleNegRoot. Used for double-neg elimination.
 inline auto make_double_neg_pattern() -> TestPattern {
   return TestPattern::build(kVarDoubleNegRoot, Op::Neg, {Sym(Op::Neg, Var{kVarX})});
 }
+
+// Named pattern factories used by benchmarks.
+
+inline auto PatternAdd() { return TestPattern::build(Op::Add, {Var{kX}, Var{kY}}); }
+
+inline auto PatternAddSameVar() { return TestPattern::build(Op::Add, {Var{kX}, Var{kX}}); }
+
+inline auto PatternDoubleNeg() { return TestPattern::build(kRootDoubleNeg, Op::Neg, {Sym(Op::Neg, Var{kX})}); }
+
+inline auto PatternSelective() { return TestPattern::build(Op::Add, {Sym(Op::Neg, Var{kX}), Var{kY}}); }
+
+inline auto PatternNestedNeg(int depth) -> TestPattern {
+  auto b = TestPattern::Builder{};
+  auto cur = b.var(kX);
+  for (int i = 0; i < depth; ++i) cur = b.sym(Op::Neg, {cur});
+  return std::move(b).build();
+}
+
+inline auto PatternNeg() { return TestPattern::build(Op::Neg, {Var{kX}}); }
+
+inline auto PatternNestedF() { return TestPattern::build(Op::F, {Sym(Op::F, Var{kX})}); }
+
+inline auto PatternShallowF() { return TestPattern::build(Op::F, {Var{kX}}); }
+
+inline auto PatternDeepNestedF() { return TestPattern::build(Op::F, {Sym(Op::F, Sym(Op::F, Sym(Op::F, Var{kX})))}); }
+
+inline auto PatternBind() { return TestPattern::build(kBindRoot, Op::Bind, {Wildcard{}, Var{kVarSym}, Var{kVarExpr}}); }
+
+inline auto PatternIdent() { return TestPattern::build(kIdentRoot, Op::Ident, {Var{kVarSym}}); }
+
+inline auto PatternHoistAnchor() { return TestPattern::build(kHoistR, Op::F, {Var{kX}}); }
+
+inline auto PatternHoistJoined() { return TestPattern::build(Op::Mul, {Var{kHoistR}, Var{kHoistY}}); }
 
 }  // namespace memgraph::planner::core::test

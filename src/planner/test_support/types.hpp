@@ -16,13 +16,9 @@
 #include "planner/pattern/match_index.hpp"
 #include "planner/pattern/vm/compiler.hpp"
 #include "planner/pattern/vm/executor.hpp"
-#include "test_symbols.hpp"
+#include "test_support/symbols.hpp"
 
 namespace memgraph::planner::core::test {
-
-// ============================================================================
-// E-Graph Test Types
-// ============================================================================
 
 using TestEGraph = EGraph<Op, NoAnalysis>;
 using TestMatcherIndex = pattern::MatcherIndex<Op, NoAnalysis>;
@@ -36,12 +32,9 @@ using TestPattern = pattern::Pattern<Op>;
 
 }  // namespace memgraph::planner::core::test
 
-// ============================================================================
-// Extern Template Declarations (test types)
-// ============================================================================
 // Suppress implicit instantiation in each TU. Explicit instantiation
-// definitions live in test_instantiations.cpp.
-
+// definitions live in test_support/instantiations.cpp (compiled into both
+// the unit-test and benchmark binaries).
 extern template struct memgraph::planner::core::EGraph<memgraph::planner::core::test::Op,
                                                        memgraph::planner::core::test::NoAnalysis>;
 extern template class memgraph::planner::core::pattern::vm::PatternsCompiler<memgraph::planner::core::test::Op>;

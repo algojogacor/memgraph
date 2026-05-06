@@ -2,7 +2,7 @@ add_unit_test(planner
     CUSTOM_MAIN
     SOURCES
         main.cpp
-        test_instantiations.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../test_support/instantiations.cpp
         unittest__union_find.cpp
         unittest__enode.cpp
         unittest__egraph.cpp
@@ -14,6 +14,8 @@ add_unit_test(planner
         unittest__vm_compiler.cpp
         unittest__vm_trace.cpp
         unittest__vm_state.cpp
+    INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
     LINK_TARGETS mg::planner ApprovalTests::ApprovalTests
 )
 

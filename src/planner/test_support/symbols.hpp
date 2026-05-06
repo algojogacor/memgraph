@@ -17,24 +17,9 @@
 
 namespace memgraph::planner::core::test {
 
-// ============================================================================
-// Test Symbols
-// ============================================================================
-//
-// Common symbol enum for planner unit tests. Represents a minimal expression
-// language for testing e-graph and pattern matching operations.
-// ============================================================================
-
-/**
- * @brief Test symbols for e-graph and pattern tests
- *
- * Includes:
- *   - Add, Mul: binary operators
- *   - Neg: unary operator
- *   - Var, Const: generic terminals
- *   - A, B, C, D, X, Y: named terminals (when tests need distinguishable leaves)
- *   - F, F2, F3: N-ary functions (semantically neutral, for testing infrastructure)
- */
+/// Test/benchmark symbol set. Covers binary/unary math ops, generic and
+/// named terminals, and semantically-neutral N-ary functions used purely
+/// to exercise infrastructure (matcher, executor, rewriter).
 enum class Op : uint8_t {
   // Binary operators (with mathematical meaning - use for semantic tests)
   Add,
@@ -66,10 +51,9 @@ enum class Op : uint8_t {
   Test,
 };
 
-/// Empty analysis type for tests that don't need e-class analysis
+/// Empty analysis type for tests that don't need e-class analysis.
 struct NoAnalysis {};
 
-/// Convert Op to string for debugging
 constexpr auto op_to_string(Op op) -> std::string_view {
   switch (op) {
     case Op::Add:

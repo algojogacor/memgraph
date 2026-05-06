@@ -15,7 +15,7 @@
 
 #include "planner/pattern/vm/compiler.hpp"
 #include "test_egraph_fixture.hpp"
-#include "test_patterns.hpp"
+#include "test_support/patterns.hpp"
 #include "test_vm_bytecode.hpp"
 
 namespace memgraph::planner::core {
