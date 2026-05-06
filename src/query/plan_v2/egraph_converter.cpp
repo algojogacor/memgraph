@@ -57,7 +57,7 @@ struct AlternativeDominance {
 
 /// CostFrontier: ParetoFrontier with resolve/min_cost for the extraction contract.
 /// merge is inherited from ParetoFrontier (union + prune).
-struct CostFrontier : planner::core::extract::CostResultBase<CostFrontier, Alternative, AlternativeDominance> {
+struct CostFrontier : planner::core::extract::CostResultBase<Alternative, AlternativeDominance> {
   using CostResultBase::CostResultBase;
 };
 
@@ -114,7 +114,7 @@ struct PlanCostModel {
       case symbol::Identifier: {
         assert(!children.empty() && "Identifier must have its symbol child frontier");
         auto sym_eclass = current.children()[0];
-        return CostResult{{{.cost = expression_cost::kIdentifier + CostFrontier::min_cost(children[0]),
+        return CostResult{{{.cost = expression_cost::kIdentifier + children[0].min_cost(),
                             .required = {sym_eclass},
                             .enode_id = enode_id}}};
       }
@@ -128,7 +128,7 @@ struct PlanCostModel {
         auto const &sym_frontier = children[1];
         auto const &expr_frontier = children[2];
         auto sym_eclass = current.children()[1];
-        auto sym_cost = CostFrontier::min_cost(sym_frontier);
+        auto sym_cost = sym_frontier.min_cost();
 
         return CostFrontier::flat_map(input_frontier, [&](auto const &input_alt, auto emit) {
           if (bind::IsAlive(input_alt.required, sym_eclass)) {

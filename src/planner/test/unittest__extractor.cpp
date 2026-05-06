@@ -43,8 +43,8 @@ struct UniformCostModel {
 
   static auto operator()(ENode<symbol> const & /*current*/, ENodeId enode_id, std::span<CostResult> children)
       -> CostResult {
-    auto child_sum = std::ranges::fold_left(
-        children, 0.0, [](double acc, CostResult const &c) { return acc + CostResult::min_cost(c); });
+    auto child_sum =
+        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.min_cost(); });
     return CostResult{1.0 + child_sum, enode_id};
   }
 };
@@ -55,8 +55,8 @@ struct SymbolCostModel {
   double b_cost;
 
   auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult> children) const -> CostResult {
-    auto child_sum = std::ranges::fold_left(
-        children, 0.0, [](double acc, CostResult const &c) { return acc + CostResult::min_cost(c); });
+    auto child_sum =
+        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.min_cost(); });
     return CostResult{(current.symbol() == symbol::A ? a_cost : b_cost) + child_sum, enode_id};
   }
 };
@@ -106,8 +106,8 @@ struct SimpleCostModel {
   Fn fn;
 
   auto operator()(ENode<symbol> const &enode, ENodeId enode_id, std::span<CostResult> children) const -> CostResult {
-    auto child_sum = std::ranges::fold_left(
-        children, 0.0, [](double acc, CostResult const &c) { return acc + CostResult::min_cost(c); });
+    auto child_sum =
+        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.min_cost(); });
     return CostResult{fn(enode) + child_sum, enode_id};
   }
 };
@@ -118,12 +118,12 @@ using TestFrontierMap = FrontierMap<typename CostModel::CostResult>;
 
 template <typename CostModel>
 auto FrontierCost(TestFrontierMap<CostModel> const &m, EClassId id) {
-  return CostModel::CostResult::min_cost(*m.at(id));
+  return m.at(id)->min_cost();
 }
 
 template <typename CostModel>
 auto FrontierEnode(TestFrontierMap<CostModel> const &m, EClassId id) {
-  return CostModel::CostResult::resolve(*m.at(id));
+  return m.at(id)->resolve();
 }
 
 TEST(Extract_Cost, SingleLeafNode) {
@@ -856,7 +856,7 @@ struct TestDominance {
 };
 
 /// TestFrontier: ParetoFrontier with resolve/min_cost for the extraction contract.
-struct TestFrontier : CostResultBase<TestFrontier, TestDemandAlt, TestDominance> {
+struct TestFrontier : CostResultBase<TestDemandAlt, TestDominance> {
   using CostResultBase::CostResultBase;
 };
 
@@ -889,8 +889,8 @@ struct SimpleMultiAltCostModel {
 
   static auto operator()(ENode<symbol> const & /*current*/, ENodeId enode_id, std::span<CostResult> children)
       -> CostResult {
-    auto child_cost = std::ranges::fold_left(
-        children, 0.0, [](double acc, CostResult const &c) { return acc + CostResult::min_cost(c); });
+    auto child_cost =
+        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.min_cost(); });
     return CostResult{{{.cost = 1.0 + child_cost, .required = {}, .enode_id = enode_id}}};
   }
 };
@@ -899,8 +899,8 @@ struct DemandAwareMultiAltCostModel {
   using CostResult = TestFrontier;
 
   static auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult> children) -> CostResult {
-    auto child_cost = std::ranges::fold_left(
-        children, 0.0, [](double acc, CostResult const &c) { return acc + CostResult::min_cost(c); });
+    auto child_cost =
+        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.min_cost(); });
     if (current.symbol() == symbol::A) {
       return CostResult{{
           {.cost = 1.0 + child_cost, .required = {1}, .enode_id = enode_id},
@@ -1114,7 +1114,7 @@ TEST(Extract_MultiAlt, DominatedPruning) {
   ASSERT_TRUE(has_no_demand_alt) << "Expected alternative with cost=2.0, required={}";
 
   // Min cost is 1.0 (the {1}-requiring alternative)
-  ASSERT_DOUBLE_EQ(TestFrontier::min_cost(frontier), 1.0);
+  ASSERT_DOUBLE_EQ(frontier.min_cost(), 1.0);
 }
 
 TEST(Extract_MultiAlt, DiamondDAG_WithDemand) {
@@ -1157,8 +1157,8 @@ TEST(Extract_MultiAlt, ThreeNonDominatedAlternatives) {
 
     static auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult> children)
         -> CostResult {
-      auto child_cost = std::ranges::fold_left(
-          children, 0.0, [](double acc, CostResult const &c) { return acc + CostResult::min_cost(c); });
+      auto child_cost =
+          std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.min_cost(); });
       if (current.symbol() == symbol::A) {
         return CostResult{{
             {.cost = 1.0 + child_cost, .required = {1, 2}, .enode_id = enode_id},
@@ -1197,7 +1197,7 @@ TEST(Extract_MultiAlt, ThreeNonDominatedAlternatives) {
   ASSERT_TRUE(has_alt_none) << "Expected alternative with cost=3.0, required={}";
 
   // Min cost should be 1.0
-  ASSERT_DOUBLE_EQ(TestFrontier::min_cost(frontier), 1.0);
+  ASSERT_DOUBLE_EQ(frontier.min_cost(), 1.0);
 
   // Full extraction should still work and select the min-cost alternative
   auto extracted = Extract(egraph, ThreeAltCostModel{}, a_class);

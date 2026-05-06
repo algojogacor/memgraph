@@ -225,10 +225,13 @@ concept ParetoAlt = std::copyable<Alt> && requires(Alt const &a) {
   { a.enode_id };
 };
 
-/// CRTP base for ParetoFrontier types that use min-cost as their resolve/min_cost strategy.
-/// Derived types get resolve(), min_cost(), and convenience constructors for free.
-/// Alt must have `.cost` (double-compatible) and `.enode_id` fields.
-template <typename Derived, typename Alt, typename DominanceFn>
+/// Base for ParetoFrontier types that use min-cost as their resolve/min_cost
+/// strategy.  Derived types get resolve(), min_cost(), and convenience
+/// constructors for free.  The Self type for the merge return / *this is
+/// deduced via C++23 explicit object parameters; derived classes do not pass
+/// themselves through a CRTP template parameter.  Alt must have `.cost`
+/// (double-compatible) and `.enode_id` fields.
+template <typename Alt, typename DominanceFn>
   requires ParetoAlt<Alt>
 struct CostResultBase : ParetoFrontier<Alt, DominanceFn> {
   using Base = ParetoFrontier<Alt, DominanceFn>;
@@ -244,31 +247,46 @@ struct CostResultBase : ParetoFrontier<Alt, DominanceFn> {
   /// non-pruned frontier from outside the class hierarchy.
   CostResultBase(std::initializer_list<Alt> init) : Base(Base::from_unpruned(std::vector<Alt>(init))) {}
 
-  /// Hides Base::merge so the static return type matches Derived (required by CostResultType concept).
-  [[nodiscard]] static auto merge(Derived const &a, Derived const &b) -> Derived { return Derived{Base::merge(a, b)}; }
+  /// Hides Base::merge so the return type matches the deduced Self
+  /// (required by CostResultType concept).
+  template <typename Self>
+  [[nodiscard]] auto merge(this Self const &self, Self const &other) -> Self {
+    return Self{Base::merge(static_cast<Base const &>(self), static_cast<Base const &>(other))};
+  }
 
   /// Rvalue overload — forwards to Base's move-merge to avoid copying alts when
   /// both inputs are owned (e.g. ComputeFrontiers folding accumulated frontier).
-  [[nodiscard]] static auto merge(Derived &&a, Derived &&b) -> Derived {
-    return Derived{Base::merge(std::move(static_cast<Base &>(a)), std::move(static_cast<Base &>(b)))};
+  template <typename Self>
+  [[nodiscard]] auto merge(this Self &&self, Self &&other) -> Self {
+    return Self{Base::merge(std::move(static_cast<Base &>(self)), std::move(static_cast<Base &>(other)))};
   }
 
-  /// Derived-returning analogue of Base::from_unpruned.  Tests use this to
-  /// seed Pareto-pruned frontiers from raw alternative lists.
-  [[nodiscard]] static auto from_unpruned(std::vector<Alt> alts) -> Derived {
-    return Derived{Base::from_unpruned(std::move(alts))};
+  /// Self-returning analogue of Base::from_unpruned.  Tests and benches use
+  /// this to seed Pareto-pruned frontiers from raw alternative lists.  Self
+  /// must be supplied explicitly (factories cannot use deducing-this).
+  template <typename Self>
+    requires std::derived_from<Self, CostResultBase>
+  [[nodiscard]] static auto from_unpruned(std::vector<Alt> alts) -> Self {
+    return Self{Base::from_unpruned(std::move(alts))};
   }
 
-  static auto resolve_with_cost(Derived const &f) -> std::pair<decltype(Alt::enode_id), cost_t> {
-    auto const alts = f.alts();
+  template <typename Self>
+  auto resolve_with_cost(this Self const &self) -> std::pair<decltype(Alt::enode_id), cost_t> {
+    auto const alts = self.alts();
     auto it = std::ranges::min_element(alts, {}, &Alt::cost);
     assert(it != alts.end() && "resolve_with_cost called on empty frontier");
     return {it->enode_id, it->cost};
   }
 
-  static auto resolve(Derived const &f) noexcept -> decltype(Alt::enode_id) { return resolve_with_cost(f).first; }
+  template <typename Self>
+  auto resolve(this Self const &self) noexcept -> decltype(Alt::enode_id) {
+    return self.resolve_with_cost().first;
+  }
 
-  static auto min_cost(Derived const &f) noexcept -> cost_t { return resolve_with_cost(f).second; }
+  template <typename Self>
+  auto min_cost(this Self const &self) noexcept -> cost_t {
+    return self.resolve_with_cost().second;
+  }
 };
 
 }  // namespace memgraph::planner::core::extract
