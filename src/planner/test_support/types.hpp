@@ -33,8 +33,8 @@ using TestPattern = pattern::Pattern<Op>;
 }  // namespace memgraph::planner::core::test
 
 // Suppress implicit instantiation in each TU. Explicit instantiation
-// definitions live in test_support/instantiations.cpp (compiled into both
-// the unit-test and benchmark binaries).
+// definitions live in test_support/instantiations.cpp (built as the
+// mg::planner::test_support OBJECT target and linked into consumers).
 extern template struct memgraph::planner::core::EGraph<memgraph::planner::core::test::Op,
                                                        memgraph::planner::core::test::NoAnalysis>;
 extern template class memgraph::planner::core::pattern::vm::PatternsCompiler<memgraph::planner::core::test::Op>;

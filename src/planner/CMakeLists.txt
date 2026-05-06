@@ -72,6 +72,7 @@ target_sources(mg-planner
 target_link_libraries(mg-planner PUBLIC absl::flat_hash_map mg-utils range-v3::range-v3)
 
 if(MG_ENABLE_TESTING)
+  add_subdirectory(test_support)
   add_subdirectory(test)
   add_subdirectory(bench)
   add_subdirectory(fuzz)
