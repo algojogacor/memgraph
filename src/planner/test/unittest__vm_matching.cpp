@@ -1400,4 +1400,60 @@ TEST_F(PatternVM_Matching, ParentWalk_SymbolChildMultipleEnodes) {
   });
 }
 
+// Hoisted multi-pattern ?r=F(?x) + Mul(?r, ?y): match count must equal
+// kEclasses * enodes * parents across varied (enodes_per_class,
+// parents_per_class) ratios. Exercises the hoist that runs IterParents
+// once per eclass instead of once per enode.
+TEST_F(PatternVM_Matching, Hoist_VaryingEnodesAndParents) {
+  struct Case {
+    int enodes;
+    int parents;
+  };
+
+  constexpr int kEclasses = 10;
+  Case cases[] = {
+      {1, 1},
+      {1, 10},
+      {1, 50},
+      {10, 1},
+      {10, 10},
+      {10, 50},
+      {20, 1},
+      {20, 10},
+      {20, 50},
+  };
+
+  for (auto [enodes, parents] : cases) {
+    egraph = TestEGraph{};
+
+    for (int ec = 0; ec < kEclasses; ++ec) {
+      auto leaf0 = egraph.emplace(Op::Const, static_cast<uint64_t>(ec * 1000)).eclass_id;
+      auto first_f = egraph.emplace(Op::F, {leaf0}).eclass_id;
+      for (int e = 1; e < enodes; ++e) {
+        auto lf = egraph.emplace(Op::Const, static_cast<uint64_t>(ec * 1000 + e)).eclass_id;
+        auto f = egraph.emplace(Op::F, {lf}).eclass_id;
+        egraph.merge(first_f, f);
+      }
+      for (int p = 0; p < parents; ++p) {
+        auto unique = egraph.emplace(Op::Const, static_cast<uint64_t>(100000 + ec * 1000 + p)).eclass_id;
+        egraph.emplace(Op::Mul, {first_f, unique});
+      }
+    }
+    rebuild_egraph();
+
+    index = TestMatcherIndex{egraph};
+    vm_executor = TestVMExecutor{egraph};
+    rebuild_index();
+
+    constexpr PatternVar kR{30};
+    constexpr PatternVar kHX{0};
+    constexpr PatternVar kHY{31};
+    use_patterns(TestPattern::build(kR, Op::F, {Var{kHX}}), TestPattern::build(Op::Mul, {Var{kR}, Var{kHY}}));
+    run_compiled();
+
+    auto expected_matches = static_cast<std::size_t>(kEclasses * enodes * parents);
+    EXPECT_EQ(matches.size(), expected_matches) << "enodes=" << enodes << " parents=" << parents;
+  }
+}
+
 }  // namespace memgraph::planner::core
