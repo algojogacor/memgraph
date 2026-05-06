@@ -247,23 +247,16 @@ class NamedExpressionCollector : public plan::HierarchicalLogicalOperatorVisitor
 };
 
 TEST(PlannerV2BuildCacheRehash, NoCacheCorruptionAtRehashThreshold) {
-  // Regression test for an order-of-evaluation UB in ConvertToLogicalOperator's
-  // Builder loop where `build_cache[k] = build_cache.at(c)` (and the analogous
-  // `build_cache[k] = builder.Build(enode, refs_into_build_cache)`) could read
-  // through a reference into build_cache that the LHS [] insertion had just
-  // invalidated by triggering a rehash.  build_cache is a
-  // boost::unordered_flat_map (open-addressing) — rehash invalidates ALL
-  // references.
+  // Invariant: build_cache must hand out stable references across the
+  // Builder loop even when an insertion triggers a rehash.  build_cache is
+  // an open-addressing flat_map, so rehash invalidates *all* outstanding
+  // references; if the loop ever holds one across an assignment that may
+  // insert, it reads garbage.
   //
-  // The bug only manifested past the rehash threshold (~32 entries with
-  // boost defaults).  This test builds an egraph with > 64 selected eclasses
-  // to ensure the threshold is crossed regardless of small load-factor tweaks,
-  // then runs ConvertToLogicalOperator end-to-end.  Pre-fix, the call threw
-  // "Planner error, child node is incorrect type"; post-fix it succeeds.
-  //
-  // Structural protection (build_cache.reserve(selection.size()) up-front)
-  // would also need to silently regress for this test to fail, hence both
-  // layers of defence are exercised.
+  // To exercise the rehash, build an egraph with > 64 selected eclasses so
+  // the threshold is crossed regardless of small load-factor tweaks, then
+  // run ConvertToLogicalOperator end-to-end — both the up-front
+  // build_cache.reserve() and any per-call defensive copy must hold.
   egraph eg;
   eclass current = eg.MakeOnce();
   for (int64_t i = 0; i < 32; ++i) {
@@ -283,8 +276,6 @@ TEST(PlannerV2BuildCacheRehash, NoCacheCorruptionAtRehashThreshold) {
   }
   auto root = eg.MakeOutputs(current, std::move(named_outputs));
 
-  // Pre-fix this throws "Planner error, child node is incorrect type" once the
-  // build_cache rehashes mid-loop.  Post-fix it returns a valid plan.
   auto result = ConvertToLogicalOperator(eg, root);
   ASSERT_NE(std::get<0>(result), nullptr);
 }

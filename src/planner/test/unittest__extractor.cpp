@@ -1269,18 +1269,14 @@ TEST(Extract_MultiAlt, ThreeNonDominatedAlternatives) {
   ASSERT_EQ(extracted[0].second, a_node);
 }
 
-// Demonstrates the DAG resolution fix: when a shared eclass is visited from
-// two parents with different provided sets, the resolver re-resolves on
-// incompatible re-visit rather than using first-visitor-wins caching.
+// Invariant: when a DAG-shared eclass is reached from contexts with
+// different provided sets, the final selection must be feasible for every
+// visiting context — not just the first one.
 //
-// Diamond DAG: Root(B) → Left(B, {Shared}), Right(B, {Shared})
-// Shared eclass (symbol A) has two non-dominated alternatives:
-//   {cost=1, req={1}}  — cheap but demands "1"
-//   {cost=2, req={}}   — expensive but no demands
-//
-// Left provides {1}, Right provides {}. Without the fix, Left locks in
-// {cost=1, req={1}} and Right gets an infeasible cached result. With the fix,
-// Right's visit triggers re-resolution to {cost=2, req={}} — feasible for all.
+// Diamond DAG: Root → Left, Right; both depend on Shared (symbol A) whose
+// frontier has two non-dominated alts: {cost=1, req={1}} and {cost=2, req={}}.
+// Left visits Shared with provided={1}; Right with provided={}. The
+// conservative {cost=2, req={}} is the only alt feasible for both.
 TEST(Extract_MultiAlt, DAGResolution_FirstVisitorWins) {
   auto egraph = EGraph<symbol, analysis>{};
   auto [shared_class, shared_node, shared_new] = egraph.emplace(symbol::A);
@@ -1338,31 +1334,22 @@ TEST(Extract_MultiAlt, DAGResolution_FirstVisitorWins) {
 
   resolve(root_class, {});
 
-  // Left was visited first with provided={1}.
-  // Its child (Shared) was initially resolved with provided={1} → picks {cost=1, req={1}}.
-  //
-  // Right then visits Shared with provided={}. The cached {cost=1, req={1}} is INCOMPATIBLE
-  // (req={1} ⊄ provided={}). The resolver re-resolves with provided={} → picks {cost=2, req={}}.
+  // The final selection must be the conservative no-demand alt (req={}),
+  // feasible for every visiting context.
   auto const &[shared_enode, shared_cost] = resolved.at(shared_class);
-  ASSERT_EQ(shared_cost, 2.0);  // Re-resolved to the conservative (no-demand) alt
-
-  // Verify: the final selection has empty required — feasible for ALL visiting contexts
+  ASSERT_EQ(shared_cost, 2.0);
   ASSERT_TRUE(resolved_required[shared_class].empty());
 }
 
 TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
-  // 3-level diamond demonstrating the cascade bug:
-  //   Root(B) → Left(B,{Shared}), Right(B,{Shared})
-  //   Shared(A,{Leaf}) — demand-aware: has alts with req={1} and req={}
-  //   Leaf(A)          — demand-aware: {cost=1,req={1}} and {cost=2,req={}}
+  // Invariant: re-resolving a shared eclass on incompatible re-visit must
+  // also re-resolve its transitive children, otherwise stale child
+  // selections (made under the old context) leak through.
   //
-  // Root provides {1} to Left, {} to Right.
-  //
-  // 1. Left visits Shared with provided={1} → picks cheap alt with req={1}.
-  //    Shared visits Leaf with provided={1} → Leaf picks {cost=1,req={1}}.
-  // 2. Right visits Shared with provided={} → req={1} not subset of {}, re-resolves to req={}.
-  //    BUG: returns without visiting Leaf. Leaf keeps stale {cost=1,req={1}}.
-  //    FIX: cascade to children → Leaf re-resolves to {cost=2,req={}}.
+  // 3-level diamond: Root → Left, Right → Shared(A, {Leaf}) → Leaf.
+  // Both Shared and Leaf have demand-aware alts {req={1}} and {req={}}.
+  // First DFS branch picks the cheap req={1} alts; second branch
+  // (provided={}) re-resolves Shared to req={} and must cascade to Leaf.
   auto egraph = EGraph<symbol, analysis>{};
   auto [leaf_class, leaf_node, leaf_new] = egraph.emplace(symbol::A);
   auto [shared_class, shared_node, shared_new] = egraph.emplace(symbol::A, {leaf_class});
@@ -1381,7 +1368,9 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
   auto const &leaf_frontier = *frontier_map.at(leaf_class);
   ASSERT_EQ(leaf_frontier.alts().size(), 2);
 
-  // Context-aware resolver — WITHOUT cascade fix (reproduces the bug).
+  // Reference resolver: re-resolves the eclass on incompatible re-visit but
+  // does NOT cascade to the transitive children — included to pin down the
+  // failure mode the cascading variant below has to fix.
   auto resolved = std::unordered_map<EClassId, std::pair<ENodeId, double>>{};
   auto resolved_required = std::unordered_map<EClassId, std::set<int>>{};
 
@@ -1393,7 +1382,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
       ASSERT_NE(chosen, nullptr);
       existing->second = {chosen->enode_id, chosen->cost};
       resolved_required[id] = chosen->required;
-      // BUG: no cascade to children
+      // No cascade — children keep selections from their first visit.
       return;
     }
     auto const &frontier = *frontier_map.at(id);
@@ -1415,12 +1404,12 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
 
   resolve_no_cascade(root_class, {});
 
-  // Shared was re-resolved to req={} — correct
+  // Shared re-resolves to req={}, but Leaf retains the stale req={1}
+  // from the first DFS branch — this is the failure mode.
   ASSERT_TRUE(resolved_required[shared_class].empty());
-  // BUG: Leaf still has stale req={1} from Left's context
   ASSERT_EQ(resolved_required[leaf_class], std::set<int>{1});
 
-  // Now resolve WITH the cascade fix
+  // Cascading variant — children of the re-resolved selection are revisited.
   resolved.clear();
   resolved_required.clear();
 
@@ -1432,7 +1421,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
       ASSERT_NE(chosen, nullptr);
       existing->second = {chosen->enode_id, chosen->cost};
       resolved_required[id] = chosen->required;
-      // FIX: cascade to children of the new selection
+      // Cascade to children of the new selection.
       auto const &enode = egraph.get_enode(chosen->enode_id);
       for (auto child : enode.children()) {
         self(child, provided);
@@ -1458,9 +1447,8 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
 
   resolve_with_cascade(root_class, {});
 
-  // Shared re-resolved to req={} — same as before
+  // With cascade, Leaf is re-resolved to {cost=2, req={}} alongside Shared.
   ASSERT_TRUE(resolved_required[shared_class].empty());
-  // FIX: Leaf is now re-resolved to {cost=2,req={}} via cascade
   ASSERT_EQ(resolved.at(leaf_class).second, 2.0);
   ASSERT_TRUE(resolved_required[leaf_class].empty());
 }
