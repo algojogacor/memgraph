@@ -25,11 +25,8 @@
 #include <format>
 #include <sstream>
 
-#include "planner/pattern/vm/compiler.hpp"
-#include "planner/pattern/vm/executor.hpp"
 #include "planner/pattern/vm/tracer.hpp"
-#include "test_egraph_fixture.hpp"
-#include "test_support/patterns.hpp"
+#include "test_matcher_fixture.hpp"
 
 import memgraph.planner.core.egraph;
 
@@ -43,29 +40,14 @@ using namespace pattern::vm;
 // Trace Test Fixture
 // ============================================================================
 //
-// Extends EGraphTestBase with a DevMode executor and RecordingTracer.
-// Provides helpers for querying trace events by type.
+// PatternVM_Matching plus a RecordingTracer + DevMode executor. Trace tests
+// inherit the compile-and-run cycle (use_patterns, rebuild_index, matches)
+// and add trace-event introspection.
 
-class PatternVM_Trace : public EGraphTestBase {
+class PatternVM_Trace : public PatternVM_Matching {
  protected:
   RecordingTracer tracer;
   TestDevVMExecutor dev_executor{egraph, &tracer};
-  TestMatcherIndex index{egraph};
-  EMatchContext ctx;
-  TestMatches matches;
-
-  std::vector<TestPattern> patterns_;
-  std::optional<TestCompiledMatcher> compiled_;
-
-  template <typename... Patterns>
-  void use_patterns(Patterns &&...ps) {
-    patterns_.clear();
-    (patterns_.push_back(std::forward<Patterns>(ps)), ...);
-    TestPatternsCompiler compiler;
-    compiled_.emplace(compiler.compile(patterns_));
-  }
-
-  void rebuild_index() { index.rebuild_index(); }
 
   void run_traced() {
     ASSERT_TRUE(compiled_.has_value());
@@ -176,7 +158,7 @@ TEST_F(PatternVM_Trace, Deduplication_TracesBindDuplicate) {
   merge(f1, f2);
   // Deliberately skip rebuild_egraph() — congruence closure would merge
   // the F e-nodes since they now have the same canonical children.
-  index.rebuild_index();
+  rebuild_index();
 
   use_patterns(TestPattern::build(kTestRoot, Op::F, {Var{kVarX}}));
   run_traced();
@@ -531,7 +513,7 @@ TEST_F(PatternVM_Trace, FullFeatureExercise_WithMergeAndDedup) {
   // Merge a1 and a2 — now ?x from F and ?x from G resolve to the same e-class
   merge(a1, a2);
   rebuild_egraph();
-  index.rebuild_index();
+  rebuild_index();
 
   use_patterns(TestPattern::build(Op::F, {Var{kVarX}, Var{kVarY}}),
                TestPattern::build(Op::G, {Var{kVarX}, Var{kVarZ}}),
