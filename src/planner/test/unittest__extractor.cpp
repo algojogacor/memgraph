@@ -1310,7 +1310,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
       auto const &frontier = *frontier_map.at(id);
       auto const *chosen = PickBestCompatible(frontier, provided);
       ASSERT_NE(chosen, nullptr);
-      existing->second = Selection<double>{chosen->enode_id, chosen->cost};
+      existing->second = Selection{chosen->enode_id, chosen->cost};
       resolved_required[id] = chosen->required;
       auto const &enode = egraph.get_enode(chosen->enode_id);
       for (auto child : enode.children()) {
@@ -1321,7 +1321,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
     auto const &frontier = *frontier_map.at(id);
     auto const *chosen = PickBestCompatible(frontier, provided);
     ASSERT_NE(chosen, nullptr);
-    resolved[id] = Selection<double>{chosen->enode_id, chosen->cost};
+    resolved[id] = Selection{chosen->enode_id, chosen->cost};
     resolved_required[id] = chosen->required;
     auto const &enode = egraph.get_enode(chosen->enode_id);
     auto const &children = enode.children();
@@ -1378,7 +1378,7 @@ TEST(Extract_MultiAlt, DAGResolution_AliveToDeadErasesStaleChildren) {
       auto const &frontier = *frontier_map.at(id);
       auto const *chosen = PickBestCompatible(frontier, provided);
       ASSERT_NE(chosen, nullptr);
-      existing->second = Selection<double>{chosen->enode_id, chosen->cost};
+      existing->second = Selection{chosen->enode_id, chosen->cost};
       resolved_required[id] = chosen->required;
       // Cascade + erase stale children if switching to no-demand alt
       auto const &enode = egraph.get_enode(chosen->enode_id);
@@ -1399,7 +1399,7 @@ TEST(Extract_MultiAlt, DAGResolution_AliveToDeadErasesStaleChildren) {
     auto const &frontier = *frontier_map.at(id);
     auto const *chosen = PickBestCompatible(frontier, provided);
     ASSERT_NE(chosen, nullptr);
-    resolved[id] = Selection<double>{chosen->enode_id, chosen->cost};
+    resolved[id] = Selection{chosen->enode_id, chosen->cost};
     resolved_required[id] = chosen->required;
     auto const &enode = egraph.get_enode(chosen->enode_id);
     if (id == root_class && enode.children().size() == 2) {
@@ -1421,6 +1421,76 @@ TEST(Extract_MultiAlt, DAGResolution_AliveToDeadErasesStaleChildren) {
   ASSERT_FALSE(resolved.contains(expr_class)) << "Stale expr should be erased on alive→dead transition";
   // Input should still be resolved
   ASSERT_TRUE(resolved.contains(input_class));
+}
+
+// Cascade re-resolution must propagate through plain intermediate operators,
+// not just stop one level deep at the first re-resolved node.  This guards
+// against a regression where the resolver re-picks an alt at the cascade root
+// but leaves a transitive grandchild on its original (now-incompatible)
+// selection.
+TEST(Extract_MultiAlt, DAGResolution_CascadeTraversesIntermediate) {
+  // 4-level chain feeding a diamond:
+  //   Root(B) -> {Left(B,1), Right(B,2)} -> Shared -> Mid -> Leaf
+  // Shared, Mid, Leaf each have demand-aware {req={1}} and {req={}} alts.
+  // Left visits with provided={1} → all three pick the cheap req={1} alt.
+  // Right visits with provided={} → Shared re-resolves to req={}, and the
+  // cascade must reach Mid and Leaf so they too move to req={}; otherwise
+  // a stale {req={1}} would be left at a node no ancestor satisfies.
+  auto egraph = EGraph<symbol, analysis>{};
+  auto [leaf_class, leaf_node, leaf_new] = egraph.emplace(symbol::A);
+  auto [mid_class, mid_node, mid_new] = egraph.emplace(symbol::A, {leaf_class});
+  auto [shared_class, shared_node, shared_new] = egraph.emplace(symbol::A, {mid_class});
+  auto [left_class, left_node, left_new] = egraph.emplace(symbol::B, {shared_class}, 1);
+  auto [right_class, right_node, right_new] = egraph.emplace(symbol::B, {shared_class}, 2);
+  auto [root_class, root_node, root_new] = egraph.emplace(symbol::B, {left_class, right_class});
+
+  using CM = DemandAwareMultiAltCostModel;
+  FrontierMap<CM::CostResult> frontier_map;
+  (void)extract::ComputeFrontiers(egraph, CM{}, root_class, frontier_map);
+
+  ASSERT_EQ(frontier_map.at(shared_class)->alts().size(), 2);
+  ASSERT_EQ(frontier_map.at(mid_class)->alts().size(), 2);
+  ASSERT_EQ(frontier_map.at(leaf_class)->alts().size(), 2);
+
+  auto resolved = SelectionMap<double>{};
+  auto resolved_required = std::unordered_map<EClassId, std::set<int>>{};
+
+  auto resolve = [&](this auto const &self, EClassId id, std::set<int> const &provided) -> void {
+    if (auto existing = resolved.find(id); existing != resolved.end()) {
+      if (std::ranges::includes(provided, resolved_required[id])) return;
+      auto const &frontier = *frontier_map.at(id);
+      auto const *chosen = PickBestCompatible(frontier, provided);
+      ASSERT_NE(chosen, nullptr);
+      existing->second = Selection{chosen->enode_id, chosen->cost};
+      resolved_required[id] = chosen->required;
+      auto const &enode = egraph.get_enode(chosen->enode_id);
+      for (auto child : enode.children()) {
+        self(child, provided);
+      }
+      return;
+    }
+    auto const &frontier = *frontier_map.at(id);
+    auto const *chosen = PickBestCompatible(frontier, provided);
+    ASSERT_NE(chosen, nullptr);
+    resolved[id] = Selection{chosen->enode_id, chosen->cost};
+    resolved_required[id] = chosen->required;
+    auto const &enode = egraph.get_enode(chosen->enode_id);
+    auto const &children = enode.children();
+    if (id == root_class && children.size() == 2) {
+      self(children[0], {1});
+      self(children[1], {});
+    } else {
+      for (auto child : children) {
+        self(child, provided);
+      }
+    }
+  };
+
+  resolve(root_class, {});
+
+  ASSERT_TRUE(resolved_required[shared_class].empty());
+  ASSERT_TRUE(resolved_required[mid_class].empty()) << "cascade must reach intermediate";
+  ASSERT_TRUE(resolved_required[leaf_class].empty()) << "cascade must reach grandchild leaf";
 }
 
 TEST(Extract_MultiAlt, CyclicEClass) {

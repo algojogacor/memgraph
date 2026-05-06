@@ -91,5 +91,28 @@ TEST(BindAlgebra_AliveRequired, EmptyInputAndExprYieldsEmpty) {
   EXPECT_EQ(result, MakeSet({}));
 }
 
+TEST(BindAlgebra_AliveRequired, SymIsMinElementOfInput) {
+  // sym is the smallest member of input_required (first slot in the flat_set).
+  // The implementation set-unions a filter view over input with expr; this
+  // checks that filtering the front element keeps the remainder sorted so the
+  // ordered_unique_range SymbolSet ctor invariant is satisfied at the boundary.
+  EXPECT_EQ(AliveRequired(MakeSet({1, 2, 3}), EClassId{1}, MakeSet({})), MakeSet({2, 3}));
+  EXPECT_EQ(AliveRequired(MakeSet({1, 2, 3}), EClassId{1}, MakeSet({4})), MakeSet({2, 3, 4}));
+}
+
+TEST(BindAlgebra_AliveRequired, SymIsMaxElementOfInput) {
+  // sym is the largest member of input_required (last slot in the flat_set).
+  // Symmetric boundary to SymIsMinElementOfInput.
+  EXPECT_EQ(AliveRequired(MakeSet({1, 2, 3}), EClassId{3}, MakeSet({})), MakeSet({1, 2}));
+  EXPECT_EQ(AliveRequired(MakeSet({1, 2, 3}), EClassId{3}, MakeSet({4})), MakeSet({1, 2, 4}));
+}
+
+TEST(BindAlgebra_AliveRequired, SymIsSoleElementOfInput) {
+  // input_required is a singleton {sym}; filtering it leaves an empty range.
+  // expr_required becomes the entire output.
+  EXPECT_EQ(AliveRequired(MakeSet({2}), EClassId{2}, MakeSet({})), MakeSet({}));
+  EXPECT_EQ(AliveRequired(MakeSet({2}), EClassId{2}, MakeSet({1, 3})), MakeSet({1, 3}));
+}
+
 }  // namespace
 }  // namespace memgraph::query::plan::v2::bind
