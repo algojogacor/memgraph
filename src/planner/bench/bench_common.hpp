@@ -107,29 +107,4 @@ class MatcherFixtureBase : public benchmark::Fixture {
   }
 };
 
-// Base fixture for VM benchmarks. Adds a TestPatternsCompiler member and
-// exposes SetupGraph (a SetupGraphAndMatcher alias retained for legacy call
-// sites). The MatcherIndex constructor rebuilds the index, so no extra call
-// is needed.
-class VMFixtureBase : public benchmark::Fixture {
- protected:
-  TestEGraph egraph_;
-  std::unique_ptr<TestMatcherIndex> matcher_;
-  EMatchContext match_context_;
-  TestMatches matches_;
-  TestPatternsCompiler compiler_;
-
-  void ResetEGraph() {
-    egraph_ = TestEGraph{};
-    matcher_.reset();
-  }
-
-  template <typename BuilderFn>
-  void SetupGraph(BuilderFn &&build_fn) {
-    ResetEGraph();
-    build_fn(egraph_);
-    matcher_ = std::make_unique<TestMatcherIndex>(egraph_);
-  }
-};
-
 }  // namespace memgraph::planner::bench

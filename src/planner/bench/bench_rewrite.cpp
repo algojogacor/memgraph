@@ -11,8 +11,6 @@
 
 #include "bench_rewrite.hpp"
 
-#include <vector>
-
 using namespace memgraph::planner::bench;
 using namespace memgraph::planner::bench::sizes;
 
@@ -20,10 +18,8 @@ using namespace memgraph::planner::bench::sizes;
 // Saturation (double-neg chains)
 // ============================================================================
 //
-// Measures: End-to-end equality saturation with double negation elimination.
-// Why it matters: Tests the complete rewrite loop - matching, rule application,
-//   e-graph rebuild, and termination detection.
-// Variables: num_chains (independent chains), chain_depth (Neg nesting).
+// Full saturation loop: matching, rule application, e-graph rebuild,
+// termination detection. Variables: num_chains, chain_depth.
 
 class SaturationFixture : public RewriterFixtureBase {
  protected:
@@ -58,10 +54,6 @@ BENCHMARK_REGISTER_F(SaturationFixture, Saturate)
 // ============================================================================
 // Many Rules (scaling)
 // ============================================================================
-//
-// Measures: Saturation cost as number of rules increases.
-// Why it matters: Real optimizers have many rules; need linear scaling.
-// Variables: num_rules (rules in the ruleset).
 
 class ManyRulesFixture : public RewriterFixtureBase {
  protected:
@@ -98,12 +90,8 @@ BENCHMARK_REGISTER_F(ManyRulesFixture, Saturate)
     ->Unit(benchmark::kMicrosecond);
 
 // ============================================================================
-// Saturation Loop Overhead
+// Saturation Loop Overhead (no-op rule)
 // ============================================================================
-//
-// Measures: Per-iteration overhead of the saturation loop itself.
-// Why it matters: Even with no-op rules, loop has bookkeeping costs.
-// Variables: max_iterations (iterations before termination).
 
 class SaturationLoopFixture : public RewriterFixtureBase {
  protected:
@@ -136,12 +124,8 @@ BENCHMARK_REGISTER_F(SaturationLoopFixture, Overhead)
     ->Unit(benchmark::kMicrosecond);
 
 // ============================================================================
-// Single Iteration
+// Single Iteration (one pass, all rules)
 // ============================================================================
-//
-// Measures: Cost of one saturation iteration (all rules applied once).
-// Why it matters: Isolates per-iteration cost without loop overhead.
-// Variables: num_chains (graph size).
 
 class SingleIterationFixture : public RewriterFixtureBase {
  protected:
@@ -172,14 +156,13 @@ BENCHMARK_REGISTER_F(SingleIterationFixture, Once)
     ->Unit(benchmark::kMicrosecond);
 
 // ============================================================================
-// Realistic End-to-End
+// Realistic End-to-End (mixed graph, multiple rule types)
 // ============================================================================
 //
-// Measures: Complete saturation with multiple rule types on mixed graph.
-// Why it matters: Simulates real optimizer with diverse rewrites.
-// Variables: graph_size (variables, with 1/4 double-negs, 1/4 Add/Mul pairs).
+// graph_size variables, with graph_size/4 double-neg chains (depth 2) and
+// graph_size/4 Add/Mul pairs reusing the variables.
 
-class RealisticFixture : public benchmark::Fixture {
+class RealisticFixture : public RewriterFixtureBase {
  protected:
   TestRuleSet rules_;
   int64_t graph_size_ = 0;
@@ -193,27 +176,14 @@ class RealisticFixture : public benchmark::Fixture {
 BENCHMARK_DEFINE_F(RealisticFixture, Saturate)(benchmark::State &state) {
   for (auto _ : state) {
     state.PauseTiming();
-    TestEGraph egraph;
-    std::vector<EClassId> variables;
-    for (int64_t i = 0; i < graph_size_; ++i) {
-      variables.push_back(egraph.emplace(Op::Var, static_cast<uint64_t>(i)).eclass_id);
-    }
-    // Create some double negations
-    for (int64_t i = 0; i < graph_size_ / 4; ++i) {
-      auto neg1 = egraph.emplace(Op::Neg, {variables[static_cast<std::size_t>(i)]}).eclass_id;
-      egraph.emplace(Op::Neg, {neg1});
-    }
-    // Create some Add/Mul pairs
-    for (int64_t i = 0; i < graph_size_ / 4; ++i) {
-      auto idx = static_cast<std::size_t>(graph_size_ / 2 + i);
-      if (idx + 1 < variables.size()) {
-        egraph.emplace(Op::Add, {variables[idx], variables[idx + 1]});
-        egraph.emplace(Op::Mul, {variables[idx], variables[idx + 1]});
-      }
-    }
-    TestRewriter rewriter(egraph, rules_);
+    SetupGraphAndRewriter(
+        [this](TestEGraph &g) {
+          BuildNegChains(g, graph_size_ / 4, 2);
+          BuildAddMulPairs(g, graph_size_ / 4);
+        },
+        rules_);
     state.ResumeTiming();
-    auto result = rewriter.saturate(RewriteConfig::Default());
+    auto result = rewriter_->saturate(RewriteConfig::Default());
     benchmark::DoNotOptimize(result);
   }
 }
@@ -227,17 +197,15 @@ BENCHMARK_REGISTER_F(RealisticFixture, Saturate)
     ->Unit(benchmark::kMicrosecond);
 
 // ============================================================================
-// VM vs MatcherIndex Comparison
+// VM Match+Apply (single-pattern rule on double-neg chains)
 // ============================================================================
 //
-// Measures: Direct comparison of apply() (MatcherIndex) vs apply_vm() (VM executor)
-// for single-pattern rules where VM should be faster.
-// Why it matters: Validates the performance benefit of VM integration.
+// Items processed = num_chains * (chain_depth - 1) - the actual number of
+// double-neg matches per chain. For depth=2 this equals num_chains; at higher
+// depths the metric stays comparable across the sweep.
 
-class RewriteFixture : public benchmark::Fixture {
+class RewriteFixture : public MatcherFixtureBase {
  protected:
-  TestEGraph egraph_;
-  std::unique_ptr<TestMatcherIndex> matcher_;
   TestVMExecutor vm_executor_{egraph_};
   TestRewriteContext ctx_{egraph_};
   TestRewriteRule rule_ = RuleDoubleNeg();
@@ -247,112 +215,23 @@ class RewriteFixture : public benchmark::Fixture {
   void SetUp(const benchmark::State &state) override {
     num_chains_ = state.range(0);
     chain_depth_ = state.range(1);
-    egraph_ = TestEGraph{};
-    BuildNegChains(egraph_, num_chains_, chain_depth_);
-    matcher_ = std::make_unique<TestMatcherIndex>(egraph_);
+    SetupGraphAndMatcher([this](TestEGraph &g) { BuildNegChains(g, num_chains_, chain_depth_); });
     vm_executor_ = TestVMExecutor(egraph_);
   }
 };
 
-// Benchmark apply_vm() - uses VM executor for pattern matching
 BENCHMARK_DEFINE_F(RewriteFixture, Apply)(benchmark::State &state) {
   for (auto _ : state) {
     rule_.match(*matcher_, vm_executor_, ctx_.matcher_ctx());
     auto rewrites = rule_.apply(ctx_.rule_ctx(), ctx_.matcher_ctx());
     benchmark::DoNotOptimize(rewrites);
   }
-  state.SetItemsProcessed(state.iterations() * num_chains_);
+  state.SetItemsProcessed(state.iterations() * num_chains_ * (chain_depth_ - 1));
 }
 
 BENCHMARK_REGISTER_F(RewriteFixture, Apply)
     ->ArgsProduct({{kSmall, kMedium, kLarge}, {2, 4, 8}})
-    ->ArgNames({"chains", "depth"})
-    ->Unit(benchmark::kMicrosecond);
-
-// ============================================================================
-// Single-Pattern Rule Comparison (Larger Scale)
-// ============================================================================
-//
-// Measures: VM for larger graphs with more matches.
-
-class RewriteLargeFixture : public benchmark::Fixture {
- protected:
-  TestEGraph egraph_;
-  std::unique_ptr<TestMatcherIndex> matcher_;
-  TestVMExecutor vm_executor_{egraph_};
-  TestRewriteContext ctx_{egraph_};
-  TestRewriteRule rule_ = RuleDoubleNeg();
-  int64_t graph_size_ = 0;
-
-  void SetUp(const benchmark::State &state) override {
-    graph_size_ = state.range(0);
-    egraph_ = TestEGraph{};
-    // Create graph_size_ double negations
-    for (int64_t i = 0; i < graph_size_; ++i) {
-      auto var = egraph_.emplace(Op::Var, static_cast<uint64_t>(i)).eclass_id;
-      auto neg1 = egraph_.emplace(Op::Neg, {var}).eclass_id;
-      egraph_.emplace(Op::Neg, {neg1});
-    }
-    matcher_ = std::make_unique<TestMatcherIndex>(egraph_);
-    vm_executor_ = TestVMExecutor(egraph_);
-  }
-};
-
-BENCHMARK_DEFINE_F(RewriteLargeFixture, VM)(benchmark::State &state) {
-  for (auto _ : state) {
-    rule_.match(*matcher_, vm_executor_, ctx_.matcher_ctx());
-    auto rewrites = rule_.apply(ctx_.rule_ctx(), ctx_.matcher_ctx());
-    benchmark::DoNotOptimize(rewrites);
-  }
-  state.SetItemsProcessed(state.iterations() * graph_size_);
-}
-
-BENCHMARK_REGISTER_F(RewriteLargeFixture, VM)
-    ->Args({kMedium})
-    ->Args({kLarge})
-    ->Args({kXLarge})
-    ->Args({kHuge})
-    ->ArgNames({"matches"})
-    ->Unit(benchmark::kMicrosecond);
-
-// ============================================================================
-// VM Pattern Matching Scaling
-// ============================================================================
-//
-// Measures: VM pattern matching performance with varying chain counts and depths.
-// Variables: num_chains (independent chains), chain_depth (Neg nesting).
-
-class VMRewriteScalingFixture : public benchmark::Fixture {
- protected:
-  TestEGraph egraph_;
-  std::unique_ptr<TestMatcherIndex> matcher_;
-  TestVMExecutor vm_executor_{egraph_};
-  TestRewriteContext ctx_{egraph_};
-  TestRewriteRule rule_ = RuleDoubleNeg();
-  int64_t num_chains_ = 0;
-  int64_t chain_depth_ = 0;
-
-  void SetUp(const benchmark::State &state) override {
-    num_chains_ = state.range(0);
-    chain_depth_ = state.range(1);
-    egraph_ = TestEGraph{};
-    BuildNegChains(egraph_, num_chains_, chain_depth_);
-    matcher_ = std::make_unique<TestMatcherIndex>(egraph_);
-    vm_executor_ = TestVMExecutor(egraph_);
-  }
-};
-
-// Benchmark unified VM pattern matching
-BENCHMARK_DEFINE_F(VMRewriteScalingFixture, UnifiedVM)(benchmark::State &state) {
-  for (auto _ : state) {
-    rule_.match(*matcher_, vm_executor_, ctx_.matcher_ctx());
-    auto rewrites = rule_.apply(ctx_.rule_ctx(), ctx_.matcher_ctx());
-    benchmark::DoNotOptimize(rewrites);
-  }
-  state.SetItemsProcessed(state.iterations() * num_chains_);
-}
-
-BENCHMARK_REGISTER_F(VMRewriteScalingFixture, UnifiedVM)
-    ->ArgsProduct({{kSmall, kMedium, kLarge}, {2, 4, 8}})
+    ->Args({kXLarge, 2})
+    ->Args({kHuge, 2})
     ->ArgNames({"chains", "depth"})
     ->Unit(benchmark::kMicrosecond);
