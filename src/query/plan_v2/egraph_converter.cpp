@@ -212,10 +212,10 @@ struct PlanResolver {
   using FrontierMap = planner::core::extract::FrontierMap<CostFrontier>;
   using EGraph = planner::core::EGraph<symbol, analysis>;
 
-  auto operator()(EGraph const &egraph, FrontierMap const &frontier_map, EClassId root) const -> SelectionMap {
+  void operator()(EGraph const &egraph, FrontierMap const &frontier_map, EClassId root, SelectionMap &out) const {
     Impl impl{egraph, frontier_map};
     impl.resolve_impl(root, SymbolSet{});
-    return std::move(impl).take();
+    std::move(impl).fill(out);
   }
 
  private:
@@ -232,13 +232,11 @@ struct PlanResolver {
     FrontierMap const &frontier_map;
     boost::unordered_flat_map<EClassId, ResolvedEntry> resolved;
 
-    auto take() && -> SelectionMap {
-      SelectionMap result;
-      result.reserve(resolved.size());
+    void fill(SelectionMap &out) && {
+      out.reserve(resolved.size());
       for (auto &&[id, entry] : resolved) {
-        result.emplace(id, std::move(entry.sel));
+        out.emplace(id, std::move(entry.sel));
       }
-      return result;
     }
 
     /// Pick cheapest alt whose required is a subset of provided.
@@ -574,9 +572,9 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   // Resolve + collect-deps + topo-sort.  ComputeFrontiers above already
   // populated ctx.frontier_map; Extract picks up there and runs the rest of
   // the pipeline.
-  ctx.selection = PlanResolver{}(impl.egraph_, ctx.frontier_map, true_root);
-  ctx.in_degree = extract::CollectDependencies(impl.egraph_, ctx.selection, true_root);
-  ctx.order = extract::TopologicalSort(impl.egraph_, ctx.selection, std::move(ctx.in_degree));
+  PlanResolver{}(impl.egraph_, ctx.frontier_map, true_root, ctx.selection);
+  extract::CollectDependencies(impl.egraph_, ctx.selection, true_root, ctx.in_degree, ctx.deps);
+  extract::TopologicalSort(impl.egraph_, ctx.selection, ctx.in_degree, ctx.order, ctx.ready);
   auto const &selection = ctx.order;
 
   /// STAGE: Build selected (LogicalOperator, Expression *, Symbol, NamedExpression *, etc)

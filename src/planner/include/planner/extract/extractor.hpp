@@ -12,8 +12,8 @@
 #pragma once
 
 #include <concepts>
+#include <deque>
 #include <functional>
-#include <queue>
 #include <span>
 #include <type_traits>
 #include <utility>
@@ -113,11 +113,14 @@ using SelectionMap = boost::unordered_flat_map<EClassId, Selection<CostType>>;
 // Resolver contract
 // ============================================================================
 //
-// A Resolver is a stateless functor `r(egraph, frontier_map, root)` that
-// returns a SelectionMap.  It chooses one enode per eclass and decides which
-// of that enode's children are part of the extracted tree.
+// A Resolver is a stateless functor `r(egraph, frontier_map, root, out)` that
+// fills `out` with a SelectionMap.  It chooses one enode per eclass and decides
+// which of that enode's children are part of the extracted tree.
 //
-// Contract on the returned SelectionMap:
+// Caller-clears: Extract() calls ctx.clear() before invoking the resolver, so
+// `out` is empty on entry.  Direct callers (e.g. unit tests) must do the same.
+//
+// Contract on the populated SelectionMap:
 //   - root is in the map.
 //   - For each (id, sel) in the map, sel.enode_id is a valid enode in eclass id.
 //   - For each (id, sel) in the map, every child of sel.enode_id that the
@@ -134,11 +137,8 @@ using SelectionMap = boost::unordered_flat_map<EClassId, Selection<CostType>>;
 
 template <typename R, typename Symbol, typename Analysis, typename CostResult>
 concept Resolver =
-    CostResultType<CostResult> &&
-    std::invocable<R, EGraph<Symbol, Analysis> const &, FrontierMap<CostResult> const &, EClassId> &&
-    std::convertible_to<
-        std::invoke_result_t<R, EGraph<Symbol, Analysis> const &, FrontierMap<CostResult> const &, EClassId>,
-        SelectionMap<typename CostResult::cost_t>>;
+    CostResultType<CostResult> && std::invocable<R, EGraph<Symbol, Analysis> const &, FrontierMap<CostResult> const &,
+                                                 EClassId, SelectionMap<typename CostResult::cost_t> &>;
 
 /// Generic Resolver that selects each eclass via CostResult::resolve_with_cost
 /// and walks every child of the chosen enode.  Safe for any cost model whose
@@ -149,11 +149,8 @@ concept Resolver =
 /// resolver.
 struct DefaultResolver {
   template <typename Symbol, typename Analysis, CostResultType CostResult>
-  auto operator()(EGraph<Symbol, Analysis> const &egraph, FrontierMap<CostResult> const &frontier_map,
-                  EClassId root) const -> SelectionMap<typename CostResult::cost_t> {
-    using CostType = CostResult::cost_t;
-
-    auto resolved = SelectionMap<CostType>{};
+  void operator()(EGraph<Symbol, Analysis> const &egraph, FrontierMap<CostResult> const &frontier_map, EClassId root,
+                  SelectionMap<typename CostResult::cost_t> &out) const {
     auto to_visit = std::vector{root};
     auto visited = boost::unordered_flat_set{root};
 
@@ -166,7 +163,7 @@ struct DefaultResolver {
 
       auto const &frontier = *it->second;
       auto [enode_id, cost] = frontier.resolve_with_cost();
-      resolved.try_emplace(current, enode_id, cost);
+      out.try_emplace(current, enode_id, cost);
 
       auto const &enode = egraph.get_enode(enode_id);
       for (auto child : enode.children()) {
@@ -175,8 +172,6 @@ struct DefaultResolver {
         }
       }
     }
-
-    return resolved;
   }
 };
 
@@ -250,19 +245,31 @@ template <typename Symbol, typename Analysis, typename CostModel>
   return std::nullopt;
 }
 
+/// Scratch buffer set used by the BFS in CollectDependencies. Owned by
+/// ExtractionContext so that warm Extract() calls don't reallocate.
+struct DependencyScratch {
+  std::vector<EClassId> bfs;
+  boost::unordered_flat_set<EClassId> visited;
+
+  void clear() {
+    bfs.clear();
+    visited.clear();
+  }
+};
+
 template <typename Symbol, typename Analysis, typename CostResult>
-[[nodiscard]] auto CollectDependencies(EGraph<Symbol, Analysis> const &egraph,
-                                       SelectionMap<CostResult> const &enode_selection, EClassId root) -> InDegreeMap {
-  auto in_degree = InDegreeMap{{root, 0}};
-  auto bfs = std::vector{root};
-  auto visited = boost::unordered_flat_set{root};
-  bfs.reserve(enode_selection.size());
-  visited.reserve(enode_selection.size());
+void CollectDependencies(EGraph<Symbol, Analysis> const &egraph, SelectionMap<CostResult> const &enode_selection,
+                         EClassId root, InDegreeMap &out, DependencyScratch &scratch) {
+  out.emplace(root, 0);
+  scratch.bfs.push_back(root);
+  scratch.visited.insert(root);
+  scratch.bfs.reserve(enode_selection.size());
+  scratch.visited.reserve(enode_selection.size());
 
   // Non-recursive BFS search
-  while (!bfs.empty()) {
-    auto curr = bfs.back();
-    bfs.pop_back();
+  while (!scratch.bfs.empty()) {
+    auto curr = scratch.bfs.back();
+    scratch.bfs.pop_back();
 
     auto enode_it = enode_selection.find(curr);
     assert(enode_it != enode_selection.end() && "all reachable EClasses should have selected ENode");
@@ -272,42 +279,43 @@ template <typename Symbol, typename Analysis, typename CostResult>
       // Only walk children present in the selection (Resolver contract:
       // absent children are deliberately excluded).
       if (!enode_selection.contains(child)) continue;
-      ++in_degree[child];
-      if (visited.insert(child).second) {
-        bfs.emplace_back(child);
+      ++out[child];
+      if (scratch.visited.insert(child).second) {
+        scratch.bfs.emplace_back(child);
       }
     }
   }
-  return in_degree;
 }
 
+/// Kahn's topological sort.  `in_degree` is consumed in place — its counts are
+/// decremented to zero by the algorithm; on return its contents are unspecified
+/// from the caller's perspective.  `out` and `ready` are filled (caller-clears).
 template <typename Symbol, typename Analysis, typename CostResult>
-[[nodiscard]] auto TopologicalSort(EGraph<Symbol, Analysis> const &egraph,
-                                   SelectionMap<CostResult> const &enode_selection, InDegreeMap in_degree)
-    -> std::vector<std::pair<EClassId, ENodeId>> {
-  auto result = std::vector<std::pair<EClassId, ENodeId>>{};
-  result.reserve(in_degree.size());
+void TopologicalSort(EGraph<Symbol, Analysis> const &egraph, SelectionMap<CostResult> const &enode_selection,
+                     InDegreeMap &in_degree, std::vector<std::pair<EClassId, ENodeId>> &out,
+                     std::deque<EClassId> &ready) {
+  auto const expected = in_degree.size();
+  out.reserve(expected);
 
-  auto queue = std::queue<EClassId>{};
   for (auto const &[eclass, degree] : in_degree)
-    if (degree == 0) queue.emplace(eclass);
+    if (degree == 0) ready.push_back(eclass);
 
-  while (!queue.empty()) {
-    auto current = queue.front();
-    queue.pop();
+  while (!ready.empty()) {
+    auto current = ready.front();
+    ready.pop_front();
 
     auto it = enode_selection.find(current);
     assert(it != enode_selection.end() && "all reachable EClasses should have selected ENode");
 
     auto enode_id = it->second.enode_id;
-    result.emplace_back(current, enode_id);
+    out.emplace_back(current, enode_id);
 
     auto const &enode = egraph.get_enode(enode_id);
     for (EClassId child : enode.children()) {
       auto deg_it = in_degree.find(child);
       if (deg_it == in_degree.end()) continue;  // resolver excluded child — see Resolver contract
       if (--deg_it->second == 0) {
-        queue.emplace(child);
+        ready.push_back(child);
       }
     }
   }
@@ -315,11 +323,9 @@ template <typename Symbol, typename Analysis, typename CostResult>
   // Post-condition: all nodes must have been emitted. If not, the input contained a cycle,
   // which means an upstream stage (ComputeFrontiers or the Resolver) admitted a cyclic
   // dependency into the resolved selection — a bug in that stage.
-  assert(result.size() == in_degree.size() &&
+  assert(out.size() == expected &&
          "TopologicalSort: cycle detected — resolved selection is not a DAG; "
          "check ComputeFrontiers and the Resolver for upstream bug");
-
-  return result;
 }
 
 // ============================================================================
@@ -332,18 +338,27 @@ template <typename Symbol, typename Analysis, typename CostResult>
 // (CostResultType) and the `resolver` (Resolver).
 
 /// Caller-owned buffer for stage state, reused across Extract() calls.
+///
+/// All four output buffers (frontier_map, selection, in_degree, order) and the
+/// two scratch buffers (deps, ready) are passed by reference into the pipeline
+/// stages, which fill them in place.  clear() preserves capacity so that warm
+/// Extract() calls allocate only when growing past the high-water mark.
 template <CostResultType CostResult>
 struct ExtractionContext {
   FrontierMap<CostResult> frontier_map;
   SelectionMap<typename CostResult::cost_t> selection;
   InDegreeMap in_degree;
   std::vector<std::pair<EClassId, ENodeId>> order;
+  DependencyScratch deps;
+  std::deque<EClassId> ready;
 
   void clear() {
     frontier_map.clear();
     selection.clear();
     in_degree.clear();
     order.clear();
+    deps.clear();
+    ready.clear();
   }
 };
 
@@ -374,13 +389,13 @@ template <typename Symbol, typename Analysis, typename CostModel, typename Resol
 
   // Stage 2: top-down resolution.  Resolver is responsible for the contract
   // documented above (chosen-coverage selection map).
-  ctx.selection = resolver(egraph, ctx.frontier_map, root);
+  resolver(egraph, ctx.frontier_map, root, ctx.selection);
 
   // Stage 3: count in-degrees over the resolver-chosen child set.
-  ctx.in_degree = CollectDependencies(egraph, ctx.selection, root);
+  CollectDependencies(egraph, ctx.selection, root, ctx.in_degree, ctx.deps);
 
-  // Stage 4: topological sort.
-  ctx.order = TopologicalSort(egraph, ctx.selection, std::move(ctx.in_degree));
+  // Stage 4: topological sort.  Consumes ctx.in_degree in place.
+  TopologicalSort(egraph, ctx.selection, ctx.in_degree, ctx.order, ctx.ready);
 
   auto root_cost = typename CostResult::cost_t{};
   if (auto it = ctx.selection.find(root); it != ctx.selection.end()) {

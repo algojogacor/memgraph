@@ -68,9 +68,15 @@ auto Extract(EGraph<symbol, analysis> const &egraph, CostModel cost_model, EClas
   using CostResult = CostModel::CostResult;
   auto frontier_map = FrontierMap<CostResult>{};
   (void)extract::ComputeFrontiers(egraph, cost_model, root, frontier_map);
-  auto resolved = DefaultResolver{}(egraph, frontier_map, root);
-  auto in_degree = extract::CollectDependencies(egraph, resolved, root);
-  return extract::TopologicalSort(egraph, resolved, std::move(in_degree));
+  auto resolved = SelectionMap<typename CostResult::cost_t>{};
+  DefaultResolver{}(egraph, frontier_map, root, resolved);
+  auto in_degree = extract::InDegreeMap{};
+  auto deps = extract::DependencyScratch{};
+  extract::CollectDependencies(egraph, resolved, root, in_degree, deps);
+  auto out = std::vector<std::pair<EClassId, ENodeId>>{};
+  auto ready = std::deque<EClassId>{};
+  extract::TopologicalSort(egraph, resolved, in_degree, out, ready);
+  return out;
 }
 
 TEST(Extract_Basic, BasicLeafExtraction) {
@@ -402,7 +408,9 @@ TEST(Extract_Dependencies, SingleLeafNode) {
   SelectionMap<double> cheapest_enode;
   cheapest_enode[leaf_class] = {leaf_node, 1.0};
 
-  auto in_degree = extract::CollectDependencies(egraph, cheapest_enode, leaf_class);
+  extract::InDegreeMap in_degree;
+  extract::DependencyScratch deps_scratch;
+  extract::CollectDependencies(egraph, cheapest_enode, leaf_class, in_degree, deps_scratch);
 
   // Leaf has no children, so in_degree should be empty
   ASSERT_EQ(in_degree.size(), 1);
@@ -419,7 +427,9 @@ TEST(Extract_Dependencies, LinearChain) {
   cheapest_enode[mid_class] = {mid_node, 1.0};
   cheapest_enode[root_class] = {root_node, 1.0};
 
-  auto in_degree = extract::CollectDependencies(egraph, cheapest_enode, root_class);
+  extract::InDegreeMap in_degree;
+  extract::DependencyScratch deps_scratch;
+  extract::CollectDependencies(egraph, cheapest_enode, root_class, in_degree, deps_scratch);
 
   // mid has in_degree 1 (from root), leaf has in_degree 1 (from mid)
   ASSERT_EQ(in_degree.size(), 3);
@@ -439,7 +449,9 @@ TEST(Extract_Dependencies, SimpleTree) {
   cheapest_enode[right_class] = {right_node, 1.0};
   cheapest_enode[root_class] = {root_node, 1.0};
 
-  auto in_degree = extract::CollectDependencies(egraph, cheapest_enode, root_class);
+  extract::InDegreeMap in_degree;
+  extract::DependencyScratch deps_scratch;
+  extract::CollectDependencies(egraph, cheapest_enode, root_class, in_degree, deps_scratch);
 
   // Both left and right have in_degree 1 (from root)
   ASSERT_EQ(in_degree.size(), 3);
@@ -461,7 +473,9 @@ TEST(Extract_Dependencies, DiamondDAG) {
   cheapest_enode[right_class] = {right_node, 1.0};
   cheapest_enode[root_class] = {root_node, 1.0};
 
-  auto in_degree = extract::CollectDependencies(egraph, cheapest_enode, root_class);
+  extract::InDegreeMap in_degree;
+  extract::DependencyScratch deps_scratch;
+  extract::CollectDependencies(egraph, cheapest_enode, root_class, in_degree, deps_scratch);
 
   // shared has in_degree 2 (from left and right)
   // left and right each have in_degree 1 (from root)
@@ -491,7 +505,9 @@ TEST(Extract_Dependencies, DeadBindChildrenSkipped) {
   selection[input_class] = Sel{input_node, 1.0};
   // sym_class and expr_class intentionally absent — dead Bind
 
-  auto in_degree = extract::CollectDependencies(egraph, selection, bind_class);
+  extract::InDegreeMap in_degree;
+  extract::DependencyScratch deps_scratch;
+  extract::CollectDependencies(egraph, selection, bind_class, in_degree, deps_scratch);
 
   // Only bind and input should be in in_degree
   ASSERT_EQ(in_degree.size(), 2);
@@ -501,22 +517,21 @@ TEST(Extract_Dependencies, DeadBindChildrenSkipped) {
   ASSERT_FALSE(in_degree.contains(sym_class));
   ASSERT_FALSE(in_degree.contains(expr_class));
 
-  // TopologicalSort should produce exactly [bind, input] and not corrupt in_degree
-  // with default-inserted entries for dead sym/expr children.
-  auto in_degree_copy = in_degree;  // TopologicalSort takes by value — keep a copy
-  auto topo = extract::TopologicalSort(egraph, selection, std::move(in_degree_copy));
+  // TopologicalSort consumes in_degree in place; copy so the assertions above
+  // can still reference the original.  Output: exactly [bind, input], no
+  // default-inserted entries for dead sym/expr children.
+  auto in_degree_copy = in_degree;
+  std::vector<std::pair<EClassId, ENodeId>> topo;
+  std::deque<EClassId> ready_scratch;
+  extract::TopologicalSort(egraph, selection, in_degree_copy, topo, ready_scratch);
   ASSERT_EQ(topo.size(), 2);
   ASSERT_EQ(topo[0].first, bind_class);
   ASSERT_EQ(topo[1].first, input_class);
 
-  // Verify: calling TopologicalSort should not have side effects on the original
-  // in_degree, but more importantly, we can detect the bug by running it again
-  // and checking that the result still has exactly 2 entries.
   // The real check: TopologicalSort walks enode.children() which includes dead
-  // sym/expr. If it does --in_degree[child] without guarding, it default-inserts
-  // entries for sym and expr with value -1. These never reach 0, so the topo
-  // output is correct, but the in_degree map is corrupted.
-  // We verify correctness by checking the output size matches the selection size.
+  // sym/expr.  Without the in_degree.find() guard, --in_degree[child] would
+  // default-insert entries for sym and expr with value -1.  These never reach
+  // 0, so the topo output is correct, but the in_degree map is corrupted.
   ASSERT_EQ(topo.size(), selection.size()) << "Topo sort should contain exactly the resolved eclasses";
 }
 
@@ -529,8 +544,12 @@ TEST(Extract_TopologicalSort, SingleNode) {
   auto [leaf_class, leaf_node, leaf_new] = egraph.emplace(symbol::A);
   SelectionMap<double> cheapest_enode{};
   cheapest_enode[leaf_class] = {leaf_node, 1.0};
-  auto in_degree = extract::CollectDependencies(egraph, cheapest_enode, leaf_class);
-  auto result = extract::TopologicalSort(egraph, cheapest_enode, std::move(in_degree));
+  extract::InDegreeMap in_degree;
+  extract::DependencyScratch deps_scratch;
+  extract::CollectDependencies(egraph, cheapest_enode, leaf_class, in_degree, deps_scratch);
+  std::vector<std::pair<EClassId, ENodeId>> result;
+  std::deque<EClassId> ready_scratch;
+  extract::TopologicalSort(egraph, cheapest_enode, in_degree, result, ready_scratch);
 
   ASSERT_EQ(result.size(), 1);
   ASSERT_EQ(result[0].first, leaf_class);
@@ -547,8 +566,12 @@ TEST(Extract_TopologicalSort, LinearChainOrdering) {
   cheapest_enode[leaf_class] = {leaf_node, 1.0};
   cheapest_enode[mid_class] = {mid_node, 1.0};
   cheapest_enode[root_class] = {root_node, 1.0};
-  auto in_degree = extract::CollectDependencies(egraph, cheapest_enode, root_class);
-  auto result = extract::TopologicalSort(egraph, cheapest_enode, std::move(in_degree));
+  extract::InDegreeMap in_degree;
+  extract::DependencyScratch deps_scratch;
+  extract::CollectDependencies(egraph, cheapest_enode, root_class, in_degree, deps_scratch);
+  std::vector<std::pair<EClassId, ENodeId>> result;
+  std::deque<EClassId> ready_scratch;
+  extract::TopologicalSort(egraph, cheapest_enode, in_degree, result, ready_scratch);
 
   ASSERT_EQ(result.size(), 3);
   // Order should be: root, mid, leaf
@@ -567,8 +590,12 @@ TEST(Extract_TopologicalSort, SimpleTreeOrdering) {
   cheapest_enode[left_class] = {left_node, 1.0};
   cheapest_enode[right_class] = {right_node, 1.0};
   cheapest_enode[root_class] = {root_node, 1.0};
-  auto in_degree = extract::CollectDependencies(egraph, cheapest_enode, root_class);
-  auto result = extract::TopologicalSort(egraph, cheapest_enode, std::move(in_degree));
+  extract::InDegreeMap in_degree;
+  extract::DependencyScratch deps_scratch;
+  extract::CollectDependencies(egraph, cheapest_enode, root_class, in_degree, deps_scratch);
+  std::vector<std::pair<EClassId, ENodeId>> result;
+  std::deque<EClassId> ready_scratch;
+  extract::TopologicalSort(egraph, cheapest_enode, in_degree, result, ready_scratch);
 
   ASSERT_EQ(result.size(), 3);
   // Root should come first
@@ -588,8 +615,12 @@ TEST(Extract_TopologicalSort, DiamondTopology) {
   cheapest_enode[left_class] = {left_node, 1.0};
   cheapest_enode[right_class] = {right_node, 1.0};
   cheapest_enode[root_class] = {root_node, 1.0};
-  auto in_degree = extract::CollectDependencies(egraph, cheapest_enode, root_class);
-  auto result = extract::TopologicalSort(egraph, cheapest_enode, std::move(in_degree));
+  extract::InDegreeMap in_degree;
+  extract::DependencyScratch deps_scratch;
+  extract::CollectDependencies(egraph, cheapest_enode, root_class, in_degree, deps_scratch);
+  std::vector<std::pair<EClassId, ENodeId>> result;
+  std::deque<EClassId> ready_scratch;
+  extract::TopologicalSort(egraph, cheapest_enode, in_degree, result, ready_scratch);
 
   ASSERT_EQ(result.size(), 4);
   // Root comes first
@@ -621,11 +652,18 @@ TEST(Extract_TopologicalSort, CycleDetection_IncompleteResult) {
   // In release builds (NDEBUG defined), assert is compiled out and TopologicalSort
   // silently returns an incomplete result — the test verifies the truncation instead.
 #ifdef NDEBUG
-  auto result = extract::TopologicalSort(egraph, selection, std::move(in_degree));
+  std::vector<std::pair<EClassId, ENodeId>> result;
+  std::deque<EClassId> ready_scratch;
+  extract::TopologicalSort(egraph, selection, in_degree, result, ready_scratch);
   // Without the assertion, the cycle causes silent truncation: no nodes emitted
   EXPECT_EQ(result.size(), 0);
 #else
-  ASSERT_DEATH((void)extract::TopologicalSort(egraph, selection, std::move(in_degree)), "cycle detected");
+  ASSERT_DEATH(([&] {
+                 std::vector<std::pair<EClassId, ENodeId>> result;
+                 std::deque<EClassId> ready_scratch;
+                 extract::TopologicalSort(egraph, selection, in_degree, result, ready_scratch);
+               }()),
+               "cycle detected");
 #endif
 }
 
