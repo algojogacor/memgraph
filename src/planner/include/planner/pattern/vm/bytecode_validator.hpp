@@ -38,6 +38,8 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <boost/unordered/unordered_flat_map.hpp>
+#include <boost/unordered/unordered_flat_set.hpp>
 
 #include "planner/pattern/vm/compiled_matcher.hpp"
 #include "planner/pattern/vm/instruction.hpp"
@@ -727,8 +729,8 @@ void ValidateRegisters(Reporter &r, std::span<Instruction const> code, auto cons
                   bc);
 
   // Liveness: defined before read
-  std::set<uint8_t> defined_eclass;
-  std::set<uint8_t> defined_enode;
+  boost::unordered_flat_set<uint8_t> defined_eclass;
+  boost::unordered_flat_set<uint8_t> defined_enode;
 
   for (std::size_t i = 0; i < code.size(); ++i) {
     auto const &instr = code[i];
@@ -766,7 +768,7 @@ void ValidateRegisters(Reporter &r, std::span<Instruction const> code, auto cons
 /// Sibling LoadChild from the same enode register must not be separated by IterENodes.
 template <typename Reporter>
 void ValidateSiblingLoadsNotInNestedLoop(Reporter &r, std::span<Instruction const> code, auto const &bc) {
-  std::map<uint8_t, std::vector<std::size_t>> loads_by_src;
+  boost::unordered_flat_map<uint8_t, std::vector<std::size_t>> loads_by_src;
   for (std::size_t i = 0; i < code.size(); ++i) {
     if (code[i].op == VMOp::LoadChild) loads_by_src[code[i].src].push_back(i);
   }
@@ -790,7 +792,7 @@ void ValidateSiblingLoadsNotInNestedLoop(Reporter &r, std::span<Instruction cons
 /// Eclass-level parent joins must appear before the enode loop for that register.
 template <typename Reporter>
 void ValidateEclassJoinsBeforeEnodeLoop(Reporter &r, std::span<Instruction const> code, auto const &bc) {
-  std::set<uint8_t> eclass_level_regs;
+  boost::unordered_flat_set<uint8_t> eclass_level_regs;
   for (auto const &instr : code) {
     if (instr.op == VMOp::IterSymbolEClasses || instr.op == VMOp::IterAllEClasses) {
       eclass_level_regs.insert(instr.dst);
@@ -837,7 +839,7 @@ void ValidateBindingOrder(Reporter &r, std::span<Instruction const> code, Compil
   auto const &slot_to_order = info.slot_to_order;
 
   // Valid indices, no duplicates
-  std::set<SlotIdx> seen;
+  boost::unordered_flat_set<SlotIdx> seen;
   for (std::size_t i = 0; i < binding_order.size(); ++i) {
     r.expect_lt(value_of(binding_order[i]),
                 info.num_slots,
@@ -868,7 +870,7 @@ void ValidateBindingOrder(Reporter &r, std::span<Instruction const> code, Compil
 
   // Matches BindSlot emission order
   std::vector<SlotIdx> code_order;
-  std::set<uint8_t> seen_in_code;
+  boost::unordered_flat_set<uint8_t> seen_in_code;
   for (auto const &instr : code) {
     if (instr.op == VMOp::BindSlot && !seen_in_code.contains(instr.arg)) {
       code_order.emplace_back(instr.arg);
