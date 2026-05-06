@@ -626,9 +626,7 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root)
   // least one self-contained alternative for the root (required == {}).
   // We compute frontiers eagerly here so we can validate before resolve;
   // the same frontier map is then handed to Extract via the ExtractionContext.
-  // TODO(planner-v2): hold this context per session so buffers are reused
-  // across queries (issue: ConvertToLogicalOperator is currently called once
-  // per query with a fresh context).
+  // TODO: hold this context per session so buffers are reused across queries.
   extract::ExtractionContext<CostFrontier> ctx;
   (void)extract::detail::ComputeFrontiers(impl.egraph_, PlanCostModel{}, true_root, ctx.frontier_map);
 

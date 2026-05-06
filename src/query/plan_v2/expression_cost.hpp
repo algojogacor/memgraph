@@ -52,9 +52,9 @@ inline constexpr double kUnary = 1.0;
 /// not an arithmetic application.
 inline constexpr double kIdentifier = 1.0;
 
-// TODO(planner-v2): tune these once benchmarks show per-class differentiation
-// actually flips a plan.  Until then they are deliberately uniform — a
-// uniform-but-honest model beats a guessed-differential model.
+// TODO: tune these once benchmarks show per-class differentiation actually
+// flips a plan.  Until then they are deliberately uniform — a uniform-but-
+// honest model beats a guessed-differential model.
 
 /// Look up the per-operator cost for a CostClass.  Used by PlanCostModel to
 /// dispatch via symbol_descriptor<S>::cost_class without enumerating cases.

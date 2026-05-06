@@ -9,7 +9,7 @@
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
 
-// Focused benchmarks for the planner-v2 extraction + PlanResolver pipeline.
+// Focused benchmarks for the extraction + PlanResolver pipeline.
 //
 // Bypasses the Cypher parser by building the egraph directly through the
 // public Make* API and calling ConvertToLogicalOperator(egraph, root).  That

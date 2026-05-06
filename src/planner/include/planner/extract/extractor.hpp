@@ -188,9 +188,8 @@ struct DefaultResolver {
 // Extraction stages — internal, called by Extract().
 // ============================================================================
 // Production callers should use Extract().  The stages survive in detail:: so
-// existing per-stage tests and ConvertToLogicalOperator (which has a
-// planner-v2-specific validation step between ComputeFrontiers and resolve)
-// can compose them directly.
+// per-stage tests and downstream callers that need to interleave their own
+// work between ComputeFrontiers and resolve can compose them directly.
 namespace detail {
 
 /// In-degree map for topological sorting.
