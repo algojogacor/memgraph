@@ -218,7 +218,7 @@ struct ParetoFrontier {
 
 /// Concept for alternatives usable with CostResultBase.  Beyond what
 /// `cost` must be a non-static data member (not a property/function);
-/// resolve_with_cost projects via `&Alt::cost`.
+/// resolve projects via `&Alt::cost`.
 template <typename Alt>
 concept ParetoAlt = std::copyable<Alt> && requires(Alt const &a) {
   { a.cost } -> std::totally_ordered;
@@ -269,21 +269,11 @@ struct CostResultBase : ParetoFrontier<Alt, DominanceFn> {
   }
 
   template <typename Self>
-  auto resolve_with_cost(this Self const &self) -> std::pair<decltype(Alt::enode_id), cost_t> {
+  auto resolve(this Self const &self) -> std::pair<decltype(Alt::enode_id), cost_t const &> {
     auto const alts = self.alts();
     auto it = std::ranges::min_element(alts, {}, &Alt::cost);
-    assert(it != alts.end() && "resolve_with_cost called on empty frontier");
+    assert(it != alts.end() && "resolve called on empty frontier");
     return {it->enode_id, it->cost};
-  }
-
-  template <typename Self>
-  auto resolve(this Self const &self) noexcept -> decltype(Alt::enode_id) {
-    return self.resolve_with_cost().first;
-  }
-
-  template <typename Self>
-  auto min_cost(this Self const &self) noexcept -> cost_t {
-    return self.resolve_with_cost().second;
   }
 };
 

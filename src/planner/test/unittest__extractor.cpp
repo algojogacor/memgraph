@@ -44,7 +44,7 @@ struct UniformCostModel {
   static auto operator()(ENode<symbol> const & /*current*/, ENodeId enode_id, std::span<CostResult> children)
       -> CostResult {
     auto child_sum =
-        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.min_cost(); });
+        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.resolve().second; });
     return CostResult{1.0 + child_sum, enode_id};
   }
 };
@@ -56,7 +56,7 @@ struct SymbolCostModel {
 
   auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult> children) const -> CostResult {
     auto child_sum =
-        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.min_cost(); });
+        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.resolve().second; });
     return CostResult{(current.symbol() == symbol::A ? a_cost : b_cost) + child_sum, enode_id};
   }
 };
@@ -113,7 +113,7 @@ struct SimpleCostModel {
 
   auto operator()(ENode<symbol> const &enode, ENodeId enode_id, std::span<CostResult> children) const -> CostResult {
     auto child_sum =
-        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.min_cost(); });
+        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.resolve().second; });
     return CostResult{fn(enode) + child_sum, enode_id};
   }
 };
@@ -122,14 +122,14 @@ struct SimpleCostModel {
 template <typename CostModel>
 using TestFrontierMap = FrontierMap<typename CostModel::CostResult>;
 
-template <typename CostModel>
-auto FrontierCost(TestFrontierMap<CostModel> const &m, EClassId id) {
-  return m.at(id)->min_cost();
+template <typename CostResult>
+auto FrontierCost(FrontierMap<CostResult> const &m, EClassId id) {
+  return m.at(id)->resolve().second;
 }
 
-template <typename CostModel>
-auto FrontierEnode(TestFrontierMap<CostModel> const &m, EClassId id) {
-  return m.at(id)->resolve();
+template <typename CostResult>
+auto FrontierEnode(FrontierMap<CostResult> const &m, EClassId id) {
+  return m.at(id)->resolve().first;
 }
 
 TEST(Extract_Cost, SingleLeafNode) {
@@ -145,8 +145,8 @@ TEST(Extract_Cost, SingleLeafNode) {
   ASSERT_TRUE(cost.has_value());
   ASSERT_EQ(cost->cost, 5.0);
   ASSERT_EQ(frontiers.size(), 1);
-  ASSERT_EQ(FrontierEnode<CostModel>(frontiers, leaf_class), leaf_node);
-  ASSERT_EQ(FrontierCost<CostModel>(frontiers, leaf_class), 5.0);
+  ASSERT_EQ(FrontierEnode(frontiers, leaf_class), leaf_node);
+  ASSERT_EQ(FrontierCost(frontiers, leaf_class), 5.0);
 }
 
 TEST(Extract_Cost, SimpleTree) {
@@ -203,10 +203,10 @@ TEST(Extract_Cost, DiamondDAGSharedNode) {
   ASSERT_TRUE(cost.has_value());
   ASSERT_EQ(cost->cost, 5.0);
   ASSERT_EQ(frontiers.size(), 4);
-  ASSERT_EQ(FrontierCost<CostModel>(frontiers, shared_class), 1);
-  ASSERT_EQ(FrontierCost<CostModel>(frontiers, left_class), 2);
-  ASSERT_EQ(FrontierCost<CostModel>(frontiers, right_class), 2);
-  ASSERT_EQ(FrontierCost<CostModel>(frontiers, root_class), 5);
+  ASSERT_EQ(FrontierCost(frontiers, shared_class), 1);
+  ASSERT_EQ(FrontierCost(frontiers, left_class), 2);
+  ASSERT_EQ(FrontierCost(frontiers, right_class), 2);
+  ASSERT_EQ(FrontierCost(frontiers, root_class), 5);
 }
 
 TEST(Extract_Cost, VariableCostBySymbol) {
@@ -245,8 +245,8 @@ TEST(Extract_Cost, SelectsCheapestAmongEquivalents) {
 
   ASSERT_TRUE(cost.has_value());
   ASSERT_EQ(cost->cost, 1.0);
-  ASSERT_EQ(FrontierEnode<CostModel>(frontiers, root), anode);
-  ASSERT_EQ(FrontierCost<CostModel>(frontiers, root), 1.0);
+  ASSERT_EQ(FrontierEnode(frontiers, root), anode);
+  ASSERT_EQ(FrontierCost(frontiers, root), 1.0);
 }
 
 TEST(Extract_Cost, CostAccumulationWithVariableCosts) {
@@ -303,8 +303,8 @@ TEST(Extract_Cost, CyclicEGraphInfiniteCost) {
   // The non-cyclic LITERAL node should be selected with cost 1
   ASSERT_TRUE(cost.has_value());
   ASSERT_EQ(cost->cost, 1.0);
-  ASSERT_EQ(FrontierEnode<CostModel>(frontiers, cyclic_class), x_node);
-  ASSERT_EQ(FrontierCost<CostModel>(frontiers, cyclic_class), 1.0);
+  ASSERT_EQ(FrontierEnode(frontiers, cyclic_class), x_node);
+  ASSERT_EQ(FrontierCost(frontiers, cyclic_class), 1.0);
 }
 
 TEST(Extract_Cost, CyclicEGraphInfiniteCostComplex) {
@@ -347,11 +347,11 @@ TEST(Extract_Cost, CyclicEGraphInfiniteCostComplex) {
   ASSERT_EQ(cost->cost, 1.0);
   ASSERT_EQ(frontiers.size(), 2);
   ASSERT_TRUE(frontiers.contains(merged_class));
-  ASSERT_EQ(FrontierCost<CostModel>(frontiers, merged_class), 1.0);
-  ASSERT_EQ(FrontierEnode<CostModel>(frontiers, merged_class), x_node);
+  ASSERT_EQ(FrontierCost(frontiers, merged_class), 1.0);
+  ASSERT_EQ(FrontierEnode(frontiers, merged_class), x_node);
   ASSERT_TRUE(frontiers.contains(zero_class));
-  ASSERT_EQ(FrontierCost<CostModel>(frontiers, zero_class), 1.0);
-  ASSERT_EQ(FrontierEnode<CostModel>(frontiers, zero_class), zero_node);
+  ASSERT_EQ(FrontierCost(frontiers, zero_class), 1.0);
+  ASSERT_EQ(FrontierEnode(frontiers, zero_class), zero_node);
 }
 
 TEST(Extract_Cost, FullyCyclicEClassInfiniteCost) {
@@ -395,7 +395,7 @@ TEST(Extract_Cost, FullyCyclicEClassInfiniteCost) {
   // It has cost 1 (no children), while the 'ADD' nodes have infinite cost
   ASSERT_TRUE(cost.has_value());
   ASSERT_EQ(cost->cost, 1.0);
-  ASSERT_EQ(FrontierEnode<CostModel>(frontiers, fully_cyclic), x_node);
+  ASSERT_EQ(FrontierEnode(frontiers, fully_cyclic), x_node);
 }
 
 // ========================================
@@ -776,7 +776,7 @@ TEST(Extract_Safety, ComputeFrontiers_FullyCyclicReturnsNullopt) {
   EXPECT_TRUE(frontiers.contains(zero_class));
 
   // The selected enode for merged_class should be the leaf (x_node), not the cyclic ADD
-  EXPECT_EQ(FrontierEnode<UniformCostModel>(frontiers, merged_class), x_node);
+  EXPECT_EQ(FrontierEnode(frontiers, merged_class), x_node);
 }
 
 TEST(Extract_Safety, ComputeFrontiers_CyclicChildCostsCached) {
@@ -827,15 +827,15 @@ TEST(Extract_Safety, ComputeFrontiers_CyclicChildCostsCached) {
   // the cyclic ADD enode. The "continue processing remaining children" logic
   // ensures non-cyclic siblings are still computed.
   EXPECT_TRUE(frontiers.contains(leaf_c_class)) << "Non-cyclic sibling leaf_c should be cached in frontier_map";
-  EXPECT_EQ(FrontierCost<UniformCostModel>(frontiers, leaf_c_class), 1.0);
+  EXPECT_EQ(FrontierCost(frontiers, leaf_c_class), 1.0);
 
   // leaf_d should also be cached (child of the non-cyclic A enode)
   EXPECT_TRUE(frontiers.contains(leaf_d_class));
-  EXPECT_EQ(FrontierCost<UniformCostModel>(frontiers, leaf_d_class), 1.0);
+  EXPECT_EQ(FrontierCost(frontiers, leaf_d_class), 1.0);
 
   // merged should be present with the A enode selected (not the cyclic ADD)
   EXPECT_TRUE(frontiers.contains(merged));
-  EXPECT_EQ(FrontierEnode<UniformCostModel>(frontiers, merged), b_node);
+  EXPECT_EQ(FrontierEnode(frontiers, merged), b_node);
 }
 
 TEST(Extract_Safety, ComputeFrontiers_CyclicExprChildOfBind) {
@@ -928,7 +928,7 @@ struct SimpleMultiAltCostModel {
   static auto operator()(ENode<symbol> const & /*current*/, ENodeId enode_id, std::span<CostResult> children)
       -> CostResult {
     auto child_cost =
-        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.min_cost(); });
+        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.resolve().second; });
     return CostResult{{{.cost = 1.0 + child_cost, .required = {}, .enode_id = enode_id}}};
   }
 };
@@ -938,7 +938,7 @@ struct DemandAwareMultiAltCostModel {
 
   static auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult> children) -> CostResult {
     auto child_cost =
-        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.min_cost(); });
+        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.resolve().second; });
     if (current.symbol() == symbol::A) {
       return CostResult{{
           {.cost = 1.0 + child_cost, .required = {1}, .enode_id = enode_id},
@@ -1152,7 +1152,7 @@ TEST(Extract_MultiAlt, DominatedPruning) {
   ASSERT_TRUE(has_no_demand_alt) << "Expected alternative with cost=2.0, required={}";
 
   // Min cost is 1.0 (the {1}-requiring alternative)
-  ASSERT_DOUBLE_EQ(frontier.min_cost(), 1.0);
+  ASSERT_DOUBLE_EQ(frontier.resolve().second, 1.0);
 }
 
 TEST(Extract_MultiAlt, DiamondDAG_WithDemand) {
@@ -1195,8 +1195,8 @@ TEST(Extract_MultiAlt, ThreeNonDominatedAlternatives) {
 
     static auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult> children)
         -> CostResult {
-      auto child_cost =
-          std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.min_cost(); });
+      auto child_cost = std::ranges::fold_left(
+          children, 0.0, [](double acc, CostResult const &c) { return acc + c.resolve().second; });
       if (current.symbol() == symbol::A) {
         return CostResult{{
             {.cost = 1.0 + child_cost, .required = {1, 2}, .enode_id = enode_id},
@@ -1235,7 +1235,7 @@ TEST(Extract_MultiAlt, ThreeNonDominatedAlternatives) {
   ASSERT_TRUE(has_alt_none) << "Expected alternative with cost=3.0, required={}";
 
   // Min cost should be 1.0
-  ASSERT_DOUBLE_EQ(frontier.min_cost(), 1.0);
+  ASSERT_DOUBLE_EQ(frontier.resolve().second, 1.0);
 
   // Full extraction should still work and select the min-cost alternative
   auto extracted = Extract(egraph, ThreeAltCostModel{}, a_class);

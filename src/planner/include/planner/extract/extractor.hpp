@@ -48,20 +48,17 @@ namespace memgraph::planner::core::extract {
 
 /// CostResult contract — enforced at compile time.
 /// Every CostResult type must provide:
-///   cost_t                 — the scalar cost type (must be totally_ordered)
-///   a.merge(b)             — combine frontiers
-///   a.resolve()            — pick the best enode
-///   a.min_cost()           — extract the comparable cost (asserts non-empty for frontiers)
-///   a.resolve_with_cost()  — paired (enode_id, cost) so callers needing both
-///                            avoid scanning the frontier twice
+///   cost_t        — the scalar cost type (must be totally_ordered)
+///   a.merge(b)    — combine frontiers
+///   a.resolve()   — paired (enode_id, cost-by-const-ref) of the chosen
+///                   alternative; the reference is valid for the lifetime
+///                   of the frontier
 template <typename CR>
 concept CostResultType = std::copyable<CR> && requires(CR const &a, CR const &b) {
   typename CR::cost_t;
   requires std::totally_ordered<typename CR::cost_t>;
   { a.merge(b) } -> std::same_as<CR>;
-  { a.resolve() } noexcept -> std::same_as<ENodeId>;
-  { a.min_cost() } noexcept -> std::same_as<typename CR::cost_t>;
-  { a.resolve_with_cost() } -> std::same_as<std::pair<ENodeId, typename CR::cost_t>>;
+  { a.resolve() } -> std::same_as<std::pair<ENodeId, typename CR::cost_t const &>>;
 };
 
 /// Default scalar CostResult — wraps a cost value with enode metadata.
@@ -77,11 +74,7 @@ struct DefaultCostResult {
     return cost <= other.cost ? *this : other;
   }
 
-  [[nodiscard]] auto resolve_with_cost() const -> std::pair<ENodeId, cost_t> { return {enode_id, cost}; }
-
-  [[nodiscard]] auto resolve() const noexcept -> ENodeId { return enode_id; }
-
-  [[nodiscard]] auto min_cost() const noexcept -> cost_t { return cost; }
+  [[nodiscard]] auto resolve() const -> std::pair<ENodeId, cost_t const &> { return {enode_id, cost}; }
 };
 
 // ============================================================================
@@ -140,7 +133,7 @@ concept Resolver =
     CostResultType<CostResult> && std::invocable<R, EGraph<Symbol, Analysis> const &, FrontierMap<CostResult> const &,
                                                  EClassId, SelectionMap<typename CostResult::cost_t> &>;
 
-/// Generic Resolver that selects each eclass via CostResult::resolve_with_cost
+/// Generic Resolver that selects each eclass via CostResult::resolve
 /// and walks every child of the chosen enode.  Safe for any cost model whose
 /// children are unconditionally part of the extracted tree.
 ///
@@ -162,7 +155,7 @@ struct DefaultResolver {
       assert(it != frontier_map.end() && it->second.has_value());
 
       auto const &frontier = *it->second;
-      auto [enode_id, cost] = frontier.resolve_with_cost();
+      auto [enode_id, cost] = frontier.resolve();
       out.try_emplace(current, enode_id, cost);
 
       auto const &enode = egraph.get_enode(enode_id);

@@ -114,9 +114,9 @@ struct PlanCostModel {
       case symbol::Identifier: {
         assert(!children.empty() && "Identifier must have its symbol child frontier");
         auto sym_eclass = current.children()[0];
-        return CostResult{{{.cost = expression_cost::kIdentifier + children[0].min_cost(),
-                            .required = {sym_eclass},
-                            .enode_id = enode_id}}};
+        auto const &[_, child_cost] = children[0].resolve();
+        return CostResult{
+            {{.cost = expression_cost::kIdentifier + child_cost, .required = {sym_eclass}, .enode_id = enode_id}}};
       }
 
       // Bind: emits one alt per (input_alt, expr_alt) for alive input alts and
@@ -128,7 +128,7 @@ struct PlanCostModel {
         auto const &sym_frontier = children[1];
         auto const &expr_frontier = children[2];
         auto sym_eclass = current.children()[1];
-        auto sym_cost = sym_frontier.min_cost();
+        auto const &[_, sym_cost] = sym_frontier.resolve();
 
         return CostFrontier::flat_map(input_frontier, [&](auto const &input_alt, auto emit) {
           if (bind::IsAlive(input_alt.required, sym_eclass)) {
