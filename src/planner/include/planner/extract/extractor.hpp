@@ -47,17 +47,17 @@ namespace memgraph::planner::core::extract {
 
 /// CostResult contract — enforced at compile time.
 /// Every CostResult type must provide:
-///   cost_t        — the scalar cost type (must be totally_ordered)
-///   a.merge(b)    — combine frontiers
-///   a.resolve()   — paired (enode_id, cost-by-const-ref) of the chosen
-///                   alternative; the reference is valid for the lifetime
-///                   of the frontier
+///   cost_t                  — the scalar cost type (must be totally_ordered)
+///   a.merge_in_place(b)     — fold `b` (an rvalue) into `a`, mutating `a`
+///   a.resolve()             — paired (enode_id, cost-by-const-ref) of the
+///                             chosen alternative; the reference is valid
+///                             for the lifetime of the frontier
 template <typename CR>
-concept CostResultType = std::copyable<CR> && requires(CR const &a, CR const &b) {
+concept CostResultType = std::copyable<CR> && requires(CR &a, CR &&r, CR const &c) {
   typename CR::cost_t;
   requires std::totally_ordered<typename CR::cost_t>;
-  { a.merge(b) } -> std::same_as<CR>;
-  { a.resolve() } -> std::same_as<std::pair<ENodeId, typename CR::cost_t const &>>;
+  { a.merge_in_place(std::move(r)) };
+  { c.resolve() } -> std::same_as<std::pair<ENodeId, typename CR::cost_t const &>>;
 };
 
 // ============================================================================
@@ -160,7 +160,7 @@ template <typename Symbol, typename Analysis, typename CostModel>
     if (!merged_frontier) {
       merged_frontier = std::move(enode_frontier);
     } else {
-      merged_frontier = std::move(*merged_frontier).merge(std::move(enode_frontier));
+      merged_frontier->merge_in_place(std::move(enode_frontier));
     }
   }
 

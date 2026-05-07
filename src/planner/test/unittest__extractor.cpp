@@ -47,8 +47,8 @@ struct DefaultCostResult {
   T cost;
   ENodeId enode_id;
 
-  [[nodiscard]] auto merge(DefaultCostResult const &other) const -> DefaultCostResult {
-    return cost <= other.cost ? *this : other;
+  void merge_in_place(DefaultCostResult &&other) {
+    if (other.cost < cost) *this = other;
   }
 
   [[nodiscard]] auto resolve() const -> std::pair<ENodeId, cost_t const &> { return {enode_id, cost}; }

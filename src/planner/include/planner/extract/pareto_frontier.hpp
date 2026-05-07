@@ -73,7 +73,8 @@ struct ParetoFrontier {
   /// Construct from an unpruned list of alternatives.  Prunes on construction
   /// so the resulting frontier satisfies the Pareto invariant.  This is the
   /// only public way to seed a frontier from raw data; the static factories
-  /// below (flat_map / merge / combine) handle compositional construction.
+  /// below (flat_map / combine) and merge_in_place handle compositional
+  /// construction.
   [[nodiscard]] static auto from_unpruned(std::vector<Alt> alts) -> ParetoFrontier {
     auto result = ParetoFrontier{};
     result.alts_ = std::move(alts);
@@ -112,27 +113,15 @@ struct ParetoFrontier {
     return result;
   }
 
-  /// Union two frontiers from different enodes in the same eclass, then prune.
-  [[nodiscard]] static auto merge(ParetoFrontier const &a, ParetoFrontier const &b) -> ParetoFrontier {
-    auto result = ParetoFrontier{};
-    result.alts_.reserve(a.alts_.size() + b.alts_.size());
-    result.alts_.append_range(a.alts_);
-    result.alts_.append_range(b.alts_);
-    result.prune();
-    return result;
-  }
-
-  /// Rvalue overload: moves alts from both inputs instead of copying.
-  /// Both inputs are already Pareto-pruned; only cross-pairs need re-checking
-  /// (see prune_with_pruned_prefix).
-  [[nodiscard]] static auto merge(ParetoFrontier &&a, ParetoFrontier &&b) -> ParetoFrontier {
-    auto result = ParetoFrontier{std::move(a)};
-    auto const pruned_prefix = result.alts_.size();
-    result.alts_.reserve(pruned_prefix + b.alts_.size());
-    result.alts_.insert(
-        result.alts_.end(), std::make_move_iterator(b.alts_.begin()), std::make_move_iterator(b.alts_.end()));
-    result.prune_with_pruned_prefix(pruned_prefix);
-    return result;
+  /// Union another frontier into this one and re-prune.  Both `*this` and
+  /// `other` are already Pareto-pruned; only cross-pairs and within-suffix
+  /// pairs need checking (see prune_with_pruned_prefix).  `other`'s alts
+  /// are moved-from on return.
+  void merge_in_place(ParetoFrontier &&other) {
+    auto const pruned_prefix = alts_.size();
+    alts_.reserve(pruned_prefix + other.alts_.size());
+    alts_.insert(alts_.end(), std::make_move_iterator(other.alts_.begin()), std::make_move_iterator(other.alts_.end()));
+    prune_with_pruned_prefix(pruned_prefix);
   }
 
   /// Cartesian product of two frontiers. For each (l, r) pair, calls combine_fn(l, r)
@@ -165,9 +154,9 @@ struct ParetoFrontier {
   void prune() { prune_with_pruned_prefix(0); }
 
   /// Prune assuming `alts_[0..pruned_prefix)` is already Pareto-pruned: avoids
-  /// re-checking pairs within the already-pruned prefix.  Used by `merge`
-  /// where two pre-pruned sets are concatenated — only cross-pairs and
-  /// within-suffix pairs need checking.
+  /// re-checking pairs within the already-pruned prefix.  Used by
+  /// `merge_in_place` where two pre-pruned sets are concatenated — only
+  /// cross-pairs and within-suffix pairs need checking.
   void prune_with_pruned_prefix(size_t pruned_prefix) {
     auto const n = alts_.size();
     if (n - pruned_prefix == 0) return;                        // nothing newly added
@@ -253,20 +242,6 @@ struct CostResultBase : ParetoFrontier<Alt, DominanceFn> {
   /// derived type as a template argument.
   // NOLINTNEXTLINE(google-explicit-constructor)
   CostResultBase(std::vector<Alt> alts) : Base(Base::from_unpruned(std::move(alts))) {}
-
-  /// Hides Base::merge so the return type matches the deduced Self
-  /// (required by CostResultType concept).
-  template <typename Self>
-  [[nodiscard]] auto merge(this Self const &self, Self const &other) -> Self {
-    return Self{Base::merge(static_cast<Base const &>(self), static_cast<Base const &>(other))};
-  }
-
-  /// Rvalue overload — forwards to Base's move-merge to avoid copying alts when
-  /// both inputs are owned (e.g. ComputeFrontiers folding accumulated frontier).
-  template <typename Self>
-  [[nodiscard]] auto merge(this Self &&self, Self &&other) -> Self {
-    return Self{Base::merge(std::move(static_cast<Base &>(self)), std::move(static_cast<Base &>(other)))};
-  }
 
   template <typename Self>
   auto resolve(this Self const &self) -> std::pair<decltype(Alt::enode_id), cost_t const &> {
