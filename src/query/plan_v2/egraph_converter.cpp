@@ -256,7 +256,11 @@ struct PlanResolver {
       }
     }
 
-    /// Pick cheapest alt whose required is a subset of provided.
+    /// The compatibility test the resolver enforces at every chosen alt:
+    /// the alt's residual demand (`required`, computed bottom-up) must be
+    /// covered by the symbols ancestor Binds have supplied so far on this
+    /// descent path (`provided`, accumulated top-down).  Among feasible
+    /// alts, take the cheapest.  See bind_semantics.hpp for the duality.
     auto pick_compatible(CostFrontier const &frontier, SymbolSet const &provided) -> Alternative const & {
       Alternative const *best = nullptr;
       for (auto const &alt : frontier.alts()) {
@@ -267,6 +271,10 @@ struct PlanResolver {
         }
       }
       if (!best) {
+        // The cost model couldn't produce an alt whose unmet demand fits
+        // under this parent's provided context.  Either an Identifier is
+        // referenced with no ancestor Bind for it, or the saturated egraph
+        // never produced a hoisted-Bind alternative on this path.
         throw QueryException{
             "Plan extraction failed: no compatible alternative at this node - "
             "a symbol is demanded that no ancestor can provide. "
@@ -275,35 +283,69 @@ struct PlanResolver {
       return *best;
     }
 
-    /// Bind-specific child visitation.  Aliveness has already been decided by
-    /// the cost model and recorded on the chosen alt; this just dispatches.
+    /// Descend into the three children of a chosen Bind alt, propagating the
+    /// resolver's top-down `provided` set in the way that mirrors what the
+    /// cost model already decided when it stamped this alt's `is_alive`.
+    ///
+    /// The cost model picked alive iff input's residual demand contained
+    /// `sym` - i.e., this Bind has work to do because the input subtree
+    /// references the symbol it would bind.  Alive emits an alt whose
+    /// `required` no longer contains `sym` (the Bind supplies it).  Dead
+    /// passes input's `required` through unchanged (Bind is a no-op).
+    ///
+    /// Resolver-side, the two cases differ in WHAT this Bind contributes to
+    /// the descent context for each child:
     void visit_bind_children(EClassId input_eclass, EClassId sym_eclass, EClassId expr_eclass,
                              SymbolSet const &bind_provided, bool is_alive) {
       if (is_alive) {
-        // Alive: visit all three children (input with extra sym provided, sym, expr)
+        // Alive: this Bind now supplies `sym` to its input subtree.  When we
+        // descend into input, augment `provided` with `sym` so the input's
+        // chosen alt (which has `sym` in its `required` per the alive
+        // condition) passes IsCompatible.
         auto alive_provided = bind_provided;
         alive_provided.insert(sym_eclass);
         resolve_impl(input_eclass, alive_provided);
-        // sym_eclass is a leaf Symbol with required={}; compatible with any
-        // provided set.  Pass bind_provided rather than alive_provided: Symbol
-        // does not demand the symbol it defines.
+
+        // sym child is a Symbol leaf with required={} (kSymbolCost
+        // invariant).  Pass bind_provided NOT alive_provided: the symbol
+        // leaf does not demand the symbol it defines.  In practice the
+        // distinction is invisible (required={} is compatible with any
+        // provided), but passing alive_provided would encode a circular
+        // story for any future reader.
         resolve_impl(sym_eclass, bind_provided);
+
+        // expr is evaluated to PRODUCE the value bound to sym.  expr must
+        // not see sym in scope: the binding's RHS cannot reference its own
+        // LHS.  Pass bind_provided.
         resolve_impl(expr_eclass, bind_provided);
       } else {
-        // Dead: only visit input - sym and expr are unreachable.
-        // Erase any stale sym/expr entries from a prior alive resolution
-        // (cascade alive->dead transition).
+        // Dead: cost model's alive branch did not fire here, so input's
+        // chosen alt has no demand for `sym`, and no expr-side work was
+        // priced.  Visiting sym/expr would resolve eclasses that the build
+        // stage will not emit.
+        //
+        // DAG cleanup: a different path through the resolver may have
+        // resolved this same Bind eclass as ALIVE earlier, populating
+        // `resolved` entries for sym/expr.  We're now overwriting the Bind
+        // entry as dead via resolve_impl's normal write; the sym/expr
+        // entries from the alive pass would otherwise linger as orphans.
+        // Erase them to keep `resolved` honest about what's reachable.
         resolved.erase(sym_eclass);
         resolved.erase(expr_eclass);
         resolve_impl(input_eclass, bind_provided);
       }
     }
 
+    /// Top-down resolution at one eclass.  `provided` is the running set of
+    /// symbols ancestor Binds have supplied along this descent path.
+    ///
+    /// Three cases:
+    /// 1. Cache hit, still compatible -> reuse the cached selection.
+    /// 2. Cache hit, incompatible (a different parent path resolved this
+    ///    eclass under a richer `provided`; this path can't accept that
+    ///    alt) -> fall through and re-resolve, then cascade to children.
+    /// 3. Cache miss -> resolve fresh, then cascade.
     void resolve_impl(EClassId eclass_id, SymbolSet const &provided) {
-      // Compatible DAG cache hit: cached selection is feasible under this
-      // parent's provided set, nothing to do.  Otherwise fall through and
-      // re-resolve - either fresh, or to replace an incompatible cache entry
-      // (which then cascades to children with the more restrictive context).
       if (auto existing = resolved.find(eclass_id);
           existing != resolved.end() && bind::IsCompatible(existing->second.required, provided)) {
         return;
@@ -317,8 +359,13 @@ struct PlanResolver {
       auto const &enode = egraph.get_enode(chosen.enode_id);
       auto const &children = enode.children();
       if (enode.symbol() == symbol::Bind && children.size() == 3) {
+        // Bind's three children need different `provided` contexts; see
+        // visit_bind_children for the alive/dead breakdown.
         visit_bind_children(children[0], children[1], children[2], provided, chosen.is_alive);
       } else {
+        // Non-Bind operators don't bind anything; children inherit the same
+        // `provided` unchanged.  Their compatibility was already established
+        // by the bottom-up `required` propagation in the cost model.
         for (auto child : children) {
           resolve_impl(child, provided);
         }
