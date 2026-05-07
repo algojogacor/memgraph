@@ -93,8 +93,7 @@ using SelectionMap = boost::unordered_flat_map<EClassId, Selection<CostType>>;
 // fills `out` with a SelectionMap.  It chooses one enode per eclass and decides
 // which of that enode's children are part of the extracted tree.
 //
-// Caller-clears: Extract() calls ctx.clear() before invoking the resolver, so
-// `out` is empty on entry.  Direct callers (e.g. unit tests) must do the same.
+// Precondition: `out` is empty on entry.
 //
 // Contract on the populated SelectionMap:
 //   - root is in the map.
