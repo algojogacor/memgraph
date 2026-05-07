@@ -174,31 +174,31 @@ template <typename Symbol, typename Analysis, typename CostModel>
   return std::nullopt;
 }
 
-/// Scratch buffer set used by the BFS in CollectDependencies. Owned by
-/// ExtractionContext so that warm Extract() calls don't reallocate.
-struct DependencyScratch {
-  std::vector<EClassId> bfs;
+/// Scratch buffers used by the dependency traversal in CollectDependencies.
+/// Owned by ExtractionContext so that warm Extract() calls don't reallocate.
+struct TraversalScratch {
+  std::vector<EClassId> worklist;
   boost::unordered_flat_set<EClassId> visited;
 
   void clear() {
-    bfs.clear();
+    worklist.clear();
     visited.clear();
   }
 };
 
 template <typename Symbol, typename Analysis, typename CostResult>
 void CollectDependencies(EGraph<Symbol, Analysis> const &egraph, SelectionMap<CostResult> const &enode_selection,
-                         EClassId root, InDegreeMap &out, DependencyScratch &scratch) {
+                         EClassId root, InDegreeMap &out, TraversalScratch &scratch) {
   out.emplace(root, 0);
-  scratch.bfs.push_back(root);
+  scratch.worklist.push_back(root);
   scratch.visited.insert(root);
-  scratch.bfs.reserve(enode_selection.size());
+  scratch.worklist.reserve(enode_selection.size());
   scratch.visited.reserve(enode_selection.size());
 
-  // Non-recursive BFS search
-  while (!scratch.bfs.empty()) {
-    auto curr = scratch.bfs.back();
-    scratch.bfs.pop_back();
+  // Iterative DFS traversal (LIFO worklist).
+  while (!scratch.worklist.empty()) {
+    auto curr = scratch.worklist.back();
+    scratch.worklist.pop_back();
 
     auto enode_it = enode_selection.find(curr);
     assert(enode_it != enode_selection.end() && "all reachable EClasses should have selected ENode");
@@ -210,7 +210,7 @@ void CollectDependencies(EGraph<Symbol, Analysis> const &egraph, SelectionMap<Co
       if (!enode_selection.contains(child)) continue;
       ++out[child];
       if (scratch.visited.insert(child).second) {
-        scratch.bfs.emplace_back(child);
+        scratch.worklist.emplace_back(child);
       }
     }
   }
@@ -278,7 +278,7 @@ struct ExtractionContext {
   SelectionMap<typename CostResult::cost_t> selection;
   InDegreeMap in_degree;
   std::vector<std::pair<EClassId, ENodeId>> order;
-  DependencyScratch deps;
+  TraversalScratch deps;
   std::deque<EClassId> ready;
 
   void clear() {

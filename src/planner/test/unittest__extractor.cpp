@@ -91,7 +91,7 @@ auto Extract(EGraph<symbol, analysis> const &egraph, CostModel cost_model, EClas
   auto resolved = SelectionMap<typename CostResult::cost_t>{};
   DefaultResolver{}(egraph, frontier_map, root, resolved);
   auto in_degree = extract::InDegreeMap{};
-  auto deps = extract::DependencyScratch{};
+  auto deps = extract::TraversalScratch{};
   extract::CollectDependencies(egraph, resolved, root, in_degree, deps);
   auto out = std::vector<std::pair<EClassId, ENodeId>>{};
   auto ready = std::deque<EClassId>{};
@@ -429,7 +429,7 @@ TEST(Extract_Dependencies, SingleLeafNode) {
   cheapest_enode[leaf_class] = {leaf_node, 1.0};
 
   extract::InDegreeMap in_degree;
-  extract::DependencyScratch deps_scratch;
+  extract::TraversalScratch deps_scratch;
   extract::CollectDependencies(egraph, cheapest_enode, leaf_class, in_degree, deps_scratch);
 
   // Leaf has no children, so in_degree should be empty
@@ -448,7 +448,7 @@ TEST(Extract_Dependencies, LinearChain) {
   cheapest_enode[root_class] = {root_node, 1.0};
 
   extract::InDegreeMap in_degree;
-  extract::DependencyScratch deps_scratch;
+  extract::TraversalScratch deps_scratch;
   extract::CollectDependencies(egraph, cheapest_enode, root_class, in_degree, deps_scratch);
 
   // mid has in_degree 1 (from root), leaf has in_degree 1 (from mid)
@@ -470,7 +470,7 @@ TEST(Extract_Dependencies, SimpleTree) {
   cheapest_enode[root_class] = {root_node, 1.0};
 
   extract::InDegreeMap in_degree;
-  extract::DependencyScratch deps_scratch;
+  extract::TraversalScratch deps_scratch;
   extract::CollectDependencies(egraph, cheapest_enode, root_class, in_degree, deps_scratch);
 
   // Both left and right have in_degree 1 (from root)
@@ -494,7 +494,7 @@ TEST(Extract_Dependencies, DiamondDAG) {
   cheapest_enode[root_class] = {root_node, 1.0};
 
   extract::InDegreeMap in_degree;
-  extract::DependencyScratch deps_scratch;
+  extract::TraversalScratch deps_scratch;
   extract::CollectDependencies(egraph, cheapest_enode, root_class, in_degree, deps_scratch);
 
   // shared has in_degree 2 (from left and right)
@@ -526,7 +526,7 @@ TEST(Extract_Dependencies, DeadBindChildrenSkipped) {
   // sym_class and expr_class intentionally absent - dead Bind
 
   extract::InDegreeMap in_degree;
-  extract::DependencyScratch deps_scratch;
+  extract::TraversalScratch deps_scratch;
   extract::CollectDependencies(egraph, selection, bind_class, in_degree, deps_scratch);
 
   // Only bind and input should be in in_degree
@@ -565,7 +565,7 @@ TEST(Extract_TopologicalSort, SingleNode) {
   SelectionMap<double> cheapest_enode{};
   cheapest_enode[leaf_class] = {leaf_node, 1.0};
   extract::InDegreeMap in_degree;
-  extract::DependencyScratch deps_scratch;
+  extract::TraversalScratch deps_scratch;
   extract::CollectDependencies(egraph, cheapest_enode, leaf_class, in_degree, deps_scratch);
   std::vector<std::pair<EClassId, ENodeId>> result;
   std::deque<EClassId> ready_scratch;
@@ -587,7 +587,7 @@ TEST(Extract_TopologicalSort, LinearChainOrdering) {
   cheapest_enode[mid_class] = {mid_node, 1.0};
   cheapest_enode[root_class] = {root_node, 1.0};
   extract::InDegreeMap in_degree;
-  extract::DependencyScratch deps_scratch;
+  extract::TraversalScratch deps_scratch;
   extract::CollectDependencies(egraph, cheapest_enode, root_class, in_degree, deps_scratch);
   std::vector<std::pair<EClassId, ENodeId>> result;
   std::deque<EClassId> ready_scratch;
@@ -611,7 +611,7 @@ TEST(Extract_TopologicalSort, SimpleTreeOrdering) {
   cheapest_enode[right_class] = {right_node, 1.0};
   cheapest_enode[root_class] = {root_node, 1.0};
   extract::InDegreeMap in_degree;
-  extract::DependencyScratch deps_scratch;
+  extract::TraversalScratch deps_scratch;
   extract::CollectDependencies(egraph, cheapest_enode, root_class, in_degree, deps_scratch);
   std::vector<std::pair<EClassId, ENodeId>> result;
   std::deque<EClassId> ready_scratch;
@@ -636,7 +636,7 @@ TEST(Extract_TopologicalSort, DiamondTopology) {
   cheapest_enode[right_class] = {right_node, 1.0};
   cheapest_enode[root_class] = {root_node, 1.0};
   extract::InDegreeMap in_degree;
-  extract::DependencyScratch deps_scratch;
+  extract::TraversalScratch deps_scratch;
   extract::CollectDependencies(egraph, cheapest_enode, root_class, in_degree, deps_scratch);
   std::vector<std::pair<EClassId, ENodeId>> result;
   std::deque<EClassId> ready_scratch;
