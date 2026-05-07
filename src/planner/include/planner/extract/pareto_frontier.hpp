@@ -244,9 +244,7 @@ struct ParetoFrontier {
       }
     }
 
-    // Compact survivors in place.  Two-pass (mark, then move) avoids the
-    // moved-from-read pitfall of std::remove_if when DominanceFn is
-    // re-evaluated mid-pass.
+    // Compact survivors in place.
     size_t write = 0;
     for (size_t read = 0; read < n; ++read) {
       if (dominated[read]) continue;
