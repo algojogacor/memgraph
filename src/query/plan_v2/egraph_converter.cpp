@@ -34,9 +34,17 @@ namespace {
 
 using bind::SymbolSet;
 
-struct Alternative {
+/// The (cost, required) pair that participates in dominance.  Grouping these
+/// in their own type makes the boundary between optimisation-side state and
+/// build-side annotations (enode_id, is_alive) structural rather than a
+/// comment that future fields might quietly violate.
+struct DominanceKey {
   double cost;
-  SymbolSet required;               // Symbols that MUST be bound by ancestors
+  SymbolSet required;  // Symbols that MUST be bound by ancestors
+};
+
+struct Alternative {
+  DominanceKey dom;
   planner::core::ENodeId enode_id;  // Which enode achieves this alternative
   // Meaningful only when this alt's enode is a Bind; default false.
   // Set true when emitted by the Bind alive branch (input demands the bound
@@ -44,23 +52,40 @@ struct Alternative {
   bool is_alive = false;
 };
 
-// is_alive intentionally does not participate in dominance: it is a per-alt
-// build-side annotation, orthogonal to the (cost, required) optimisation
-// problem the Pareto frontier solves.
 struct AlternativeDominance {
   static auto operator()(Alternative const &a, Alternative const &b) -> std::partial_ordering {
     namespace x = planner::core::extract;
-    return x::pareto_compare(a,
-                             b,
-                             x::dim<&Alternative::cost>(x::lower_is_better),
-                             x::dim<&Alternative::required>(x::smaller_subset_is_better));
+    return x::pareto_compare(a.dom,
+                             b.dom,
+                             x::dim<&DominanceKey::cost>(x::lower_is_better),
+                             x::dim<&DominanceKey::required>(x::smaller_subset_is_better));
   }
 };
 
 /// CostFrontier: ParetoFrontier with resolve/min_cost for the extraction contract.
-/// merge is inherited from ParetoFrontier (union + prune).
-struct CostFrontier : planner::core::extract::CostResultBase<Alternative, AlternativeDominance> {
-  using CostResultBase::CostResultBase;
+/// merge is inherited from ParetoFrontier (union + prune).  We don't inherit
+/// CostResultBase because that template projects via `&Alt::cost` and our cost
+/// lives one level deeper (in `dom`); the local resolve below is small enough.
+struct CostFrontier : planner::core::extract::ParetoFrontier<Alternative, AlternativeDominance> {
+  using cost_t = double;
+
+  using ParetoFrontier::ParetoFrontier;
+
+  // NOLINTNEXTLINE(google-explicit-constructor)
+  CostFrontier(ParetoFrontier base) : ParetoFrontier(std::move(base)) {}
+
+  // NOLINTNEXTLINE(google-explicit-constructor)
+  CostFrontier(std::initializer_list<Alternative> init) : ParetoFrontier(std::vector<Alternative>(init)) {}
+
+  // NOLINTNEXTLINE(google-explicit-constructor)
+  CostFrontier(std::vector<Alternative> alts) : ParetoFrontier(std::move(alts)) {}
+
+  auto resolve() const -> std::pair<planner::core::ENodeId, double const &> {
+    auto a = alts();
+    auto it = std::ranges::min_element(a, {}, [](Alternative const &x) { return x.dom.cost; });
+    assert(it != a.end() && "resolve called on empty frontier");
+    return {it->enode_id, it->dom.cost};
+  }
 };
 
 /// Cartesian product of two frontiers with cost summation and required-set
@@ -70,12 +95,13 @@ auto CombineAlts(CostFrontier const &lhs, CostFrontier const &rhs, double extra_
     -> CostFrontier {
   return CostFrontier::combine(lhs, rhs, [&](Alternative const &l, Alternative const &r) {
     boost::container::small_vector<planner::core::EClassId, 16> buf;
-    buf.reserve(l.required.size() + r.required.size());
-    std::ranges::set_union(l.required, r.required, std::back_inserter(buf));
+    buf.reserve(l.dom.required.size() + r.dom.required.size());
+    std::ranges::set_union(l.dom.required, r.dom.required, std::back_inserter(buf));
     // set_union on two sorted flat_sets produces sorted unique output -
     // ordered_unique_range skips redundant sorting in the flat_set constructor.
     SymbolSet required(boost::container::ordered_unique_range, buf.begin(), buf.end());
-    return Alternative{.cost = extra_cost + l.cost + r.cost, .required = std::move(required), .enode_id = enode_id};
+    return Alternative{.dom = {.cost = extra_cost + l.dom.cost + r.dom.cost, .required = std::move(required)},
+                       .enode_id = enode_id};
   });
 }
 
@@ -88,7 +114,7 @@ auto CombineAlts(CostFrontier const &lhs, CostFrontier const &rhs, double extra_
 /// reset to false (it is meaningful only when the alt's enode is a Bind).
 auto MapAlts(CostFrontier input, double extra_cost, planner::core::ENodeId enode_id) -> CostFrontier {
   input.mutate_pruning_invariant_preserving([&](Alternative &alt) {
-    alt.cost += extra_cost;
+    alt.dom.cost += extra_cost;
     alt.enode_id = enode_id;
     alt.is_alive = false;
   });
@@ -106,15 +132,15 @@ struct PlanCostModel {
       case symbol::Literal:
       case symbol::Symbol:  // Leaf invariant - see bind::kSymbolCost.
       case symbol::ParamLookup:
-        return CostResult{{{.cost = bind::kSymbolCost, .required = {}, .enode_id = enode_id}}};
+        return CostResult{{{.dom = {.cost = bind::kSymbolCost, .required = {}}, .enode_id = enode_id}}};
 
       // Identifier: demands its symbol child to be bound
       case symbol::Identifier: {
         assert(!children.empty() && "Identifier must have its symbol child frontier");
         auto sym_eclass = current.children()[0];
         auto const &[_, child_cost] = children[0]->resolve();
-        return CostResult{
-            {{.cost = expression_cost::kIdentifier + child_cost, .required = {sym_eclass}, .enode_id = enode_id}}};
+        return CostResult{{{.dom = {.cost = expression_cost::kIdentifier + child_cost, .required = {sym_eclass}},
+                            .enode_id = enode_id}}};
       }
 
       // Bind: emits one alt per (input_alt, expr_alt) for alive input alts and
@@ -129,17 +155,16 @@ struct PlanCostModel {
         auto const &[_, sym_cost] = sym_frontier.resolve();
 
         return CostFrontier::flat_map(input_frontier, [&](auto const &input_alt, auto emit) {
-          if (bind::IsAlive(input_alt.required, sym_eclass)) {
+          if (bind::IsAlive(input_alt.dom.required, sym_eclass)) {
             for (auto const &expr_alt : expr_frontier.alts()) {
-              auto required = bind::AliveRequired(input_alt.required, sym_eclass, expr_alt.required);
-              emit({.cost = bind::AliveCost(input_alt.cost, sym_cost, expr_alt.cost),
-                    .required = std::move(required),
+              auto required = bind::AliveRequired(input_alt.dom.required, sym_eclass, expr_alt.dom.required);
+              emit({.dom = {.cost = bind::AliveCost(input_alt.dom.cost, sym_cost, expr_alt.dom.cost),
+                            .required = std::move(required)},
                     .enode_id = enode_id,
                     .is_alive = true});
             }
           } else {
-            emit({.cost = bind::DeadCost(input_alt.cost),
-                  .required = input_alt.required,
+            emit({.dom = {.cost = bind::DeadCost(input_alt.dom.cost), .required = input_alt.dom.required},
                   .enode_id = enode_id,
                   .is_alive = false});
           }
@@ -242,8 +267,8 @@ struct PlanResolver {
     auto pick_compatible(CostFrontier const &frontier, SymbolSet const &provided) -> Alternative const & {
       Alternative const *best = nullptr;
       for (auto const &alt : frontier.alts()) {
-        if (bind::IsCompatible(alt.required, provided)) {
-          if (!best || alt.cost < best->cost) {
+        if (bind::IsCompatible(alt.dom.required, provided)) {
+          if (!best || alt.dom.cost < best->dom.cost) {
             best = &alt;
           }
         }
@@ -294,7 +319,7 @@ struct PlanResolver {
       auto it = frontier_map.find(eclass_id);
       assert(it != frontier_map.end() && it->second.has_value());
       auto const &chosen = pick_compatible(*it->second, provided);
-      resolved[eclass_id] = ResolvedEntry{Selection{chosen.enode_id, chosen.cost}, chosen.required};
+      resolved[eclass_id] = ResolvedEntry{Selection{chosen.enode_id, chosen.dom.cost}, chosen.dom.required};
 
       auto const &enode = egraph.get_enode(chosen.enode_id);
       auto const &children = enode.children();
@@ -542,7 +567,7 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   }
   auto const &root_frontier = *root_it->second;
   bool root_satisfiable =
-      std::ranges::any_of(root_frontier.alts(), [](Alternative const &a) { return a.required.empty(); });
+      std::ranges::any_of(root_frontier.alts(), [](Alternative const &a) { return a.dom.required.empty(); });
   if (!root_satisfiable) {
     throw QueryException{
         "Plan extraction failed: root frontier has no self-contained alternative. "
