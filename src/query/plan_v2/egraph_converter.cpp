@@ -59,24 +59,20 @@ struct CostFrontier : planner::core::extract::CostResultBase<Alternative, Altern
   using CostResultBase::CostResultBase;
 };
 
-// Combine two frontiers with cost summation and required-set union.
-struct CombineAltsFn {
-  double extra_cost;
-  planner::core::ENodeId enode_id;
-
-  auto operator()(Alternative const &l, Alternative const &r) const -> Alternative {
+/// Cartesian product of two frontiers with cost summation and required-set
+/// union.  Each (l, r) pair becomes one alternative in the result, re-stamped
+/// with `enode_id` and `extra_cost`.
+auto CombineAlts(CostFrontier const &lhs, CostFrontier const &rhs, double extra_cost, planner::core::ENodeId enode_id)
+    -> CostFrontier {
+  return CostFrontier::combine(lhs, rhs, [&](Alternative const &l, Alternative const &r) {
     boost::container::small_vector<planner::core::EClassId, 16> buf;
     buf.reserve(l.required.size() + r.required.size());
     std::ranges::set_union(l.required, r.required, std::back_inserter(buf));
     // set_union on two sorted flat_sets produces sorted unique output -
     // ordered_unique_range skips redundant sorting in the flat_set constructor.
     SymbolSet required(boost::container::ordered_unique_range, buf.begin(), buf.end());
-    return {.cost = extra_cost + l.cost + r.cost, .required = std::move(required), .enode_id = enode_id};
-  }
-};
-
-auto CombineAlts(double extra_cost, planner::core::ENodeId enode_id) -> CombineAltsFn {
-  return CombineAltsFn{extra_cost, enode_id};
+    return Alternative{.cost = extra_cost + l.cost + r.cost, .required = std::move(required), .enode_id = enode_id};
+  });
 }
 
 /// Map over a single frontier - adjust each alternative's cost by `extra_cost`
@@ -166,7 +162,7 @@ struct PlanCostModel {
       case symbol::Or:
       case symbol::Xor: {
         auto const cost = expression_cost::FromClass(CostClassOf(current.symbol()));
-        return CostFrontier::combine(*children[0], *children[1], CombineAlts(cost, enode_id));
+        return CombineAlts(*children[0], *children[1], cost, enode_id);
       }
 
       // Unary expression operators: pass through child, +kUnary, re-stamp
@@ -185,7 +181,7 @@ struct PlanCostModel {
       case symbol::Output: {
         auto result = MapAlts(*children[0], 0.0, enode_id);
         for (size_t i = 1; i < children.size(); ++i) {
-          result = CostFrontier::combine(result, *children[i], CombineAlts(0.0, enode_id));
+          result = CombineAlts(result, *children[i], 0.0, enode_id);
         }
         return result;
       }
@@ -194,7 +190,7 @@ struct PlanCostModel {
       // (not an expression operator), so kept at a fixed cost rather than
       // sourced from expression_cost.
       case symbol::NamedOutput:
-        return CostFrontier::combine(*children[0], *children[1], CombineAlts(1.0, enode_id));
+        return CombineAlts(*children[0], *children[1], 1.0, enode_id);
     }
     std::unreachable();
   }
