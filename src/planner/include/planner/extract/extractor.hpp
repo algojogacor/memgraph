@@ -47,16 +47,26 @@ namespace memgraph::planner::core::extract {
 
 /// CostResult contract — enforced at compile time.
 /// Every CostResult type must provide:
-///   cost_t        — the scalar cost type (must be totally_ordered)
-///   a.merge(b)    — combine frontiers
-///   a.resolve()   — paired (enode_id, cost-by-const-ref) of the chosen
-///                   alternative; the reference is valid for the lifetime
-///                   of the frontier
+///   cost_t                            — the scalar cost type (must be totally_ordered)
+///   a.merge(b)                        — combine frontiers (non-consuming)
+///   std::move(r).merge(std::move(r))  — move-merge: ComputeFrontiers folds
+///                                       owned frontiers and relies on this
+///                                       to avoid per-step copies
+///   a.resolve()                       — paired (enode_id, cost-by-const-ref)
+///                                       of the chosen alternative; the
+///                                       reference is valid for the lifetime
+///                                       of the frontier
+///
+/// The concept checks only the signature; a single non-ref-qualified merge
+/// will satisfy both clauses but copy on the rvalue path.  Provide a
+/// dedicated rvalue overload (or ref-qualified `&&`) when alts are
+/// expensive to copy.
 template <typename CR>
-concept CostResultType = std::copyable<CR> && requires(CR const &a, CR const &b) {
+concept CostResultType = std::copyable<CR> && requires(CR &&r, CR const &a, CR const &b) {
   typename CR::cost_t;
   requires std::totally_ordered<typename CR::cost_t>;
   { a.merge(b) } -> std::same_as<CR>;
+  { std::move(r).merge(std::move(r)) } -> std::same_as<CR>;
   { a.resolve() } -> std::same_as<std::pair<ENodeId, typename CR::cost_t const &>>;
 };
 
