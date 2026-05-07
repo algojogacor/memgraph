@@ -18,6 +18,27 @@
 // Bind alive vs dead is a *resolution* decision (does input demand sym?); the
 // cost model and resolver both consume this algebra.  Build-time consumers
 // observe the resolver's outcome rather than re-deciding.
+//
+// Two opposing flows of symbol-eclass sets, both stored as SymbolSet:
+//
+//   Demand (`required`) - propagates BOTTOM-UP in the cost model.
+//     Identifier(sym) seeds {sym}.  Expression operators union demands
+//     from their children.  An *alive* Bind removes its `sym` from the
+//     up-propagating demand because the Bind itself supplies that sym.
+//     A *dead* Bind passes its input's demand through unchanged (expr
+//     wasn't evaluated, so expr's demand doesn't matter).
+//
+//   Provided - propagates TOP-DOWN in the resolver.
+//     Starts empty at the root.  Each alive Bind adds its `sym` to
+//     `provided` when descending into the input child.  At every chosen
+//     alt, the resolver checks `required ⊆ provided`: every symbol the
+//     alt demands has been supplied by a Bind on the resolver's current
+//     path from root.  If not, no compatible alt exists -> extraction
+//     fails (or the resolver tries another alt with a smaller `required`).
+//
+// The cost model and resolver meet at the alt: the cost model produces
+// alts with `required` set; the resolver picks an alt whose `required`
+// is a subset of the `provided` it has accumulated.
 
 #include <algorithm>
 #include <ranges>
@@ -43,17 +64,20 @@ using SymbolSet = boost::container::flat_set<planner::core::EClassId, std::less<
 /// leaf shape on entry as the canary if the invariant ever weakens.
 inline constexpr double kSymbolCost = 1.0;
 
-/// `required ⊆ provided`: every symbol this alternative demands has been
-/// bound by some ancestor in the resolver's `provided` context.
+/// Top-down compatibility check used by the resolver.
+/// `required ⊆ provided`: every symbol this alternative demands (bottom-up)
+/// has been supplied by some Bind ancestor in the resolver's accumulated
+/// `provided` context (top-down).
 inline auto IsCompatible(SymbolSet const &required, SymbolSet const &provided) -> bool {
   return std::ranges::includes(provided, required);
 }
 
-/// Predicate - is the Bind alive given the input alt's demand set?
+/// Bottom-up alive predicate used by the cost model.
 ///
-/// A Bind is *alive* when the input demands the symbol it would bind: the
-/// expr must run, sym must be evaluated, the binding has work to do.
-/// A Bind is *dead* when the input doesn't demand the symbol: expr is unused,
+/// A Bind is *alive* when the input's demand set contains `sym`: the input
+/// subtree (in this structural form) needs `sym`, so this Bind must run -
+/// expr is evaluated, sym takes its value.
+/// A Bind is *dead* when the input does not demand `sym`: expr is unused,
 /// sym is unused, the Bind is a no-op pass-through over input.
 inline auto IsAlive(SymbolSet const &input_required, planner::core::EClassId sym) -> bool {
   return input_required.contains(sym);
@@ -67,10 +91,13 @@ inline auto AliveCost(double input_cost, double sym_cost, double expr_cost) -> d
 /// Cost of the dead branch.  Only the input runs; sym and expr are skipped.
 inline auto DeadCost(double input_cost) -> double { return input_cost; }
 
-/// Required-set algebra for the alive branch - `(input.required \ {sym}) ∪ expr.required`.
+/// Demand-set algebra for the alive branch - `(input.required \ {sym}) ∪ expr.required`.
 ///
-/// Removing `sym` reflects that the Bind itself supplies that symbol; whatever
-/// `expr` demands flows up because the binding does not satisfy expr's needs.
+/// Bottom-up flow at the alive Bind:
+///   - input demanded `sym`; Bind supplies it, so `sym` drops out of the
+///     up-propagating demand.
+///   - expr is evaluated, so its own demands now ride upward (some Bind
+///     above must supply whatever expr referenced via Identifier).
 inline auto AliveRequired(SymbolSet const &input_required, planner::core::EClassId sym, SymbolSet const &expr_required)
     -> SymbolSet {
   boost::container::small_vector<planner::core::EClassId, 16> buf;
