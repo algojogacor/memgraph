@@ -80,11 +80,11 @@ inline constexpr auto smaller_subset_is_better = []<std::ranges::input_range R>(
   bool a_subset_b = true;
   bool b_subset_a = true;
   while (it_a != end_a && it_b != end_b) {
-    // Element type isn't required to provide <=>; stick with `<`.
-    if (*it_a < *it_b) {
+    auto const cmp = *it_a <=> *it_b;
+    if (std::is_lt(cmp)) {
       a_subset_b = false;  // *it_a is in a but not in b
       ++it_a;
-    } else if (*it_b < *it_a) {
+    } else if (std::is_gt(cmp)) {
       b_subset_a = false;  // *it_b is in b but not in a
       ++it_b;
     } else {
@@ -119,19 +119,20 @@ template <auto MemPtr, typename Cmp>
 ///   - Otherwise the agreed direction wins.
 template <typename Alt, typename... Dims>
 [[nodiscard]] auto pareto_fold(Alt const &a, Alt const &b, Dims const &...dims) -> std::partial_ordering {
-  auto acc = std::partial_ordering::equivalent;
-  auto step = [&](std::partial_ordering next) {
-    if (acc == std::partial_ordering::unordered) return;  // already incomparable, stay there
-    if (next == std::partial_ordering::unordered) {       // dim itself incomparable
-      acc = std::partial_ordering::unordered;
+  using std::partial_ordering;
+  auto acc = partial_ordering::equivalent;
+  auto step = [&](partial_ordering next) {
+    if (acc == partial_ordering::unordered) return;  // already incomparable, stay there
+    if (next == partial_ordering::unordered) {       // dim itself incomparable
+      acc = partial_ordering::unordered;
       return;
     }
-    if (next == std::partial_ordering::equivalent) return;  // tied dim doesn't change direction
-    if (acc == std::partial_ordering::equivalent) {         // first directional dim
+    if (next == partial_ordering::equivalent) return;  // tied dim doesn't change direction
+    if (acc == partial_ordering::equivalent) {         // first directional dim
       acc = next;
       return;
     }
-    if (acc != next) acc = std::partial_ordering::unordered;  // direction conflict
+    if (acc != next) acc = partial_ordering::unordered;  // direction conflict
   };
   (step(dims(a, b)), ...);
   return acc;
