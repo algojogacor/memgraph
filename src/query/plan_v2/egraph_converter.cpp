@@ -83,12 +83,14 @@ struct CostFrontier : planner::core::extract::CostResultBase<Alternative, Altern
 auto CombineAlts(CostFrontier const &lhs, CostFrontier const &rhs, double extra_cost, planner::core::ENodeId enode_id)
     -> CostFrontier {
   return CostFrontier::combine(lhs, rhs, [&](Alternative const &l, Alternative const &r) {
-    boost::container::small_vector<planner::core::EClassId, 16> buf;
-    buf.reserve(l.required.size() + r.required.size());
-    std::ranges::set_union(l.required, r.required, std::back_inserter(buf));
-    // set_union on two sorted flat_sets produces sorted unique output -
-    // ordered_unique_range skips redundant sorting in the flat_set constructor.
-    SymbolSet required(boost::container::ordered_unique_range, buf.begin(), buf.end());
+    // Build directly into the result flat_set's underlying sequence: extract
+    // the empty buffer, set_union into it, adopt back as already-sorted.
+    // Avoids the intermediate-then-copy pattern of set_union → flat_set ctor.
+    SymbolSet required;
+    auto seq = required.extract_sequence();
+    seq.reserve(l.required.size() + r.required.size());
+    std::ranges::set_union(l.required, r.required, std::back_inserter(seq));
+    required.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
     return Alternative{.cost = extra_cost + l.cost + r.cost, .required = std::move(required), .enode_id = enode_id};
   });
 }
