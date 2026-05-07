@@ -121,20 +121,26 @@ template <typename Alt, typename... Dims>
 [[nodiscard]] auto pareto_fold(Alt const &a, Alt const &b, Dims const &...dims) -> std::partial_ordering {
   using std::partial_ordering;
   auto acc = partial_ordering::equivalent;
-  auto step = [&](partial_ordering next) {
-    if (acc == partial_ordering::unordered) return;  // already incomparable, stay there
-    if (next == partial_ordering::unordered) {       // dim itself incomparable
+  auto step = [&](partial_ordering next) -> bool {
+    if (next == partial_ordering::unordered) {  // dim itself incomparable
       acc = partial_ordering::unordered;
-      return;
+      return false;  // stop the && fold
     }
-    if (next == partial_ordering::equivalent) return;  // tied dim doesn't change direction
-    if (acc == partial_ordering::equivalent) {         // first directional dim
+    if (next == partial_ordering::equivalent) return true;  // tied dim doesn't change direction
+    if (acc == partial_ordering::equivalent) {              // first directional dim
       acc = next;
-      return;
+      return true;
     }
-    if (acc != next) acc = partial_ordering::unordered;  // direction conflict
+    if (acc != next) {  // direction conflict
+      acc = partial_ordering::unordered;
+      return false;
+    }
+    return true;
   };
-  (step(dims(a, b)), ...);
+  // Short-circuit fold: once step returns false, remaining dims aren't called.
+  // Saves the set-merge in smaller_subset_is_better when an earlier scalar dim
+  // already conflicts.
+  (void)(step(dims(a, b)) && ...);
   return acc;
 }
 
