@@ -95,7 +95,7 @@ struct ParetoFrontier {
   template <typename Fn>
     requires std::invocable<Fn, Alt &>
   void mutate_pruning_invariant_preserving(Fn &&fn) {
-    for (auto &alt : alts_) std::forward<Fn>(fn)(alt);
+    for (auto &alt : alts_) fn(alt);
   }
 
   /// Flat-map: for each alternative, produce zero or more new alternatives via a callback,
