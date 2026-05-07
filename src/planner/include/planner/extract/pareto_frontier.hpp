@@ -80,6 +80,7 @@ inline constexpr auto smaller_subset_is_better = []<std::ranges::input_range R>(
   bool a_subset_b = true;
   bool b_subset_a = true;
   while (it_a != end_a && it_b != end_b) {
+    // Element type isn't required to provide <=>; stick with `<`.
     if (*it_a < *it_b) {
       a_subset_b = false;  // *it_a is in a but not in b
       ++it_a;
