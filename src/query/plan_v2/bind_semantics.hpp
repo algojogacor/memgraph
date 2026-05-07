@@ -12,33 +12,35 @@
 #pragma once
 
 // ============================================================================
-// Bind semantics: shared algebra for "compute expr, bind to sym, run input".
+// Bind semantics: "let sym = expr in input".
 // ============================================================================
 //
-// Bind alive vs dead is a *resolution* decision (does input demand sym?); the
-// cost model and resolver both consume this algebra.  Build-time consumers
-// observe the resolver's outcome rather than re-deciding.
+// A Bind introduces a variable.  Some part of the plan uses that variable
+// via Identifier; some Bind has to introduce it; otherwise the plan refers
+// to a name that doesn't exist.
 //
-// Two opposing flows of symbol-eclass sets, both stored as SymbolSet:
+// We track this with two sets, both stored as SymbolSet:
 //
-//   Demand (`required`) - propagates BOTTOM-UP in the cost model.
-//     Identifier(sym) seeds {sym}.  Expression operators union demands
-//     from their children.  An *alive* Bind removes its `sym` from the
-//     up-propagating demand because the Bind itself supplies that sym.
-//     A *dead* Bind passes its input's demand through unchanged (expr
-//     wasn't evaluated, so expr's demand doesn't matter).
+//   `required`  - "what variables does this part of the plan still NEED
+//                  someone to introduce?"  Built bottom-up by the cost
+//                  model.  Identifier(x) starts {x}.  Expressions union
+//                  what their children need.  An alive Bind for `x`
+//                  takes `x` off the list because it introduces `x`.
 //
-//   Provided - propagates TOP-DOWN in the resolver.
-//     Starts empty at the root.  Each alive Bind adds its `sym` to
-//     `provided` when descending into the input child.  At every chosen
-//     alt, the resolver checks `required ⊆ provided`: every symbol the
-//     alt demands has been supplied by a Bind on the resolver's current
-//     path from root.  If not, no compatible alt exists -> extraction
-//     fails (or the resolver tries another alt with a smaller `required`).
+//   `provided`  - "what variables ARE currently in scope?"  Tracked
+//                  top-down by the resolver as it walks the plan.  Each
+//                  alive Bind adds its variable when going into the
+//                  input below it.
 //
-// The cost model and resolver meet at the alt: the cost model produces
-// alts with `required` set; the resolver picks an alt whose `required`
-// is a subset of the `provided` it has accumulated.
+// At every node, the resolver checks: are all variables this node needs
+// already in scope?  i.e. `required` ⊆ `provided`.  If yes, use it.  If
+// no, the plan is broken at that node.
+//
+// A Bind is "alive" if the input below it actually uses the variable.
+// "Dead" if the input doesn't use it - the Bind is just dead weight, and
+// the resolver/builder skip it entirely.  Whether a Bind is alive is
+// decided once, by the cost model, when it computes `required` and sees
+// whether `sym` shows up in the input's needs.
 
 #include <algorithm>
 #include <ranges>
@@ -64,21 +66,16 @@ using SymbolSet = boost::container::flat_set<planner::core::EClassId, std::less<
 /// leaf shape on entry as the canary if the invariant ever weakens.
 inline constexpr double kSymbolCost = 1.0;
 
-/// Top-down compatibility check used by the resolver.
-/// `required ⊆ provided`: every symbol this alternative demands (bottom-up)
-/// has been supplied by some Bind ancestor in the resolver's accumulated
-/// `provided` context (top-down).
+/// "Are all the variables this node needs already in scope?"
+/// Used by the resolver going down the plan.
 inline auto IsCompatible(SymbolSet const &required, SymbolSet const &provided) -> bool {
   return std::ranges::includes(provided, required);
 }
 
-/// Bottom-up alive predicate used by the cost model.
-///
-/// A Bind is *alive* when the input's demand set contains `sym`: the input
-/// subtree (in this structural form) needs `sym`, so this Bind must run -
-/// expr is evaluated, sym takes its value.
-/// A Bind is *dead* when the input does not demand `sym`: expr is unused,
-/// sym is unused, the Bind is a no-op pass-through over input.
+/// "Does the input below this Bind actually use `sym`?"
+/// Used by the cost model going up the plan.  If yes, this Bind has work
+/// to do (alive: evaluate expr, introduce sym).  If no, the Bind is dead
+/// weight and we'll skip it.
 inline auto IsAlive(SymbolSet const &input_required, planner::core::EClassId sym) -> bool {
   return input_required.contains(sym);
 }
@@ -91,13 +88,10 @@ inline auto AliveCost(double input_cost, double sym_cost, double expr_cost) -> d
 /// Cost of the dead branch.  Only the input runs; sym and expr are skipped.
 inline auto DeadCost(double input_cost) -> double { return input_cost; }
 
-/// Demand-set algebra for the alive branch - `(input.required \ {sym}) ∪ expr.required`.
-///
-/// Bottom-up flow at the alive Bind:
-///   - input demanded `sym`; Bind supplies it, so `sym` drops out of the
-///     up-propagating demand.
-///   - expr is evaluated, so its own demands now ride upward (some Bind
-///     above must supply whatever expr referenced via Identifier).
+/// What variables does an alive Bind still need from above?
+/// Take what the input still needed, drop `sym` (this Bind introduces
+/// it), then add whatever `expr` references - because we're about to
+/// evaluate `expr`, so its needs become this Bind's needs.
 inline auto AliveRequired(SymbolSet const &input_required, planner::core::EClassId sym, SymbolSet const &expr_required)
     -> SymbolSet {
   boost::container::small_vector<planner::core::EClassId, 16> buf;
