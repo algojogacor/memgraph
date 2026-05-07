@@ -107,42 +107,6 @@ concept Resolver =
     CostResultType<CostResult> && std::invocable<R, EGraph<Symbol, Analysis> const &, FrontierMap<CostResult> const &,
                                                  EClassId, SelectionMap<typename CostResult::cost_t> &>;
 
-/// Generic Resolver that selects each eclass via CostResult::resolve
-/// and walks every child of the chosen enode.  Safe for any cost model whose
-/// children are unconditionally part of the extracted tree.
-///
-/// NOT safe for cost models where a chosen alt may exclude some of its
-/// enode's children from the extracted tree.  Those need a context-aware
-/// resolver.
-struct DefaultResolver {
-  template <typename Symbol, typename Analysis, CostResultType CostResult>
-  void operator()(EGraph<Symbol, Analysis> const &egraph, FrontierMap<CostResult> const &frontier_map, EClassId root,
-                  SelectionMap<typename CostResult::cost_t> &out) const {
-    assert(out.empty() && "Resolver precondition: out must be empty on entry");
-    auto to_visit = std::vector{root};
-    auto visited = boost::unordered_flat_set{root};
-
-    while (!to_visit.empty()) {
-      auto current = to_visit.back();
-      to_visit.pop_back();
-
-      auto it = frontier_map.find(current);
-      assert(it != frontier_map.end() && it->second.has_value());
-
-      auto const &frontier = *it->second;
-      auto [enode_id, cost] = frontier.resolve();
-      out.try_emplace(current, enode_id, cost);
-
-      auto const &enode = egraph.get_enode(enode_id);
-      for (auto child : enode.children()) {
-        if (visited.insert(child).second) {
-          to_visit.push_back(child);
-        }
-      }
-    }
-  }
-};
-
 // ============================================================================
 // Extraction stages
 // ============================================================================

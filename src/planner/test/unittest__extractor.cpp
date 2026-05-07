@@ -15,11 +15,13 @@
 #include <set>
 
 #include "planner/extract/extractor.hpp"
+#include "test_support/extract.hpp"
 
 import memgraph.planner.core.egraph;
 
 using namespace memgraph::planner::core;
 using namespace memgraph::planner::core::extract;
+using memgraph::planner::test_support::DefaultResolver;
 
 enum struct symbol : std::uint8_t { A, B, ADD, LITERAL };
 

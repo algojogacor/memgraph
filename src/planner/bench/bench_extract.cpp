@@ -31,6 +31,7 @@
 #include "bench_common.hpp"
 #include "planner/extract/extractor.hpp"
 #include "planner/extract/pareto_frontier.hpp"
+#include "test_support/extract.hpp"
 
 import memgraph.planner.core.egraph;
 
@@ -175,9 +176,9 @@ BENCHMARK(BM_Extract_WideMerge)->RangeMultiplier(4)->Range(8, 128)->Unit(benchma
 //   3. CollectDependencies     (in-degree counting over selected children)
 //   4. TopologicalSort         (Kahn-style emit order)
 // ---------------------------------------------------------------------------
-using memgraph::planner::core::extract::DefaultResolver;
 using memgraph::planner::core::extract::Extract;
 using memgraph::planner::core::extract::ExtractionContext;
+using memgraph::planner::test_support::DefaultResolver;
 
 static void BM_Extract_FullPipeline_DeepChain(benchmark::State &state) {
   auto [egraph, root] = BuildDeepChain(state.range(0));
