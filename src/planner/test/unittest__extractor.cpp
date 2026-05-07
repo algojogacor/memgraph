@@ -36,6 +36,24 @@ auto Add(EGraph &egraph, EClassId left, EClassId right) {
   return egraph.emplace(symbol::ADD, {left, right});
 }
 
+/// Test-local scalar CostResult — pairs a cost with the enode it came from.
+/// Production cost models use ParetoFrontier-based CostResultBase; this is the
+/// minimal CostResultType implementation the simple test models need.
+template <std::totally_ordered T>
+struct DefaultCostResult {
+  using cost_t = T;
+  T cost;
+  ENodeId enode_id;
+
+  [[nodiscard]] auto merge(DefaultCostResult const &other) const -> DefaultCostResult {
+    return cost <= other.cost ? *this : other;
+  }
+
+  [[nodiscard]] auto resolve() const -> std::pair<ENodeId, cost_t const &> { return {enode_id, cost}; }
+};
+
+static_assert(CostResultType<DefaultCostResult<double>>);
+
 // Simple cost models using DefaultCostResult<double>.
 // All models use the unified signature: (enode, enode_id, span<CostResult>) -> CostResult.
 struct UniformCostModel {

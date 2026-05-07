@@ -44,7 +44,6 @@ namespace memgraph::planner::core::extract {
 //
 // CostResult must satisfy CostResultType (defined below).  ParetoFrontier-based
 // cost models derive from CostResultBase (planner/extract/pareto_frontier.hpp).
-// DefaultCostResult<T> is the scalar reference adapter.
 
 /// CostResult contract — enforced at compile time.
 /// Every CostResult type must provide:
@@ -59,22 +58,6 @@ concept CostResultType = std::copyable<CR> && requires(CR const &a, CR const &b)
   requires std::totally_ordered<typename CR::cost_t>;
   { a.merge(b) } -> std::same_as<CR>;
   { a.resolve() } -> std::same_as<std::pair<ENodeId, typename CR::cost_t const &>>;
-};
-
-/// Default scalar CostResult — wraps a cost value with enode metadata.
-/// Reference adapter for cost models that don't need Pareto frontiers.
-template <std::totally_ordered T>
-struct DefaultCostResult {
-  using cost_t = T;
-
-  T cost;
-  ENodeId enode_id;
-
-  [[nodiscard]] auto merge(DefaultCostResult const &other) const -> DefaultCostResult {
-    return cost <= other.cost ? *this : other;
-  }
-
-  [[nodiscard]] auto resolve() const -> std::pair<ENodeId, cost_t const &> { return {enode_id, cost}; }
 };
 
 // ============================================================================

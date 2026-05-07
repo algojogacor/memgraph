@@ -66,8 +66,6 @@ target_sources(mg-planner
     src/rewrite/rule.cpp
     src/rewrite/rule_context.cpp
     src/rewrite/rule_set.cpp
-    # extract/
-    src/extract/extractor.cpp
 )
 target_link_libraries(mg-planner PUBLIC absl::flat_hash_map mg-utils range-v3::range-v3)
 
