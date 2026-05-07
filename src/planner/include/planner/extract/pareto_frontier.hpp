@@ -43,58 +43,95 @@ concept DominanceRelation =
     std::convertible_to<std::invoke_result_t<Fn, Alt const &, Alt const &>, std::partial_ordering> &&
     std::default_initializable<Fn>;
 
-/// Dominance comparison for the specific 2D shape `(scalar cost, sorted set
-/// of required things)`, where "lower cost is better" and "smaller required
-/// set is better."  This is NOT a general Pareto primitive - it captures the
-/// one shape every cost model in this codebase happens to use, in one place
-/// instead of three.  If a future cost model has a different shape, write its
-/// own dominance functor; do not generalise this.
-///
-/// One forward pass over both required sets determines subset relationships,
-/// then combines with cost comparison to yield a std::partial_ordering.
-///
-/// Convention (matches DominanceRelation):
-///   less        - a is dominated by b (b cheaper-or-equal AND b's demands ⊆ a's)
-///   greater     - a dominates b
-///   equivalent  - Pareto-equal (same cost, same demand set)
-///   unordered   - incomparable
-template <typename Cost, std::ranges::input_range Required>
-[[nodiscard]] auto compare_by_cost_and_demand(Cost const &a_cost, Required const &a_required, Cost const &b_cost,
-                                              Required const &b_required) -> std::partial_ordering {
-  // Single forward pass: walk both sorted ranges to determine
-  // (a_required ⊆ b_required) and (b_required ⊆ a_required) simultaneously.
-  auto it_a = std::ranges::begin(a_required);
-  auto const end_a = std::ranges::end(a_required);
-  auto it_b = std::ranges::begin(b_required);
-  auto const end_b = std::ranges::end(b_required);
+// ============================================================================
+// Compositional Pareto comparison
+// ============================================================================
+// A dominance functor over Alt can be expressed as the Pareto-fold of one or
+// more per-dimension comparators.  Each comparator answers: "for this single
+// dimension, does a dominate b, get dominated by b, tie, or is the dim itself
+// incomparable?"  pareto_fold combines them: agreement on direction (with at
+// least one strict) means dominance; disagreement means incomparable.
+//
+// Convention (matches DominanceRelation):
+//   less        - lhs is dominated
+//   greater     - lhs dominates
+//   equivalent  - tied
+//   unordered   - incomparable
+
+/// "Lower is better" comparator for orderable scalars.
+/// a < b means b is better, so a is dominated → less.
+inline constexpr auto lower_is_better = []<typename T>(T const &a, T const &b) -> std::partial_ordering {
+  if (a < b) return std::partial_ordering::greater;  // a "smaller" → a better → a dominates
+  if (b < a) return std::partial_ordering::less;
+  return std::partial_ordering::equivalent;
+};
+
+/// "Smaller-by-inclusion is better" comparator for two sorted ranges.
+/// Single forward merge over both ranges to determine the subset relations,
+/// with mid-pass early-exit once both subset flags are false (incomparable).
+inline constexpr auto smaller_subset_is_better = []<std::ranges::input_range R>(R const &a,
+                                                                                R const &b) -> std::partial_ordering {
+  auto it_a = std::ranges::begin(a);
+  auto const end_a = std::ranges::end(a);
+  auto it_b = std::ranges::begin(b);
+  auto const end_b = std::ranges::end(b);
   bool a_subset_b = true;
   bool b_subset_a = true;
   while (it_a != end_a && it_b != end_b) {
     if (*it_a < *it_b) {
-      // *it_a is in a but not in b → a is not a subset of b
-      a_subset_b = false;
+      a_subset_b = false;  // *it_a is in a but not in b
       ++it_a;
     } else if (*it_b < *it_a) {
-      // *it_b is in b but not in a → b is not a subset of a
-      b_subset_a = false;
+      b_subset_a = false;  // *it_b is in b but not in a
       ++it_b;
     } else {
       ++it_a;
       ++it_b;
     }
-    if (!a_subset_b && !b_subset_a) break;  // already incomparable on demands
+    if (!a_subset_b && !b_subset_a) break;
   }
-  // Leftovers: any remaining element of a is absent from b (since it's larger
-  // than every element b ever had), and vice versa.
   if (it_a != end_a) a_subset_b = false;
   if (it_b != end_b) b_subset_a = false;
-
-  bool const a_dom_b = a_cost <= b_cost && a_subset_b;
-  bool const b_dom_a = b_cost <= a_cost && b_subset_a;
-  if (a_dom_b && b_dom_a) return std::partial_ordering::equivalent;
-  if (a_dom_b) return std::partial_ordering::greater;
-  if (b_dom_a) return std::partial_ordering::less;
+  // a ⊆ b means a "needs less" → a is better → a dominates b → greater.
+  if (a_subset_b && b_subset_a) return std::partial_ordering::equivalent;
+  if (a_subset_b) return std::partial_ordering::greater;
+  if (b_subset_a) return std::partial_ordering::less;
   return std::partial_ordering::unordered;
+};
+
+/// Lift a member-pointer + per-value comparator into a per-Alt dim function.
+/// Usage: `dim<&Alt::cost>(lower_is_better)` yields a callable
+/// `(Alt const&, Alt const&) -> std::partial_ordering`.
+template <auto MemPtr, typename Cmp>
+[[nodiscard]] constexpr auto dim(Cmp cmp) {
+  return [cmp = std::move(cmp)](auto const &a, auto const &b) -> std::partial_ordering {
+    return cmp(a.*MemPtr, b.*MemPtr);
+  };
+}
+
+/// Fold per-dimension orderings into a single Pareto ordering.
+///   - Any unordered dim → result is unordered.
+///   - Disagreement (one less, another greater) → unordered.
+///   - All equivalent → equivalent.
+///   - Otherwise the agreed direction wins.
+template <typename Alt, typename... Dims>
+[[nodiscard]] auto pareto_fold(Alt const &a, Alt const &b, Dims const &...dims) -> std::partial_ordering {
+  auto acc = std::partial_ordering::equivalent;
+  auto step = [&](std::partial_ordering next) {
+    if (acc == std::partial_ordering::unordered) return;  // already incomparable, stay there
+    if (next == std::partial_ordering::unordered) {       // dim itself incomparable
+      acc = std::partial_ordering::unordered;
+      return;
+    }
+    if (next == std::partial_ordering::equivalent) return;  // tied dim doesn't change direction
+    if (acc == std::partial_ordering::equivalent) {         // first directional dim
+      acc = next;
+      return;
+    }
+    if (acc != next) acc = std::partial_ordering::unordered;  // direction conflict
+  };
+  (step(dims(a, b)), ...);
+  return acc;
 }
 
 /// A combine function for ParetoFrontier::combine: produces a new Alt from a
