@@ -49,7 +49,7 @@ concept DominanceRelation =
 // A dominance functor over Alt can be expressed as the Pareto-fold of one or
 // more per-dimension comparators.  Each comparator answers: "for this single
 // dimension, does a dominate b, get dominated by b, tie, or is the dim itself
-// incomparable?"  pareto_fold combines them: agreement on direction (with at
+// incomparable?"  pareto_compare combines them: agreement on direction (with at
 // least one strict) means dominance; disagreement means incomparable.
 //
 // Convention (matches DominanceRelation):
@@ -112,13 +112,13 @@ template <auto MemPtr, typename Cmp>
   };
 }
 
-/// Fold per-dimension orderings into a single Pareto ordering.
+/// Compare two alts under Pareto with the given per-dimension comparators.
 ///   - Any unordered dim → result is unordered.
 ///   - Disagreement (one less, another greater) → unordered.
 ///   - All equivalent → equivalent.
 ///   - Otherwise the agreed direction wins.
 template <typename Alt, typename... Dims>
-[[nodiscard]] auto pareto_fold(Alt const &a, Alt const &b, Dims const &...dims) -> std::partial_ordering {
+[[nodiscard]] auto pareto_compare(Alt const &a, Alt const &b, Dims const &...dims) -> std::partial_ordering {
   using std::partial_ordering;
   auto acc = partial_ordering::equivalent;
   auto step = [&](partial_ordering next) -> bool {

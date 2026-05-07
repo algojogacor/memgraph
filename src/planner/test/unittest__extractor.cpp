@@ -909,10 +909,10 @@ struct TestDemandAlt {
 
 struct TestDominance {
   auto operator()(TestDemandAlt const &a, TestDemandAlt const &b) const -> std::partial_ordering {
-    return extract::pareto_fold(a,
-                                b,
-                                extract::dim<&TestDemandAlt::cost>(extract::lower_is_better),
-                                extract::dim<&TestDemandAlt::required>(extract::smaller_subset_is_better));
+    return extract::pareto_compare(a,
+                                   b,
+                                   extract::dim<&TestDemandAlt::cost>(extract::lower_is_better),
+                                   extract::dim<&TestDemandAlt::required>(extract::smaller_subset_is_better));
   }
 };
 

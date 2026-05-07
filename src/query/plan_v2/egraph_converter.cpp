@@ -50,10 +50,10 @@ struct Alternative {
 struct AlternativeDominance {
   static auto operator()(Alternative const &a, Alternative const &b) -> std::partial_ordering {
     namespace x = planner::core::extract;
-    return x::pareto_fold(a,
-                          b,
-                          x::dim<&Alternative::cost>(x::lower_is_better),
-                          x::dim<&Alternative::required>(x::smaller_subset_is_better));
+    return x::pareto_compare(a,
+                             b,
+                             x::dim<&Alternative::cost>(x::lower_is_better),
+                             x::dim<&Alternative::required>(x::smaller_subset_is_better));
   }
 };
 

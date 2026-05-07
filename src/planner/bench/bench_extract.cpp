@@ -57,7 +57,7 @@ struct DemandAlt {
 struct DemandDominance {
   static auto operator()(DemandAlt const &a, DemandAlt const &b) -> std::partial_ordering {
     namespace x = memgraph::planner::core::extract;
-    return x::pareto_fold(
+    return x::pareto_compare(
         a, b, x::dim<&DemandAlt::cost>(x::lower_is_better), x::dim<&DemandAlt::required>(x::smaller_subset_is_better));
   }
 };
