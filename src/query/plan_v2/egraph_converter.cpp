@@ -42,17 +42,15 @@ struct Alternative {
   // Set true when emitted by the Bind alive branch (input demands the bound
   // symbol), false for the dead branch and all non-Bind enodes.
   bool is_alive = false;
-
-  auto dominated_by(Alternative const &other) const -> bool {
-    return other.cost <= cost && std::ranges::includes(required, other.required);
-  }
 };
 
 // is_alive intentionally does not participate in dominance: it is a per-alt
 // build-side annotation, orthogonal to the (cost, required) optimisation
 // problem the Pareto frontier solves.
 struct AlternativeDominance {
-  static auto operator()(Alternative const &a, Alternative const &b) -> bool { return a.dominated_by(b); }
+  static auto operator()(Alternative const &a, Alternative const &b) -> std::partial_ordering {
+    return planner::core::extract::pareto_compare(a.cost, a.required, b.cost, b.required);
+  }
 };
 
 /// CostFrontier: ParetoFrontier with resolve/min_cost for the extraction contract.

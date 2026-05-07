@@ -905,14 +905,12 @@ struct TestDemandAlt {
   double cost;
   std::set<int> required;
   ENodeId enode_id;
-
-  auto dominated_by(TestDemandAlt const &other) const -> bool {
-    return other.cost <= cost && std::ranges::includes(required, other.required);
-  }
 };
 
 struct TestDominance {
-  auto operator()(TestDemandAlt const &a, TestDemandAlt const &b) const -> bool { return a.dominated_by(b); }
+  auto operator()(TestDemandAlt const &a, TestDemandAlt const &b) const -> std::partial_ordering {
+    return extract::pareto_compare(a.cost, a.required, b.cost, b.required);
+  }
 };
 
 /// TestFrontier: ParetoFrontier with resolve/min_cost for the extraction contract.

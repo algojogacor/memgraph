@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <compare>
 #include <concepts>
 #include <span>
 #include <utility>
@@ -23,20 +24,72 @@
 namespace memgraph::planner::core::extract {
 
 /// A dominance relation over Alt: a default-constructible binary callable
-/// (Alt const&, Alt const&) -> convertible-to-bool returning true when the
-/// first argument is dominated by the second. The relation MUST be transitive
-/// - if dominates(a, b) and dominates(b, c) then dominates(a, c). prune()'s
-/// early break relies on this property and on nothing else; reflexivity is
-/// permitted (a may dominate itself), and antisymmetry is not required.
-/// Reflexive duplicates resolve to "the later index in iteration order survives."
+/// (Alt const&, Alt const&) -> std::partial_ordering with the convention:
+///   less       - lhs is dominated by rhs (rhs is at least as good in all dims)
+///   greater    - lhs dominates rhs
+///   equivalent - both dominate each other (Pareto-equal: same cost, same demand)
+///   unordered  - incomparable (neither dominates the other)
+/// The dominance relation MUST be transitive - if a >= b and b >= c then
+/// a >= c (with `>=` here meaning "dominates or is equivalent to"). prune()'s
+/// early break relies on this property.
 ///
-/// We use std::invocable (not std::predicate): std::predicate requires
-/// regular_invocable which implies semantic equality preservation, but a
-/// dominance relation is reflexive and not equality-preserving in that sense.
+/// Returning a 3-way ordering (rather than two separate bool calls for the two
+/// directions) lets each dominance functor compare the two alternatives in a
+/// single pass over their per-alt state - typically a sorted required-set,
+/// where the two-bool form would walk both sets twice.
 template <typename Fn, typename Alt>
 concept DominanceRelation =
     std::invocable<Fn, Alt const &, Alt const &> &&
-    std::convertible_to<std::invoke_result_t<Fn, Alt const &, Alt const &>, bool> && std::default_initializable<Fn>;
+    std::convertible_to<std::invoke_result_t<Fn, Alt const &, Alt const &>, std::partial_ordering> &&
+    std::default_initializable<Fn>;
+
+/// Helper for cost+sorted-required-set Pareto comparison.  Single forward pass
+/// over both required sets to determine subset relationships, then combines
+/// with cost comparison to yield a partial_ordering.
+///
+/// Convention (matches DominanceRelation):
+///   less        - a is dominated by b (b cheaper-or-equal AND b's demands ⊆ a's)
+///   greater     - a dominates b
+///   equivalent  - Pareto-equal (same cost, same demand set)
+///   unordered   - incomparable
+template <typename Cost, std::ranges::input_range Required>
+[[nodiscard]] auto pareto_compare(Cost const &a_cost, Required const &a_required, Cost const &b_cost,
+                                  Required const &b_required) -> std::partial_ordering {
+  // Single forward pass: walk both sorted ranges to determine
+  // (a_required ⊆ b_required) and (b_required ⊆ a_required) simultaneously.
+  auto it_a = std::ranges::begin(a_required);
+  auto const end_a = std::ranges::end(a_required);
+  auto it_b = std::ranges::begin(b_required);
+  auto const end_b = std::ranges::end(b_required);
+  bool a_subset_b = true;
+  bool b_subset_a = true;
+  while (it_a != end_a && it_b != end_b) {
+    if (*it_a < *it_b) {
+      // *it_a is in a but not in b → a is not a subset of b
+      a_subset_b = false;
+      ++it_a;
+    } else if (*it_b < *it_a) {
+      // *it_b is in b but not in a → b is not a subset of a
+      b_subset_a = false;
+      ++it_b;
+    } else {
+      ++it_a;
+      ++it_b;
+    }
+    if (!a_subset_b && !b_subset_a) break;  // already incomparable on demands
+  }
+  // Leftovers: any remaining element of a is absent from b (since it's larger
+  // than every element b ever had), and vice versa.
+  if (it_a != end_a) a_subset_b = false;
+  if (it_b != end_b) b_subset_a = false;
+
+  bool const a_dom_b = a_cost <= b_cost && a_subset_b;
+  bool const b_dom_a = b_cost <= a_cost && b_subset_a;
+  if (a_dom_b && b_dom_a) return std::partial_ordering::equivalent;
+  if (a_dom_b) return std::partial_ordering::greater;
+  if (b_dom_a) return std::partial_ordering::less;
+  return std::partial_ordering::unordered;
+}
 
 /// A combine function for ParetoFrontier::combine: produces a new Alt from a
 /// pair of input Alts (one cartesian-product element).  Callable repeatedly
@@ -177,14 +230,17 @@ struct ParetoFrontier {
       auto const j_start = std::max(pruned_prefix, i + 1);
       for (size_t j = j_start; j < n; ++j) {
         if (dominated[j]) continue;
-        if (DominanceFn{}(alts_[i], alts_[j])) {
+        auto const cmp = DominanceFn{}(alts_[i], alts_[j]);
+        if (cmp == std::partial_ordering::less || cmp == std::partial_ordering::equivalent) {
+          // i dominated by j (or Pareto-equal: drop one, keep j by convention).
           dominated[i] = true;
           // Transitivity break - see prune() / DominanceRelation concept.
           break;
         }
-        if (DominanceFn{}(alts_[j], alts_[i])) {
+        if (cmp == std::partial_ordering::greater) {
           dominated[j] = true;
         }
+        // unordered: keep both, continue scanning.
       }
     }
 
