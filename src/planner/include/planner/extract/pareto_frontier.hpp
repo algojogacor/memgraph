@@ -43,9 +43,15 @@ concept DominanceRelation =
     std::convertible_to<std::invoke_result_t<Fn, Alt const &, Alt const &>, std::partial_ordering> &&
     std::default_initializable<Fn>;
 
-/// Helper for cost+sorted-required-set Pareto comparison.  Single forward pass
-/// over both required sets to determine subset relationships, then combines
-/// with cost comparison to yield a partial_ordering.
+/// Dominance comparison for the specific 2D shape `(scalar cost, sorted set
+/// of required things)`, where "lower cost is better" and "smaller required
+/// set is better."  This is NOT a general Pareto primitive - it captures the
+/// one shape every cost model in this codebase happens to use, in one place
+/// instead of three.  If a future cost model has a different shape, write its
+/// own dominance functor; do not generalise this.
+///
+/// One forward pass over both required sets determines subset relationships,
+/// then combines with cost comparison to yield a std::partial_ordering.
 ///
 /// Convention (matches DominanceRelation):
 ///   less        - a is dominated by b (b cheaper-or-equal AND b's demands ⊆ a's)
@@ -53,8 +59,8 @@ concept DominanceRelation =
 ///   equivalent  - Pareto-equal (same cost, same demand set)
 ///   unordered   - incomparable
 template <typename Cost, std::ranges::input_range Required>
-[[nodiscard]] auto pareto_compare(Cost const &a_cost, Required const &a_required, Cost const &b_cost,
-                                  Required const &b_required) -> std::partial_ordering {
+[[nodiscard]] auto compare_by_cost_and_demand(Cost const &a_cost, Required const &a_required, Cost const &b_cost,
+                                              Required const &b_required) -> std::partial_ordering {
   // Single forward pass: walk both sorted ranges to determine
   // (a_required ⊆ b_required) and (b_required ⊆ a_required) simultaneously.
   auto it_a = std::ranges::begin(a_required);

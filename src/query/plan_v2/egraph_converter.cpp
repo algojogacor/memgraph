@@ -49,7 +49,7 @@ struct Alternative {
 // problem the Pareto frontier solves.
 struct AlternativeDominance {
   static auto operator()(Alternative const &a, Alternative const &b) -> std::partial_ordering {
-    return planner::core::extract::pareto_compare(a.cost, a.required, b.cost, b.required);
+    return planner::core::extract::compare_by_cost_and_demand(a.cost, a.required, b.cost, b.required);
   }
 };
 
