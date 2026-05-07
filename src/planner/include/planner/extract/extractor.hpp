@@ -164,15 +164,17 @@ template <typename Symbol, typename Analysis, typename CostModel>
     // of this function (overwriting the sentinel for `eclass_id`), and that
     // does not trigger a rehash since the key already exists.
     children_frontiers.clear();
+    children_frontiers.reserve(enode.children().size());
     auto has_cyclic_child = false;
     for (auto child : enode.children()) {
       auto it = frontier_map.find(child);
       if (it == frontier_map.end() || !it->second) {
         // Erased (fully cyclic) or in-progress sentinel (self/mutual cycle).
+        // Cost model won't be called, no need to gather remaining children.
         has_cyclic_child = true;
-      } else {
-        children_frontiers.push_back(&*it->second);
+        break;
       }
+      children_frontiers.push_back(&*it->second);
     }
     if (has_cyclic_child) continue;
 
