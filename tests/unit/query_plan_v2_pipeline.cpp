@@ -353,7 +353,7 @@ INSTANTIATE_TEST_SUITE_P(
         PipelineTestCase{
             .name = "WithMultipleLiterals",
             .query = "WITH 1 AS a, 2 AS b RETURN a, b;",
-            .expected_details = {"Produce {a`1:1, b`0:2}", "Once"},  // dead store: both Binds eliminated
+            .expected_details = {"Produce {a`0:1, b`1:2}", "Once"},  // dead store: both Binds eliminated
             .min_rewrites = 2,
             .should_saturate = true,
         },
@@ -602,7 +602,7 @@ INSTANTIATE_TEST_SUITE_P(
         PipelineTestCase{
             .name = "MultipleUsesOfSameSymbol",
             .query = "WITH 1 AS x RETURN x AS a, x AS b;",
-            .expected_details = {"Produce {a`1:1, b`0:1}", "Once"},
+            .expected_details = {"Produce {a`0:1, b`1:1}", "Once"},
             .min_rewrites = 1,
             .should_saturate = true,
         },
@@ -661,7 +661,7 @@ INSTANTIATE_TEST_SUITE_P(
         PipelineTestCase{
             .name = "SameExpressionTwoOutputs",
             .query = "RETURN 1 + 2 AS a, 1 + 2 AS b;",
-            .expected_details = {"Produce {a`1:(1 + 2), b`0:(1 + 2)}", "Once"},
+            .expected_details = {"Produce {a`0:(1 + 2), b`1:(1 + 2)}", "Once"},
             .min_rewrites = 0,
             .should_saturate = true,
         },
@@ -772,7 +772,7 @@ INSTANTIATE_TEST_SUITE_P(
         PipelineTestCase{
             .name = "SharedBindTwoConsumers",
             .query = "WITH 1 AS a RETURN a AS x, a AS y;",
-            .expected_details = {"Produce {x`1:1, y`0:1}", "Once"},
+            .expected_details = {"Produce {x`0:1, y`1:1}", "Once"},
             .min_rewrites = 1,
             .should_saturate = true,
         },
@@ -780,7 +780,7 @@ INSTANTIATE_TEST_SUITE_P(
         PipelineTestCase{
             .name = "ChainedBindCascade",
             .query = "WITH 1 AS a WITH a AS b RETURN b AS x, 1 AS y;",
-            .expected_details = {"Produce {x`1:1, y`0:1}", "Once"},
+            .expected_details = {"Produce {x`0:1, y`1:1}", "Once"},
             .min_rewrites = 1,
             .should_saturate = true,
         }

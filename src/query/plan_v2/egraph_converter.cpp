@@ -218,43 +218,70 @@ struct PlanCostModel {
   }
 };
 
-/// Context-aware top-down resolver: propagates a "provided" set (symbols
-/// bound by Bind ancestors) so child selections stay consistent with parent
-/// alive/dead decisions.  Stateless functor; per-call state lives on Impl.
+/// Identifies one resolved "node" in the extracted plan.  Two parent paths
+/// that visit the same e-class with different sets of variables in scope
+/// get different ResolvedKeys, so each picks its own optimal alternative.
+/// Without this, a parent path with a richer scope could be forced to
+/// reuse an earlier path's pick that doesn't lean on the extra bindings.
+struct ResolvedKey {
+  planner::core::EClassId eclass;
+  SymbolSet provided;
+
+  bool operator==(ResolvedKey const &) const = default;
+};
+
+struct ResolvedKeyHash {
+  std::size_t operator()(ResolvedKey const &k) const noexcept {
+    auto h = boost::hash<planner::core::EClassId>{}(k.eclass);
+    for (auto const &id : k.provided) {
+      boost::hash_combine(h, boost::hash<planner::core::EClassId>{}(id));
+    }
+    return h;
+  }
+};
+
+/// One entry in the resolver's topological output: this (eclass, provided)
+/// resolved to `enode_id`.  `is_alive` is meaningful only for Bind enodes;
+/// the builder reads it to decide whether sym/expr children participate.
+struct TopoEntry {
+  ResolvedKey key;
+  planner::core::ENodeId enode_id;
+  bool is_alive = false;
+};
+
+/// Context-aware resolver with PER-PATH caching.
+///
+/// Each (eclass, provided) pair is resolved exactly once.  Different parent
+/// paths that visit the same eclass under different scopes get distinct
+/// selections - each path picks the cheapest alternative feasible under
+/// its own provided set, so no path is forced to settle for a sub-optimal
+/// alt that another path's smaller scope already chose.
+///
+/// Output is a topological order (children-before-parents) of TopoEntries.
+/// The builder consumes this order, keying its build cache by ResolvedKey,
+/// so subtrees are shared exactly when they appear under the same provided
+/// context and instantiated independently when they don't.
 struct PlanResolver {
   using EClassId = planner::core::EClassId;
-  using Selection = planner::core::extract::Selection<double>;
-  using SelectionMap = planner::core::extract::SelectionMap<double>;
   using FrontierMap = planner::core::extract::FrontierMap<CostFrontier>;
   using EGraph = planner::core::EGraph<symbol, analysis>;
+  using TopoOrder = std::vector<TopoEntry>;
 
-  void operator()(EGraph const &egraph, FrontierMap const &frontier_map, EClassId root, SelectionMap &out) const {
-    assert(out.empty() && "Resolver precondition: out must be empty on entry");
-    Impl impl{egraph, frontier_map};
-    impl.resolve_impl(root, SymbolSet{});
-    std::move(impl).fill(out);
+  void operator()(EGraph const &egraph, FrontierMap const &frontier_map, EClassId root, TopoOrder &out_order) const {
+    assert(out_order.empty() && "Resolver precondition: out must be empty on entry");
+    Impl impl{egraph, frontier_map, {}, out_order};
+    impl.resolve_and_emit(root, SymbolSet{});
   }
 
  private:
-  struct ResolvedEntry {
-    Selection sel;
-    SymbolSet required;
-  };
-
-  /// Per-call working state.  Lives only for the duration of one operator().
   struct Impl {
     // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
     EGraph const &egraph;
     // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
     FrontierMap const &frontier_map;
-    boost::unordered_flat_map<EClassId, ResolvedEntry> resolved;
-
-    void fill(SelectionMap &out) && {
-      out.reserve(resolved.size());
-      for (auto &&[id, entry] : resolved) {
-        out.emplace(id, std::move(entry.sel));
-      }
-    }
+    boost::unordered_flat_set<ResolvedKey, ResolvedKeyHash> seen;
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
+    TopoOrder &out_order;
 
     /// At this point in the plan, `provided` is the set of variables that
     /// have already been introduced by Binds higher up.  Each candidate
@@ -281,77 +308,42 @@ struct PlanResolver {
       return *best;
     }
 
-    /// We've just picked a Bind alternative.  Bind has three children:
-    ///   input - the rest of the plan that may use this binding.
-    ///   sym   - the variable name being introduced.
-    ///   expr  - the value to bind to that name.
-    ///
-    /// `is_alive` was decided earlier (during cost computation) by asking:
-    /// "does the input actually use `sym`?"  We just respect that decision.
-    void visit_bind_children(EClassId input_eclass, EClassId sym_eclass, EClassId expr_eclass,
-                             SymbolSet const &bind_provided, bool is_alive) {
-      if (is_alive) {
-        // The input below this Bind uses `sym`, so this Bind earns its
-        // keep.  Walking into input, `sym` is now in scope - add it to
-        // `provided`.
-        auto alive_provided = bind_provided;
-        alive_provided.insert(sym_eclass);
-        resolve_impl(input_eclass, alive_provided);
+    /// Resolve this (eclass, provided) once, recursively resolve children
+    /// with their own provided contexts (Bind alive/dead decides what each
+    /// child sees), then emit this entry.  Post-order push gives a
+    /// children-before-parents topological order.
+    void resolve_and_emit(EClassId eclass_id, SymbolSet provided) {
+      auto key = ResolvedKey{eclass_id, std::move(provided)};
+      if (!seen.insert(key).second) return;
 
-        // The `sym` child is just the variable name; it doesn't reference
-        // anything, so any `provided` context is fine.  We pass the
-        // pre-Bind set so we don't suggest the name "uses itself".
-        resolve_impl(sym_eclass, bind_provided);
-
-        // `expr` computes the value we'll bind to `sym`.  `let a = a + 1`
-        // can't reference its own left-hand side, so `expr` is NOT given
-        // `sym` in scope.
-        resolve_impl(expr_eclass, bind_provided);
-      } else {
-        // Nothing inside the input actually uses `sym`, so this Bind is a
-        // no-op pass-through.  We won't generate code for sym or expr -
-        // they're unreachable.
-        //
-        // Subtle DAG case: this same Bind eclass might have been visited
-        // before from a different parent path where it WAS alive, leaving
-        // resolved entries for sym/expr behind.  Wipe them so we don't
-        // emit code for parts of the plan that are no longer chosen.
-        resolved.erase(sym_eclass);
-        resolved.erase(expr_eclass);
-        resolve_impl(input_eclass, bind_provided);
-      }
-    }
-
-    /// Pick which alternative to use at one node in the plan.
-    /// `provided` is the set of variables in scope here (from Binds above).
-    void resolve_impl(EClassId eclass_id, SymbolSet const &provided) {
-      // We may have already picked an alternative for this node from a
-      // different parent (the plan is a DAG, not a tree).  If that earlier
-      // pick still works under the variables in scope right now, reuse it;
-      // otherwise pick again and let the change propagate down.
-      if (auto existing = resolved.find(eclass_id);
-          existing != resolved.end() && bind::IsCompatible(existing->second.required, provided)) {
-        return;
-      }
-
-      auto it = frontier_map.find(eclass_id);
-      assert(it != frontier_map.end() && it->second.has_value());
-      auto const &chosen = pick_compatible(*it->second, provided);
-      resolved[eclass_id] = ResolvedEntry{Selection{chosen.enode_id, chosen.cost}, chosen.required};
+      auto fr_it = frontier_map.find(eclass_id);
+      assert(fr_it != frontier_map.end() && fr_it->second.has_value());
+      auto const &chosen = pick_compatible(*fr_it->second, key.provided);
 
       auto const &enode = egraph.get_enode(chosen.enode_id);
       auto const &children = enode.children();
-      if (enode.symbol() == symbol::Bind && children.size() == 3) {
-        // Bind's three children get different "in-scope" contexts; the
-        // helper above explains why.
-        visit_bind_children(children[0], children[1], children[2], provided, chosen.is_alive);
+      bool const is_bind = enode.symbol() == symbol::Bind && children.size() == 3;
+
+      if (is_bind && chosen.is_alive) {
+        // Alive Bind: input child sees `sym` newly in scope; sym/expr
+        // children inherit the pre-Bind context (sym leaf doesn't demand
+        // anything; expr cannot reference its own LHS).
+        auto alive_provided = key.provided;
+        alive_provided.insert(children[1]);
+        resolve_and_emit(children[0], std::move(alive_provided));
+        resolve_and_emit(children[1], key.provided);
+        resolve_and_emit(children[2], key.provided);
+      } else if (is_bind) {
+        // Dead Bind: input only; sym/expr aren't reachable from here.
+        resolve_and_emit(children[0], key.provided);
       } else {
-        // Anything other than Bind doesn't introduce a new variable, so
-        // children see the same set of variables in scope as we do.
+        // Anything else: children inherit the same scope.
         for (auto child : children) {
-          resolve_impl(child, provided);
+          resolve_and_emit(child, key.provided);
         }
       }
+
+      out_order.push_back(TopoEntry{std::move(key), chosen.enode_id, chosen.is_alive});
     }
   };
 };
@@ -555,7 +547,13 @@ struct Builder {
 /// If the invariant is violated, the function throws QueryException rather than invoking
 /// undefined behaviour.
 struct QueryPlannerContext::Impl {
-  planner::core::extract::ExtractionContext<CostFrontier> ctx;
+  planner::core::extract::FrontierMap<CostFrontier> frontier_map;
+  std::vector<TopoEntry> topo;
+
+  void clear() {
+    frontier_map.clear();
+    topo.clear();
+  }
 };
 
 QueryPlannerContext::QueryPlannerContext() : impl_(std::make_unique<Impl>()) {}
@@ -574,13 +572,12 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
 
   // Cleared on every call so capacity is preserved across queries but
   // contents start empty.
-  auto &ctx = planner_context.impl().ctx;
+  auto &ctx = planner_context.impl();
   ctx.clear();
 
   // Root-satisfiability precondition: ComputeFrontiers must have produced at
   // least one self-contained alternative for the root (required == {}).
-  // We compute frontiers eagerly here so we can validate before resolve;
-  // the same frontier map is then handed to Extract via the ExtractionContext.
+  // We compute frontiers eagerly here so we can validate before resolve.
   (void)extract::ComputeFrontiers(impl.egraph_, PlanCostModel{}, true_root, ctx.frontier_map);
 
   auto const root_it = ctx.frontier_map.find(true_root);
@@ -597,18 +594,13 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
         "Ensure all Identifier references are resolved by rewrites before extraction."};
   }
 
-  // Resolve + collect-deps + topo-sort.  ComputeFrontiers above already
-  // populated ctx.frontier_map; Extract picks up there and runs the rest of
-  // the pipeline.
-  PlanResolver{}(impl.egraph_, ctx.frontier_map, true_root, ctx.selection);
-  extract::CollectDependencies(impl.egraph_, ctx.selection, true_root, ctx.deps, ctx.in_degree);
-  extract::TopologicalSort(impl.egraph_, ctx.selection, ctx.in_degree, ctx.ready, ctx.order);
-  auto const &selection = ctx.order;
+  // Resolve produces a children-before-parents topological order of
+  // (eclass, provided) pairs - one entry per distinct path-context the
+  // resolver visited, so each path can pick the alt that's optimal under
+  // its own scope.
+  PlanResolver{}(impl.egraph_, ctx.frontier_map, true_root, ctx.topo);
 
-  /// STAGE: Build selected (LogicalOperator, Expression *, Symbol, NamedExpression *, etc)
-  /// Dead Binds are already handled: PlanResolver skips sym/expr children
-  /// for dead Binds, so they're absent from the selection. CollectDependencies
-  /// only walks resolved children, so dead Bind's sym/expr never enter the topo sort.
+  /// STAGE: Build selected (LogicalOperator, Expression *, Symbol, NamedExpression *, etc.)
   auto builder = Builder{impl.storage<symbol::Literal>().store,
                          impl.storage<symbol::NamedOutput>().store,
                          impl.storage<symbol::Symbol>().store};
@@ -635,61 +627,69 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   //       span of refs into build_cache; we materialise its return into a
   //       local BEFORE the LHS [] runs.
   //
-  // Belt-and-braces: reserve(selection.size()) up-front so the loop's []
-  // inserts can never rehash.  The reserve makes the bug structurally
-  // impossible at the current call sites; the read-then-assign pattern keeps
-  // it impossible if a future caller forgets the reserve or sizes it wrong.
-  auto build_cache = boost::unordered_flat_map<planner::core::EClassId, BuildResult>{};
-  build_cache.reserve(selection.size());
+  // Belt-and-braces: reserve(topo.size()) up-front so the loop's []
+  // inserts can never rehash.
+  auto build_cache = boost::unordered_flat_map<ResolvedKey, BuildResult, ResolvedKeyHash>{};
+  build_cache.reserve(ctx.topo.size());
 
-  auto const cache_lookup = [&](const planner::core::EClassId id) {
-    auto const it = build_cache.find(id);
+  auto const cache_lookup = [&](ResolvedKey const &child_key) {
+    auto const it = build_cache.find(child_key);
     DMG_ASSERT(it != build_cache.end(), "Building bottom up we should be able to find our child");
     return std::cref(it->second);
   };
-  // Use reverse order to build from bottom up
-  // This is so we can use the build_cache
+  // topo is already in children-before-parents order from the resolver;
+  // walk it forward.
   auto children_refs = std::vector<child_ref>{};
-  for (auto [eclass_id, enode_id] : std::views::reverse(selection)) {
-    auto const &enode = impl.egraph_.get_enode(enode_id);
+  for (auto const &entry : ctx.topo) {
+    auto const &enode = impl.egraph_.get_enode(entry.enode_id);
+    auto const &children = enode.children();
+    bool const is_bind = enode.symbol() == symbol::Bind && children.size() == 3;
 
-    // Dead Bind detection: PlanResolver excludes sym/expr e-classes from the resolved
-    // selection when it determines the Bind is dead (sym not needed downstream).
-    // CollectDependencies skips children absent from the selection, so dead sym/expr
-    // never enter the topo sort. TopologicalSort therefore never emits them, and the
-    // builder loop never inserts them into build_cache.
-    //
-    // Invariant: sym (children()[1]) is in build_cache <-> Bind is alive.
-    // Note: this is the *post-resolution observation* of aliveness - the resolver
-    // has already decided alive vs dead via bind::IsAlive on the input alt's demand
-    // set, and the topo-sort either includes or excludes sym based on that.  We
-    // observe the result here rather than re-deciding.  Checking sym (not expr) is
-    // consistent with the resolver's predicate which keys on the symbol being bound.
-    if (enode.symbol() == symbol::Bind) {
-      assert(enode.children().size() == 3 && "Bind must have exactly 3 children");
-      if (!build_cache.contains(enode.children()[1])) {  // sym absent => dead Bind
-        // See contract (1) above: read first, then assign.
-        auto input_result = build_cache.at(enode.children()[0]);
-        build_cache[eclass_id] = std::move(input_result);
-        continue;
-      }
+    // Dead Bind: pass through input.  sym/expr were never resolved for
+    // this (eclass, provided) pair, so they're absent from build_cache.
+    if (is_bind && !entry.is_alive) {
+      // See contract (1) above: read first, then assign.
+      auto input_result = build_cache.at(ResolvedKey{children[0], entry.key.provided});
+      build_cache[entry.key] = std::move(input_result);
+      continue;
     }
 
     children_refs.clear();
-    children_refs.reserve(enode.children().size());
-    std::ranges::copy(enode.children() | std::views::transform(cache_lookup), std::back_inserter(children_refs));
+    children_refs.reserve(children.size());
+    if (is_bind) {
+      // Alive Bind: input child sees `provided + sym`, sym/expr children
+      // see plain `provided`.  Same context the resolver used.
+      auto alive_provided = entry.key.provided;
+      alive_provided.insert(children[1]);
+      children_refs.push_back(cache_lookup(ResolvedKey{children[0], std::move(alive_provided)}));
+      children_refs.push_back(cache_lookup(ResolvedKey{children[1], entry.key.provided}));
+      children_refs.push_back(cache_lookup(ResolvedKey{children[2], entry.key.provided}));
+    } else {
+      // Non-Bind: every child shares the parent's `provided`.
+      for (auto child : children) {
+        children_refs.push_back(cache_lookup(ResolvedKey{child, entry.key.provided}));
+      }
+    }
     // See contract (2) above: materialise Build's result before the LHS [] runs.
     auto build_result = builder.Build(enode, children_refs);
-    build_cache[eclass_id] = std::move(build_result);
+    build_cache[entry.key] = std::move(build_result);
   }
 
-  // STAGE: Get the built root as std::unique_ptr<LogicalOperator>
-  auto *ptr = std::get_if<LogicalOperatorPtr>(&build_cache[true_root]);
+  // STAGE: Get the built root as std::unique_ptr<LogicalOperator>.
+  auto root_key = ResolvedKey{true_root, SymbolSet{}};
+  auto *ptr = std::get_if<LogicalOperatorPtr>(&build_cache[root_key]);
   if (!ptr) throw QueryException{"Root should be LogicalOperator"};
   auto &result = *ptr;
 
   auto unique_result = result->Clone(&builder.ast_storage_);
-  auto root_cost = ctx.selection.at(true_root).cost;
+  // Root cost: the cheapest self-contained alt at the root (the one the
+  // resolver would pick under provided={}).
+  auto root_cost = std::numeric_limits<double>::infinity();
+  for (auto const &alt : root_frontier.alts()) {
+    if (alt.required.empty() && alt.cost < root_cost) {
+      root_cost = alt.cost;
+    }
+  }
   return {std::move(unique_result), root_cost, std::move(builder.ast_storage_), std::move(builder.symbol_table_)};
 }
 }  // namespace memgraph::query::plan::v2
