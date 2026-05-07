@@ -574,8 +574,8 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   // populated ctx.frontier_map; Extract picks up there and runs the rest of
   // the pipeline.
   PlanResolver{}(impl.egraph_, ctx.frontier_map, true_root, ctx.selection);
-  extract::CollectDependencies(impl.egraph_, ctx.selection, true_root, ctx.in_degree, ctx.deps);
-  extract::TopologicalSort(impl.egraph_, ctx.selection, ctx.in_degree, ctx.order, ctx.ready);
+  extract::CollectDependencies(impl.egraph_, ctx.selection, true_root, ctx.deps, ctx.in_degree);
+  extract::TopologicalSort(impl.egraph_, ctx.selection, ctx.in_degree, ctx.ready, ctx.order);
   auto const &selection = ctx.order;
 
   /// STAGE: Build selected (LogicalOperator, Expression *, Symbol, NamedExpression *, etc)

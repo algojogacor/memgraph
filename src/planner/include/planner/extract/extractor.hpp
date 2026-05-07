@@ -128,13 +128,13 @@ using InDegreeMap = boost::unordered_flat_map<EClassId, int>;
 template <typename Symbol, typename Analysis, typename CostModel>
   requires CostResultType<typename CostModel::CostResult>
 [[nodiscard]] auto ComputeFrontiers(EGraph<Symbol, Analysis> const &egraph, CostModel const &cost_model,
-                                    EClassId eclass_id, FrontierMap<typename CostModel::CostResult> &frontier_map) ->
-    typename CostModel::CostResult const * {
+                                    EClassId eclass_id, FrontierMap<typename CostModel::CostResult> &out)
+    -> CostModel::CostResult const * {
   using CostResult = CostModel::CostResult;
 
   assert(!egraph.needs_rebuild() && "egraph must be rebuilt before extraction");
 
-  if (auto const it = frontier_map.find(eclass_id); it != frontier_map.end()) {
+  if (auto const it = out.find(eclass_id); it != out.end()) {
     return it->second ? &*it->second : nullptr;
   }
 
@@ -143,7 +143,7 @@ template <typename Symbol, typename Analysis, typename CostModel>
   // Mark this e-class as "in progress" with nullopt frontier to detect cycles.
   // Iterator from this emplace is not retained: recursive calls below may
   // rehash frontier_map and invalidate it.
-  frontier_map.emplace(eclass_id, std::nullopt);
+  out.emplace(eclass_id, std::nullopt);
 
   auto merged_frontier = std::optional<CostResult>{};
 
@@ -155,7 +155,7 @@ template <typename Symbol, typename Analysis, typename CostModel>
     // pointers because subsequent recursive inserts may rehash and invalidate
     // them (boost::unordered_flat_map uses open addressing).
     for (auto child : enode.children()) {
-      (void)ComputeFrontiers(egraph, cost_model, child, frontier_map);
+      (void)ComputeFrontiers(egraph, cost_model, child, out);
     }
 
     // Phase 2: look up each child's frontier now that no further inserts will
@@ -167,8 +167,8 @@ template <typename Symbol, typename Analysis, typename CostModel>
     children_frontiers.reserve(enode.children().size());
     auto has_cyclic_child = false;
     for (auto child : enode.children()) {
-      auto it = frontier_map.find(child);
-      if (it == frontier_map.end() || !it->second) {
+      auto it = out.find(child);
+      if (it == out.end() || !it->second) {
         // Erased (fully cyclic) or in-progress sentinel (self/mutual cycle).
         // Cost model won't be called, no need to gather remaining children.
         has_cyclic_child = true;
@@ -178,7 +178,7 @@ template <typename Symbol, typename Analysis, typename CostModel>
     }
     if (has_cyclic_child) continue;
 
-    auto enode_frontier = cost_model(enode, enode_id, std::span<CostResult const *const>{children_frontiers});
+    auto enode_frontier = cost_model(enode, enode_id, children_frontiers);
 
     if (!merged_frontier) {
       merged_frontier = std::move(enode_frontier);
@@ -189,15 +189,15 @@ template <typename Symbol, typename Analysis, typename CostModel>
 
   // Re-find: the sentinel iterator from emplace above may have been
   // invalidated by rehashes during recursion.
-  auto sentinel_it = frontier_map.find(eclass_id);
-  assert(sentinel_it != frontier_map.end());
+  auto sentinel_it = out.find(eclass_id);
+  assert(sentinel_it != out.end());
   if (merged_frontier) {
     sentinel_it->second = std::move(merged_frontier);
     return &*sentinel_it->second;
   }
 
   // All enodes cyclic - remove sentinel
-  frontier_map.erase(sentinel_it);
+  out.erase(sentinel_it);
   return nullptr;
 }
 
@@ -215,12 +215,13 @@ struct TraversalScratch {
 
 template <typename Symbol, typename Analysis, typename CostResult>
 void CollectDependencies(EGraph<Symbol, Analysis> const &egraph, SelectionMap<CostResult> const &enode_selection,
-                         EClassId root, InDegreeMap &out, TraversalScratch &scratch) {
+                         EClassId root, TraversalScratch &scratch, InDegreeMap &out) {
   out.emplace(root, 0);
+  auto const n = enode_selection.size();
+  scratch.worklist.reserve(n);
+  scratch.visited.reserve(n);
   scratch.worklist.push_back(root);
   scratch.visited.insert(root);
-  scratch.worklist.reserve(enode_selection.size());
-  scratch.visited.reserve(enode_selection.size());
 
   // Iterative DFS traversal (LIFO worklist).
   while (!scratch.worklist.empty()) {
@@ -248,8 +249,8 @@ void CollectDependencies(EGraph<Symbol, Analysis> const &egraph, SelectionMap<Co
 /// from the caller's perspective.  `out` and `ready` are filled (caller-clears).
 template <typename Symbol, typename Analysis, typename CostResult>
 void TopologicalSort(EGraph<Symbol, Analysis> const &egraph, SelectionMap<CostResult> const &enode_selection,
-                     InDegreeMap &in_degree, std::vector<std::pair<EClassId, ENodeId>> &out,
-                     std::deque<EClassId> &ready) {
+                     InDegreeMap &in_degree, std::deque<EClassId> &ready,
+                     std::vector<std::pair<EClassId, ENodeId>> &out) {
   auto const expected = in_degree.size();
   out.reserve(expected);
 
@@ -348,10 +349,10 @@ template <typename Symbol, typename Analysis, typename CostModel, typename Resol
   resolver(egraph, ctx.frontier_map, root, ctx.selection);
 
   // Stage 3: count in-degrees over the resolver-chosen child set.
-  CollectDependencies(egraph, ctx.selection, root, ctx.in_degree, ctx.deps);
+  CollectDependencies(egraph, ctx.selection, root, ctx.deps, ctx.in_degree);
 
   // Stage 4: topological sort.  Consumes ctx.in_degree in place.
-  TopologicalSort(egraph, ctx.selection, ctx.in_degree, ctx.order, ctx.ready);
+  TopologicalSort(egraph, ctx.selection, ctx.in_degree, ctx.ready, ctx.order);
 
   auto root_cost = typename CostResult::cost_t{};
   if (auto it = ctx.selection.find(root); it != ctx.selection.end()) {
