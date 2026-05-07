@@ -119,21 +119,15 @@ template <typename Alt, typename DominanceFn>
 struct ParetoFrontier {
   ParetoFrontier() = default;
 
+  /// Construct from an unpruned list of alternatives.  Prunes on construction
+  /// so the resulting frontier satisfies the Pareto invariant.  This is the
+  /// only way to seed a frontier from raw data; flat_map / combine /
+  /// merge_in_place are the compositional alternatives.
+  explicit ParetoFrontier(std::vector<Alt> alts) : alts_(std::move(alts)) { prune(); }
+
   /// Read-only view over the (Pareto-pruned) alternatives.  Returning span keeps
   /// the storage choice (currently std::vector) out of the public contract.
   [[nodiscard]] auto alts() const noexcept -> std::span<Alt const> { return alts_; }
-
-  /// Construct from an unpruned list of alternatives.  Prunes on construction
-  /// so the resulting frontier satisfies the Pareto invariant.  This is the
-  /// only public way to seed a frontier from raw data; the static factories
-  /// below (flat_map / combine) and merge_in_place handle compositional
-  /// construction.
-  [[nodiscard]] static auto from_unpruned(std::vector<Alt> alts) -> ParetoFrontier {
-    auto result = ParetoFrontier{};
-    result.alts_ = std::move(alts);
-    result.prune();
-    return result;
-  }
 
   /// In-place mutation that the caller promises preserves the Pareto invariant.
   /// Calls fn(alt) on each surviving alt; no re-prune is performed.
@@ -157,13 +151,12 @@ struct ParetoFrontier {
   /// @param fn  (Alt const&, auto emit) -> void - calls emit(Alt&&) to produce output alternatives.
   template <typename Fn>
   [[nodiscard]] static auto flat_map(ParetoFrontier const &input, Fn &&fn) -> ParetoFrontier {
-    auto result = ParetoFrontier{};
-    result.alts_.reserve(input.alts_.size());  // heuristic: at least one output per input
+    auto out = std::vector<Alt>{};
+    out.reserve(input.alts_.size());  // heuristic: at least one output per input
     for (auto const &alt : input.alts_) {
-      fn(alt, [&](Alt &&out) { result.alts_.push_back(std::move(out)); });
+      fn(alt, [&](Alt &&v) { out.push_back(std::move(v)); });
     }
-    result.prune();
-    return result;
+    return ParetoFrontier{std::move(out)};
   }
 
   /// Union another frontier into this one and re-prune.  Both `*this` and
@@ -183,15 +176,14 @@ struct ParetoFrontier {
     requires Combiner<CombineFn, Alt>
   [[nodiscard]] static auto combine(ParetoFrontier const &lhs, ParetoFrontier const &rhs, CombineFn &&combine_fn)
       -> ParetoFrontier {
-    auto result = ParetoFrontier{};
-    result.alts_.reserve(lhs.alts_.size() * rhs.alts_.size());
+    auto out = std::vector<Alt>{};
+    out.reserve(lhs.alts_.size() * rhs.alts_.size());
     for (auto const &l : lhs.alts_) {
       for (auto const &r : rhs.alts_) {
-        result.alts_.push_back(combine_fn(l, r));
+        out.push_back(combine_fn(l, r));
       }
     }
-    result.prune();
-    return result;
+    return ParetoFrontier{std::move(out)};
   }
 
  private:
@@ -282,16 +274,13 @@ struct CostResultBase : ParetoFrontier<Alt, DominanceFn> {
   // NOLINTNEXTLINE(google-explicit-constructor)
   CostResultBase(Base base) : Base(std::move(base)) {}
 
-  /// Initializer-list construction prunes on construction - no path to a
-  /// non-pruned frontier from outside the class hierarchy.
-  CostResultBase(std::initializer_list<Alt> init) : Base(Base::from_unpruned(std::vector<Alt>(init))) {}
+  /// Initializer-list construction prunes on construction.
+  CostResultBase(std::initializer_list<Alt> init) : Base(std::vector<Alt>(init)) {}
 
   /// Vector construction prunes on construction.  Sibling of the
-  /// initializer-list ctor for callers that build alts at runtime; replaces
-  /// an explicit `from_unpruned` factory so callers don't have to repeat the
-  /// derived type as a template argument.
+  /// initializer-list ctor for callers that build alts at runtime.
   // NOLINTNEXTLINE(google-explicit-constructor)
-  CostResultBase(std::vector<Alt> alts) : Base(Base::from_unpruned(std::move(alts))) {}
+  CostResultBase(std::vector<Alt> alts) : Base(std::move(alts)) {}
 
   template <typename Self>
   auto resolve(this Self const &self) -> std::pair<decltype(Alt::enode_id), cost_t const &> {
