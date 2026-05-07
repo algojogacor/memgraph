@@ -284,40 +284,22 @@ struct PlanResolver {
     }
 
     void resolve_impl(EClassId eclass_id, SymbolSet const &provided) {
-      if (auto existing = resolved.find(eclass_id); existing != resolved.end()) {
-        // DAG: this eclass was already resolved from a different parent.
-        // Check if the cached selection is compatible with this parent's provided set.
-        if (bind::IsCompatible(existing->second.required, provided)) return;  // still feasible
-        // Incompatible: the cached alt demands symbols this parent doesn't provide.
-        // Re-resolve with the more restrictive provided set, then cascade to children
-        // so they are also re-resolved with the new context.
-        auto it = frontier_map.find(eclass_id);
-        assert(it != frontier_map.end() && it->second.has_value());
-        auto const &chosen = pick_compatible(*it->second, provided);
-        existing->second = ResolvedEntry{Selection{chosen.enode_id, chosen.cost}, chosen.required};
-        // Cascade: visit children of the new selection so stale cached values are updated.
-        // Bind nodes need special alive/dead child-visit logic.
-        auto const &enode = egraph.get_enode(chosen.enode_id);
-        if (enode.symbol() == symbol::Bind && enode.children().size() == 3) {
-          visit_bind_children(enode.children()[0], enode.children()[1], enode.children()[2], provided, chosen.is_alive);
-        } else {
-          for (auto child : enode.children()) {
-            resolve_impl(child, provided);
-          }
-        }
+      // Compatible DAG cache hit: cached selection is feasible under this
+      // parent's provided set, nothing to do.  Otherwise fall through and
+      // re-resolve - either fresh, or to replace an incompatible cache entry
+      // (which then cascades to children with the more restrictive context).
+      if (auto existing = resolved.find(eclass_id);
+          existing != resolved.end() && bind::IsCompatible(existing->second.required, provided)) {
         return;
       }
 
       auto it = frontier_map.find(eclass_id);
       assert(it != frontier_map.end() && it->second.has_value());
-
-      auto const &frontier = *it->second;
-      auto const &chosen = pick_compatible(frontier, provided);
+      auto const &chosen = pick_compatible(*it->second, provided);
       resolved[eclass_id] = ResolvedEntry{Selection{chosen.enode_id, chosen.cost}, chosen.required};
 
       auto const &enode = egraph.get_enode(chosen.enode_id);
       auto const &children = enode.children();
-
       if (enode.symbol() == symbol::Bind && children.size() == 3) {
         visit_bind_children(children[0], children[1], children[2], provided, chosen.is_alive);
       } else {
