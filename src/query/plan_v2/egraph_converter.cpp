@@ -213,6 +213,7 @@ struct PlanResolver {
   using EGraph = planner::core::EGraph<symbol, analysis>;
 
   void operator()(EGraph const &egraph, FrontierMap const &frontier_map, EClassId root, SelectionMap &out) const {
+    assert(out.empty() && "Resolver precondition: out must be empty on entry");
     Impl impl{egraph, frontier_map};
     impl.resolve_impl(root, SymbolSet{});
     std::move(impl).fill(out);

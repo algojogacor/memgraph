@@ -126,6 +126,7 @@ struct DefaultResolver {
   template <typename Symbol, typename Analysis, CostResultType CostResult>
   void operator()(EGraph<Symbol, Analysis> const &egraph, FrontierMap<CostResult> const &frontier_map, EClassId root,
                   SelectionMap<typename CostResult::cost_t> &out) const {
+    assert(out.empty() && "Resolver precondition: out must be empty on entry");
     auto to_visit = std::vector{root};
     auto visited = boost::unordered_flat_set{root};
 
