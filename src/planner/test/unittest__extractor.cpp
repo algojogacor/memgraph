@@ -162,7 +162,7 @@ TEST(Extract_Cost, SingleLeafNode) {
   TestFrontierMap<CostModel> frontiers;
   auto cost = extract::ComputeFrontiers(egraph, cost_model, leaf_class, frontiers);
 
-  ASSERT_TRUE(cost.has_value());
+  ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 5.0);
   ASSERT_EQ(frontiers.size(), 1);
   ASSERT_EQ(FrontierEnode(frontiers, leaf_class), leaf_node);
@@ -182,7 +182,7 @@ TEST(Extract_Cost, SimpleTree) {
   auto cost = extract::ComputeFrontiers(egraph, cost_model, root_class, frontiers);
 
   // Cost should be: 1 (root) + 1 (left) + 1 (right) = 3
-  ASSERT_TRUE(cost.has_value());
+  ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 3.0);
   ASSERT_EQ(frontiers.size(), 3);
 }
@@ -200,7 +200,7 @@ TEST(Extract_Cost, DeepTree) {
   auto cost = extract::ComputeFrontiers(egraph, cost_model, root_class, frontiers);
 
   // Cost should be: 1 (root) + 1 (mid) + 1 (leaf) = 3
-  ASSERT_TRUE(cost.has_value());
+  ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 3.0);
   ASSERT_EQ(frontiers.size(), 3);
 }
@@ -220,7 +220,7 @@ TEST(Extract_Cost, DiamondDAGSharedNode) {
 
   // Shared node should only be computed once via memoization
   // Cost: root=1 + (left=1+shared=1) + (right=1+shared=1) = 1+2+2 = 5
-  ASSERT_TRUE(cost.has_value());
+  ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 5.0);
   ASSERT_EQ(frontiers.size(), 4);
   ASSERT_EQ(FrontierCost(frontiers, shared_class), 1);
@@ -242,8 +242,8 @@ TEST(Extract_Cost, VariableCostBySymbol) {
   auto cost_a = extract::ComputeFrontiers(egraph, cost_model, aclass, frontiers);
   auto cost_b = extract::ComputeFrontiers(egraph, cost_model, bclass, frontiers);
 
-  ASSERT_TRUE(cost_a.has_value());
-  ASSERT_TRUE(cost_b.has_value());
+  ASSERT_TRUE(cost_a != nullptr);
+  ASSERT_TRUE(cost_b != nullptr);
   ASSERT_EQ(cost_a->cost, 2.0);
   ASSERT_EQ(cost_b->cost, 5.0);
 }
@@ -263,7 +263,7 @@ TEST(Extract_Cost, SelectsCheapestAmongEquivalents) {
 
   auto cost = extract::ComputeFrontiers(egraph, cost_model, root, frontiers);
 
-  ASSERT_TRUE(cost.has_value());
+  ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 1.0);
   ASSERT_EQ(FrontierEnode(frontiers, root), anode);
   ASSERT_EQ(FrontierCost(frontiers, root), 1.0);
@@ -283,7 +283,7 @@ TEST(Extract_Cost, CostAccumulationWithVariableCosts) {
   auto cost = extract::ComputeFrontiers(egraph, cost_model, root_class, frontiers);
 
   // Cost: 2 (root, symbol A) + 2 (leaf1, symbol A) + 3 (leaf2, symbol B) = 7
-  ASSERT_TRUE(cost.has_value());
+  ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 7.0);
 }
 
@@ -321,7 +321,7 @@ TEST(Extract_Cost, CyclicEGraphInfiniteCost) {
 
   // The cyclic 'ADD' node should have infinite cost (or very large)
   // The non-cyclic LITERAL node should be selected with cost 1
-  ASSERT_TRUE(cost.has_value());
+  ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 1.0);
   ASSERT_EQ(FrontierEnode(frontiers, cyclic_class), x_node);
   ASSERT_EQ(FrontierCost(frontiers, cyclic_class), 1.0);
@@ -363,7 +363,7 @@ TEST(Extract_Cost, CyclicEGraphInfiniteCostComplex) {
 
   // The cyclic 'ADD' node should have infinite cost (or very large)
   // The non-cyclic LITERAL node should be selected with cost 1
-  ASSERT_TRUE(cost.has_value());
+  ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 1.0);
   ASSERT_EQ(frontiers.size(), 2);
   ASSERT_TRUE(frontiers.contains(merged_class));
@@ -413,7 +413,7 @@ TEST(Extract_Cost, FullyCyclicEClassInfiniteCost) {
 
   // After merges, the original x_node should still be selectable
   // It has cost 1 (no children), while the 'ADD' nodes have infinite cost
-  ASSERT_TRUE(cost.has_value());
+  ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 1.0);
   ASSERT_EQ(FrontierEnode(frontiers, fully_cyclic), x_node);
 }
@@ -784,7 +784,7 @@ TEST(Extract_Safety, ComputeFrontiers_FullyCyclicReturnsNullopt) {
   auto cost = extract::ComputeFrontiers(egraph, UniformCostModel{}, merged_class, frontiers);
 
   // merged_class has LITERAL(1) as a leaf escape - should succeed
-  ASSERT_TRUE(cost.has_value());
+  ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 1.0);  // LITERAL leaf cost
 
   // y_class is fully cyclic (its only enode A(merged_class) is a cycle)
@@ -840,7 +840,7 @@ TEST(Extract_Safety, ComputeFrontiers_CyclicChildCostsCached) {
   auto cost = extract::ComputeFrontiers(egraph, UniformCostModel{}, merged, frontiers);
 
   // merged has A(leaf_d) as non-cyclic escape
-  ASSERT_TRUE(cost.has_value());
+  ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 2.0);  // 1 (A) + 1 (leaf_d)
 
   // Key: leaf_c should be cached even though it was encountered while processing
@@ -882,7 +882,7 @@ TEST(Extract_Safety, ComputeFrontiers_CyclicExprChildOfBind) {
 
   // cyclic_expr has LITERAL(99) as an escape - it resolves, so the Bind enode is NOT
   // skipped. The Bind enode's cost = 1 (self) + 1 (input) + 1 (sym) + 1 (cyclic_expr LITERAL) = 4.
-  ASSERT_TRUE(cost.has_value());
+  ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 4.0);
 
   // All children must be cached

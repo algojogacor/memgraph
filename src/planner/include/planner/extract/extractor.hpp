@@ -118,22 +118,30 @@ using InDegreeMap = boost::unordered_flat_map<EClassId, int>;
 
 /// Bottom-up cost propagation. Calls cost_model(enode, enode_id, children) for each enode,
 /// merges results via CostResult::merge across enodes in the same eclass.
+///
+/// Returns a pointer into `frontier_map`. nullptr means the eclass is cyclic
+/// (either fully unreachable or in-progress on the current recursion path).
+/// The pointer is valid until the next mutation of `frontier_map` by the
+/// caller; ComputeFrontiers itself never invalidates the returned pointer
+/// across recursive calls, since each call re-finds before returning.
 template <typename Symbol, typename Analysis, typename CostModel>
   requires CostResultType<typename CostModel::CostResult>
 [[nodiscard]] auto ComputeFrontiers(EGraph<Symbol, Analysis> const &egraph, CostModel const &cost_model,
-                                    EClassId eclass_id, FrontierMap<typename CostModel::CostResult> &frontier_map)
-    -> std::optional<typename CostModel::CostResult> {
+                                    EClassId eclass_id, FrontierMap<typename CostModel::CostResult> &frontier_map) ->
+    typename CostModel::CostResult const * {
   using CostResult = CostModel::CostResult;
 
   assert(!egraph.needs_rebuild() && "egraph must be rebuilt before extraction");
 
   if (auto const it = frontier_map.find(eclass_id); it != frontier_map.end()) {
-    return it->second;
+    return it->second ? &*it->second : nullptr;
   }
 
   auto const &eclass = egraph.eclass(eclass_id);
 
-  // Mark this e-class as "in progress" with nullopt frontier to detect cycles
+  // Mark this e-class as "in progress" with nullopt frontier to detect cycles.
+  // Iterator from this emplace is not retained: recursive calls below may
+  // rehash frontier_map and invalidate it.
   frontier_map.emplace(eclass_id, std::nullopt);
 
   auto merged_frontier = std::optional<CostResult>{};
@@ -144,13 +152,15 @@ template <typename Symbol, typename Analysis, typename CostModel>
     children_frontiers.clear();
     auto has_cyclic_child = false;
     for (auto child : enode.children()) {
-      auto frontier = ComputeFrontiers(egraph, cost_model, child, frontier_map);
+      auto const *frontier = ComputeFrontiers(egraph, cost_model, child, frontier_map);
       if (!frontier) {
         has_cyclic_child = true;
         // N.B. intentionally no break - continue processing remaining children
         // so their costs are computed and cached for other extraction paths
       } else {
-        children_frontiers.emplace_back(std::move(*frontier));
+        // Explicit copy: the cost model receives a mutable span and may
+        // move-from individual entries.  The map retains ownership.
+        children_frontiers.emplace_back(*frontier);
       }
     }
     if (has_cyclic_child) continue;
@@ -164,14 +174,18 @@ template <typename Symbol, typename Analysis, typename CostModel>
     }
   }
 
+  // Re-find: the sentinel iterator from emplace above may have been
+  // invalidated by rehashes during recursion.
+  auto sentinel_it = frontier_map.find(eclass_id);
+  assert(sentinel_it != frontier_map.end());
   if (merged_frontier) {
-    frontier_map[eclass_id] = *merged_frontier;
-    return merged_frontier;
+    sentinel_it->second = std::move(merged_frontier);
+    return &*sentinel_it->second;
   }
 
   // All enodes cyclic - remove sentinel
-  frontier_map.erase(eclass_id);
-  return std::nullopt;
+  frontier_map.erase(sentinel_it);
+  return nullptr;
 }
 
 /// Scratch buffers used by the dependency traversal in CollectDependencies.
