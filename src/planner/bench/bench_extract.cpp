@@ -69,13 +69,13 @@ struct CostModel {
 
   // Per-symbol cost; trivial since we only care about the pipeline shape.
   auto operator()(memgraph::planner::core::ENode<Op> const &node, ENodeId enode_id,
-                  std::span<CostResult> children) const -> CostResult {
+                  std::span<CostResult const *const> children) const -> CostResult {
     if (children.empty()) {
       return CostResult{{{.cost = 1.0, .required = {}, .enode_id = enode_id}}};
     }
     // Single child: pass-through with +1.
     if (children.size() == 1) {
-      auto const &child = children[0];
+      auto const &child = *children[0];
       std::vector<DemandAlt> out;
       out.reserve(child.alts().size());
       for (auto const &a : child.alts()) {
@@ -85,9 +85,9 @@ struct CostModel {
     }
     // Two-child: cartesian product, +1 per pair.
     std::vector<DemandAlt> out;
-    out.reserve(children[0].alts().size() * children[1].alts().size());
-    for (auto const &l : children[0].alts()) {
-      for (auto const &r : children[1].alts()) {
+    out.reserve(children[0]->alts().size() * children[1]->alts().size());
+    for (auto const &l : children[0]->alts()) {
+      for (auto const &r : children[1]->alts()) {
         DemandSet req;
         req.insert(l.required.begin(), l.required.end());
         req.insert(r.required.begin(), r.required.end());

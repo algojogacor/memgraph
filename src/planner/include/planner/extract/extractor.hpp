@@ -36,11 +36,12 @@ namespace memgraph::planner::core::extract {
 //
 // Every cost model defines:
 //   using CostResult = ...;
-//   operator()(ENode const &, ENodeId, span<CostResult>) -> CostResult
+//   operator()(ENode const &, ENodeId, span<CostResult const * const>) -> CostResult
 //
-// `children` is a mutable span: cost models may move-from individual entries
-// to consume child frontiers in place.  The extractor does not reuse the span
-// after the cost-model call returns, so consumed entries are safely discarded.
+// `children` is a span of pointers into `frontier_map`; the pointees are
+// read-only.  Cost models that need to consume a child frontier (e.g. pass
+// it by value into a helper that takes by-value) must copy from the pointee.
+// Extracting via pointers avoids per-call copies for read-only cost models.
 //
 // CostResult must satisfy CostResultType (defined below).  ParetoFrontier-based
 // cost models derive from CostResultBase (planner/extract/pareto_frontier.hpp).
@@ -146,26 +147,36 @@ template <typename Symbol, typename Analysis, typename CostModel>
 
   auto merged_frontier = std::optional<CostResult>{};
 
-  auto children_frontiers = std::vector<CostResult>{};
+  auto children_frontiers = std::vector<CostResult const *>{};
   for (auto const &enode_id : eclass.nodes()) {
     auto const &enode = egraph.get_enode(enode_id);
+
+    // Phase 1: recurse to populate frontier_map.  We don't keep the returned
+    // pointers because subsequent recursive inserts may rehash and invalidate
+    // them (boost::unordered_flat_map uses open addressing).
+    for (auto child : enode.children()) {
+      (void)ComputeFrontiers(egraph, cost_model, child, frontier_map);
+    }
+
+    // Phase 2: look up each child's frontier now that no further inserts will
+    // happen in this enode's iteration.  Pointers obtained here remain valid
+    // until the next mutation of frontier_map - which only occurs at the end
+    // of this function (overwriting the sentinel for `eclass_id`), and that
+    // does not trigger a rehash since the key already exists.
     children_frontiers.clear();
     auto has_cyclic_child = false;
     for (auto child : enode.children()) {
-      auto const *frontier = ComputeFrontiers(egraph, cost_model, child, frontier_map);
-      if (!frontier) {
+      auto it = frontier_map.find(child);
+      if (it == frontier_map.end() || !it->second) {
+        // Erased (fully cyclic) or in-progress sentinel (self/mutual cycle).
         has_cyclic_child = true;
-        // N.B. intentionally no break - continue processing remaining children
-        // so their costs are computed and cached for other extraction paths
       } else {
-        // Explicit copy: the cost model receives a mutable span and may
-        // move-from individual entries.  The map retains ownership.
-        children_frontiers.emplace_back(*frontier);
+        children_frontiers.push_back(&*it->second);
       }
     }
     if (has_cyclic_child) continue;
 
-    auto enode_frontier = cost_model(enode, enode_id, children_frontiers);
+    auto enode_frontier = cost_model(enode, enode_id, std::span<CostResult const *const>{children_frontiers});
 
     if (!merged_frontier) {
       merged_frontier = std::move(enode_frontier);

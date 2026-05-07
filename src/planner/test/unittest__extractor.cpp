@@ -61,10 +61,10 @@ static_assert(CostResultType<DefaultCostResult<double>>);
 struct UniformCostModel {
   using CostResult = DefaultCostResult<double>;
 
-  static auto operator()(ENode<symbol> const & /*current*/, ENodeId enode_id, std::span<CostResult> children)
-      -> CostResult {
-    auto child_sum =
-        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.resolve().second; });
+  static auto operator()(ENode<symbol> const & /*current*/, ENodeId enode_id,
+                         std::span<CostResult const *const> children) -> CostResult {
+    auto child_sum = std::ranges::fold_left(
+        children, 0.0, [](double acc, CostResult const *c) { return acc + c->resolve().second; });
     return CostResult{1.0 + child_sum, enode_id};
   }
 };
@@ -74,9 +74,10 @@ struct SymbolCostModel {
   double a_cost;
   double b_cost;
 
-  auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult> children) const -> CostResult {
-    auto child_sum =
-        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.resolve().second; });
+  auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult const *const> children) const
+      -> CostResult {
+    auto child_sum = std::ranges::fold_left(
+        children, 0.0, [](double acc, CostResult const *c) { return acc + c->resolve().second; });
     return CostResult{(current.symbol() == symbol::A ? a_cost : b_cost) + child_sum, enode_id};
   }
 };
@@ -131,9 +132,10 @@ struct SimpleCostModel {
   using CostResult = DefaultCostResult<double>;
   Fn fn;
 
-  auto operator()(ENode<symbol> const &enode, ENodeId enode_id, std::span<CostResult> children) const -> CostResult {
-    auto child_sum =
-        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.resolve().second; });
+  auto operator()(ENode<symbol> const &enode, ENodeId enode_id, std::span<CostResult const *const> children) const
+      -> CostResult {
+    auto child_sum = std::ranges::fold_left(
+        children, 0.0, [](double acc, CostResult const *c) { return acc + c->resolve().second; });
     return CostResult{fn(enode) + child_sum, enode_id};
   }
 };
@@ -945,10 +947,10 @@ inline auto PickBestCompatible(TestFrontier const &frontier, std::set<int> const
 struct SimpleMultiAltCostModel {
   using CostResult = TestFrontier;
 
-  static auto operator()(ENode<symbol> const & /*current*/, ENodeId enode_id, std::span<CostResult> children)
-      -> CostResult {
-    auto child_cost =
-        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.resolve().second; });
+  static auto operator()(ENode<symbol> const & /*current*/, ENodeId enode_id,
+                         std::span<CostResult const *const> children) -> CostResult {
+    auto child_cost = std::ranges::fold_left(
+        children, 0.0, [](double acc, CostResult const *c) { return acc + c->resolve().second; });
     return CostResult{{{.cost = 1.0 + child_cost, .required = {}, .enode_id = enode_id}}};
   }
 };
@@ -956,9 +958,10 @@ struct SimpleMultiAltCostModel {
 struct DemandAwareMultiAltCostModel {
   using CostResult = TestFrontier;
 
-  static auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult> children) -> CostResult {
-    auto child_cost =
-        std::ranges::fold_left(children, 0.0, [](double acc, CostResult const &c) { return acc + c.resolve().second; });
+  static auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult const *const> children)
+      -> CostResult {
+    auto child_cost = std::ranges::fold_left(
+        children, 0.0, [](double acc, CostResult const *c) { return acc + c->resolve().second; });
     if (current.symbol() == symbol::A) {
       return CostResult{{
           {.cost = 1.0 + child_cost, .required = {1}, .enode_id = enode_id},
@@ -1213,10 +1216,10 @@ TEST(Extract_MultiAlt, ThreeNonDominatedAlternatives) {
   struct ThreeAltCostModel {
     using CostResult = TestFrontier;
 
-    static auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult> children)
+    static auto operator()(ENode<symbol> const &current, ENodeId enode_id, std::span<CostResult const *const> children)
         -> CostResult {
       auto child_cost = std::ranges::fold_left(
-          children, 0.0, [](double acc, CostResult const &c) { return acc + c.resolve().second; });
+          children, 0.0, [](double acc, CostResult const *c) { return acc + c->resolve().second; });
       if (current.symbol() == symbol::A) {
         return CostResult{{
             {.cost = 1.0 + child_cost, .required = {1, 2}, .enode_id = enode_id},

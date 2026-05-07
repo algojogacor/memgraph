@@ -101,7 +101,7 @@ struct PlanCostModel {
   using CostResult = CostFrontier;
 
   auto operator()(planner::core::ENode<symbol> const &current, planner::core::ENodeId enode_id,
-                  std::span<CostResult> children) const -> CostResult {
+                  std::span<CostResult const *const> children) const -> CostResult {
     switch (current.symbol()) {
       // Leaf nodes: single alternative, no demand
       case symbol::Once:
@@ -114,7 +114,7 @@ struct PlanCostModel {
       case symbol::Identifier: {
         assert(!children.empty() && "Identifier must have its symbol child frontier");
         auto sym_eclass = current.children()[0];
-        auto const &[_, child_cost] = children[0].resolve();
+        auto const &[_, child_cost] = children[0]->resolve();
         return CostResult{
             {{.cost = expression_cost::kIdentifier + child_cost, .required = {sym_eclass}, .enode_id = enode_id}}};
       }
@@ -124,9 +124,9 @@ struct PlanCostModel {
       // resolver can dispatch alive/dead by reading the chosen alt rather than
       // recomputing a comparison against a separate cost-bound estimate.
       case symbol::Bind: {
-        auto const &input_frontier = children[0];
-        auto const &sym_frontier = children[1];
-        auto const &expr_frontier = children[2];
+        auto const &input_frontier = *children[0];
+        auto const &sym_frontier = *children[1];
+        auto const &expr_frontier = *children[2];
         auto sym_eclass = current.children()[1];
         auto const &[_, sym_cost] = sym_frontier.resolve();
 
@@ -168,7 +168,7 @@ struct PlanCostModel {
       case symbol::Or:
       case symbol::Xor: {
         auto const cost = expression_cost::FromClass(CostClassOf(current.symbol()));
-        return CostFrontier::combine(children[0], children[1], CombineAlts(cost, enode_id));
+        return CostFrontier::combine(*children[0], *children[1], CombineAlts(cost, enode_id));
       }
 
       // Unary expression operators: pass through child, +kUnary, re-stamp
@@ -178,16 +178,16 @@ struct PlanCostModel {
       case symbol::UnaryMinus:
       case symbol::UnaryPlus: {
         auto const cost = expression_cost::FromClass(CostClassOf(current.symbol()));
-        return MapAlts(std::move(children[0]), cost, enode_id);
+        return MapAlts(*children[0], cost, enode_id);
       }
 
       // Output: re-stamp child[0]'s frontier (no extra cost) so all alternatives
       // dispatch through this Output enode in the Builder, then fold in each
       // NamedOutput child via CombineAlts.
       case symbol::Output: {
-        auto result = MapAlts(std::move(children[0]), 0.0, enode_id);
+        auto result = MapAlts(*children[0], 0.0, enode_id);
         for (size_t i = 1; i < children.size(); ++i) {
-          result = CostFrontier::combine(result, children[i], CombineAlts(0.0, enode_id));
+          result = CostFrontier::combine(result, *children[i], CombineAlts(0.0, enode_id));
         }
         return result;
       }
@@ -196,7 +196,7 @@ struct PlanCostModel {
       // (not an expression operator), so kept at a fixed cost rather than
       // sourced from expression_cost.
       case symbol::NamedOutput:
-        return CostFrontier::combine(children[0], children[1], CombineAlts(1.0, enode_id));
+        return CostFrontier::combine(*children[0], *children[1], CombineAlts(1.0, enode_id));
     }
     std::unreachable();
   }
