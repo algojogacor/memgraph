@@ -249,6 +249,32 @@ struct TopoEntry {
   bool is_alive = false;
 };
 
+/// Shared child-key derivation for the resolver and the builder.  Both
+/// stages must agree on what `(eclass, provided)` each child of a chosen
+/// enode resolves to; centralising the rule keeps them in lockstep:
+///   - Alive Bind: input sees `provided + sym`, sym/expr see `provided`.
+///   - Dead Bind:  input only; sym/expr aren't visited.
+///   - Anything else: every child inherits the parent's `provided`.
+template <typename Visit>
+void for_each_resolved_child(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, bool is_alive,
+                             Visit visit) {
+  auto const &children = enode.children();
+  bool const is_bind = enode.symbol() == symbol::Bind && children.size() == 3;
+  if (is_bind && is_alive) {
+    auto alive_provided = parent_key.provided;
+    alive_provided.insert(children[1]);
+    visit(ResolvedKey{children[0], std::move(alive_provided)});
+    visit(ResolvedKey{children[1], parent_key.provided});
+    visit(ResolvedKey{children[2], parent_key.provided});
+  } else if (is_bind) {
+    visit(ResolvedKey{children[0], parent_key.provided});
+  } else {
+    for (auto child : children) {
+      visit(ResolvedKey{child, parent_key.provided});
+    }
+  }
+}
+
 /// Context-aware resolver with PER-PATH caching.
 ///
 /// Each (eclass, provided) pair is resolved exactly once.  Different parent
@@ -321,28 +347,9 @@ struct PlanResolver {
       auto const &chosen = pick_compatible(*fr_it->second, key.provided);
 
       auto const &enode = egraph.get_enode(chosen.enode_id);
-      auto const &children = enode.children();
-      bool const is_bind = enode.symbol() == symbol::Bind && children.size() == 3;
-
-      if (is_bind && chosen.is_alive) {
-        // Alive Bind: input child sees `sym` newly in scope; sym/expr
-        // children inherit the pre-Bind context (sym leaf doesn't demand
-        // anything; expr cannot reference its own LHS).
-        auto alive_provided = key.provided;
-        alive_provided.insert(children[1]);
-        resolve_and_emit(children[0], std::move(alive_provided));
-        resolve_and_emit(children[1], key.provided);
-        resolve_and_emit(children[2], key.provided);
-      } else if (is_bind) {
-        // Dead Bind: input only; sym/expr aren't reachable from here.
-        resolve_and_emit(children[0], key.provided);
-      } else {
-        // Anything else: children inherit the same scope.
-        for (auto child : children) {
-          resolve_and_emit(child, key.provided);
-        }
-      }
-
+      for_each_resolved_child(enode, key, chosen.is_alive, [this](ResolvedKey child_key) {
+        resolve_and_emit(child_key.eclass, std::move(child_key.provided));
+      });
       out_order.push_back(TopoEntry{std::move(key), chosen.enode_id, chosen.is_alive});
     }
   };
@@ -656,20 +663,11 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
 
     children_refs.clear();
     children_refs.reserve(children.size());
-    if (is_bind) {
-      // Alive Bind: input child sees `provided + sym`, sym/expr children
-      // see plain `provided`.  Same context the resolver used.
-      auto alive_provided = entry.key.provided;
-      alive_provided.insert(children[1]);
-      children_refs.push_back(cache_lookup(ResolvedKey{children[0], std::move(alive_provided)}));
-      children_refs.push_back(cache_lookup(ResolvedKey{children[1], entry.key.provided}));
-      children_refs.push_back(cache_lookup(ResolvedKey{children[2], entry.key.provided}));
-    } else {
-      // Non-Bind: every child shares the parent's `provided`.
-      for (auto child : children) {
-        children_refs.push_back(cache_lookup(ResolvedKey{child, entry.key.provided}));
-      }
-    }
+    // Resolve children using the same rule the resolver used (see
+    // for_each_resolved_child).
+    for_each_resolved_child(enode, entry.key, entry.is_alive, [&](ResolvedKey child_key) {
+      children_refs.push_back(cache_lookup(child_key));
+    });
     // See contract (2) above: materialise Build's result before the LHS [] runs.
     auto build_result = builder.Build(enode, children_refs);
     build_cache[entry.key] = std::move(build_result);
