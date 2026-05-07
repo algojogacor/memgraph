@@ -110,11 +110,8 @@ concept Resolver =
 // ============================================================================
 // Extraction stages
 // ============================================================================
-// Convenience callers should use Extract().  The four stages below are also
-// public: per-stage tests and callers that interleave their own work between
-// ComputeFrontiers and resolve compose them directly (see
-// ConvertToLogicalOperator in plan_v2, which validates root satisfiability
-// between ComputeFrontiers and the resolver).
+// Most callers should use Extract().  The individual stages are public for
+// callers that need to interleave their own work between them.
 
 /// In-degree map for topological sorting.
 using InDegreeMap = boost::unordered_flat_map<EClassId, int>;
