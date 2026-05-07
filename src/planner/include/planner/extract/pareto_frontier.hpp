@@ -58,13 +58,15 @@ concept DominanceRelation =
 //   equivalent  - tied
 //   unordered   - incomparable
 
-/// "Lower is better" comparator for orderable scalars.
-/// a < b means b is better, so a is dominated → less.
-inline constexpr auto lower_is_better = []<typename T>(T const &a, T const &b) -> std::partial_ordering {
-  if (a < b) return std::partial_ordering::greater;  // a "smaller" → a better → a dominates
-  if (b < a) return std::partial_ordering::less;
-  return std::partial_ordering::equivalent;
-};
+/// "Lower is better" comparator for any three-way-comparable type.  The natural
+/// `<=>` says a < b ⇒ less, but in dominance terms "smaller" means "better"
+/// means a dominates b ⇒ greater.  Swapping operands inverts the ordering
+/// without an enum dance, and strong_ordering implicitly converts to
+/// partial_ordering on return.
+inline constexpr auto lower_is_better = [](auto const &a, auto const &b) -> std::partial_ordering { return b <=> a; };
+
+/// "Higher is better" - direct `<=>`, no swap.
+inline constexpr auto higher_is_better = [](auto const &a, auto const &b) -> std::partial_ordering { return a <=> b; };
 
 /// "Smaller-by-inclusion is better" comparator for two sorted ranges.
 /// Single forward merge over both ranges to determine the subset relations,
