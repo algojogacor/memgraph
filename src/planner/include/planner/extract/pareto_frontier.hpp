@@ -122,20 +122,17 @@ template <typename Alt, typename... Dims>
   using std::partial_ordering;
   auto acc = partial_ordering::equivalent;
   auto step = [&](partial_ordering next) -> bool {
-    if (next == partial_ordering::unordered) {  // dim itself incomparable
-      acc = partial_ordering::unordered;
-      return false;  // stop the && fold
-    }
-    if (next == partial_ordering::equivalent) return true;  // tied dim doesn't change direction
-    if (acc == partial_ordering::equivalent) {              // first directional dim
+    // Precondition: acc != unordered (we return false the moment it would).
+    // - next == equivalent: tie, acc unchanged.
+    // - acc == equivalent: adopt next (which may itself be unordered).
+    // - both directional and disagreeing (incl. next == unordered): unordered.
+    if (next == partial_ordering::equivalent) return true;
+    if (acc == partial_ordering::equivalent) {
       acc = next;
-      return true;
-    }
-    if (acc != next) {  // direction conflict
+    } else if (acc != next) {
       acc = partial_ordering::unordered;
-      return false;
     }
-    return true;
+    return acc != partial_ordering::unordered;
   };
   // Short-circuit fold: once step returns false, remaining dims aren't called.
   // Saves the set-merge in smaller_subset_is_better when an earlier scalar dim
