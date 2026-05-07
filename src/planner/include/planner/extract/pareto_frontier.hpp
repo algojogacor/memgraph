@@ -153,36 +153,29 @@ struct ParetoFrontier {
   /// external prune() calls would always be no-ops.
   void prune() { prune_with_pruned_prefix(0); }
 
-  /// Prune assuming `alts_[0..pruned_prefix)` is already Pareto-pruned: avoids
-  /// re-checking pairs within the already-pruned prefix.  Used by
-  /// `merge_in_place` where two pre-pruned sets are concatenated - only
-  /// cross-pairs and within-suffix pairs need checking.
+  /// Prune assuming `alts_[0..pruned_prefix)` is already Pareto-pruned: skip
+  /// pair checks that lie entirely within the pruned prefix.  Used by
+  /// `merge_in_place` where two pre-pruned sets are concatenated; pruned_prefix
+  /// is 0 for a from-scratch prune.
+  ///
+  /// For each ordered pair (i, j) we need to check, j ranges over:
+  ///   - i in prefix [0, pruned_prefix):  j in suffix [pruned_prefix, n)   (cross-pairs)
+  ///   - i in suffix [pruned_prefix, n):  j in (i, n)                      (within-suffix)
+  /// That is `j_start(i) = max(pruned_prefix, i + 1)`, which collapses both
+  /// passes into one loop.
   void prune_with_pruned_prefix(size_t pruned_prefix) {
     auto const n = alts_.size();
-    if (n - pruned_prefix == 0) return;                        // nothing newly added
-    if (pruned_prefix + 1 >= n && pruned_prefix == 0) return;  // 0 or 1 total alt
-    // SBO buffer for the dominated-flag array. Frontiers rarely exceed 64
+    if (n - pruned_prefix == 0) return;  // nothing newly added; no new pairs
+    if (n <= 1) return;                  // 0 or 1 alt total: no pairs at all
+
+    // SBO buffer for the dominated-flag array.  Frontiers rarely exceed 64
     // alternatives after pruning; larger ones fall back to heap.
     boost::container::small_vector<bool, 64> dominated(n, false);
-    // Cross-checks: prefix × new (i in [0, pruned_prefix), j in [pruned_prefix, n))
-    for (size_t i = 0; i < pruned_prefix; ++i) {
+
+    for (size_t i = 0; i < n; ++i) {
       if (dominated[i]) continue;
-      for (size_t j = pruned_prefix; j < n; ++j) {
-        if (dominated[j]) continue;
-        if (DominanceFn{}(alts_[i], alts_[j])) {
-          dominated[i] = true;
-          break;
-        }
-        if (DominanceFn{}(alts_[j], alts_[i])) {
-          dominated[j] = true;
-        }
-      }
-    }
-    // Within-new checks: (i, j) both >= pruned_prefix.  When pruned_prefix==0
-    // this is the full O(N²) pass; when pruned_prefix==M it's the K² portion.
-    for (size_t i = pruned_prefix; i < n; ++i) {
-      if (dominated[i]) continue;
-      for (size_t j = i + 1; j < n; ++j) {
+      auto const j_start = std::max(pruned_prefix, i + 1);
+      for (size_t j = j_start; j < n; ++j) {
         if (dominated[j]) continue;
         if (DominanceFn{}(alts_[i], alts_[j])) {
           dominated[i] = true;
@@ -194,12 +187,15 @@ struct ParetoFrontier {
         }
       }
     }
+
+    // Compact survivors in place.  Two-pass (mark, then move) avoids the
+    // moved-from-read pitfall of std::remove_if when DominanceFn is
+    // re-evaluated mid-pass.
     size_t write = 0;
     for (size_t read = 0; read < n; ++read) {
-      if (!dominated[read]) {
-        if (write != read) alts_[write] = std::move(alts_[read]);
-        ++write;
-      }
+      if (dominated[read]) continue;
+      if (write != read) alts_[write] = std::move(alts_[read]);
+      ++write;
     }
     alts_.resize(write);
   }
