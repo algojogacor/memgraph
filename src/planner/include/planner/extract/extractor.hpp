@@ -101,14 +101,6 @@ using SelectionMap = boost::unordered_flat_map<EClassId, Selection<CostType>>;
 //   - For each (id, sel) in the map, every child of sel.enode_id that the
 //     resolver wishes to be part of the extracted tree is also in the map.
 //   - Children absent from the map are deliberately excluded ("dead").
-//
-// Downstream stages (CollectDependencies, TopologicalSort) skip absent children
-// — that is how the contract surfaces in the rest of the pipeline.
-//
-// Two production adapters:
-//   * DefaultResolver: walks all children of the chosen enode.
-//   * A context-aware variant downstream that honours alive/dead semantics
-//     and re-resolves shared eclasses on incompatible re-visits.
 
 template <typename R, typename Symbol, typename Analysis, typename CostResult>
 concept Resolver =
