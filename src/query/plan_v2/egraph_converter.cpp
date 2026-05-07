@@ -29,10 +29,22 @@ namespace memgraph::query::plan::v2 {
 
 // ============================================================================
 // Plan extraction cost model - Pareto frontier with symbol demand tracking
+// ----------------------------------------------------------------------------
+// The cluster below has three layers, each depending on the one above:
+//   1. Alternatives    : the (cost, required, enode_id, is_alive) tuple, its
+//                        dominance relation, and the Pareto frontier type.
+//   2. Frontier ops    : Cartesian product (CombineAlts) and in-place
+//                        re-stamping (MapAlts) used by the cost model.
+//   3. Policies        : PlanCostModel (per-enode dispatch into ops),
+//                        PlanResolver (top-down DAG walk picking compatible
+//                        alts).  These are the two customisation points the
+//                        generic extractor takes.
 // ============================================================================
 namespace {
 
 using bind::SymbolSet;
+
+// --- Alternatives -----------------------------------------------------------
 
 struct Alternative {
   double cost;
@@ -62,6 +74,8 @@ struct AlternativeDominance {
 struct CostFrontier : planner::core::extract::CostResultBase<Alternative, AlternativeDominance> {
   using CostResultBase::CostResultBase;
 };
+
+// --- Frontier ops -----------------------------------------------------------
 
 /// Cartesian product of two frontiers with cost summation and required-set
 /// union.  Each (l, r) pair becomes one alternative in the result, re-stamped
@@ -94,6 +108,8 @@ auto MapAlts(CostFrontier input, double extra_cost, planner::core::ENodeId enode
   });
   return input;
 }
+
+// --- Policies ---------------------------------------------------------------
 
 struct PlanCostModel {
   using CostResult = CostFrontier;
