@@ -345,7 +345,7 @@ INSTANTIATE_TEST_SUITE_P(PatternVM, Compile, testing::ValuesIn(kCompilerCases),
                          [](auto const &info) { return info.param.name; });
 
 // ============================================================================
-// Permutation tests (not data-driven — test stability across input orderings)
+// Permutation tests (not data-driven - test stability across input orderings)
 // ============================================================================
 //
 // Verifies that all permutations of a pattern set produce valid bytecode with
@@ -401,7 +401,7 @@ TEST_F(PatternVM_Compiler, JoinOrder_HubsAndLeaves_AllPermutations) {
 }
 
 TEST_F(PatternVM_Compiler, JoinOrder_LinearChain_AllPermutations) {
-  // Linear chain: F(?x) — G(?x,?y) — H(?y)
+  // Linear chain: F(?x) - G(?x,?y) - H(?y)
   ExpectStableAcrossPermutations(std::array{
       TestPattern::build(Op::F, {Var{kVarX}}),
       TestPattern::build(Op::G, {Var{kVarX}, Var{kVarY}}),

@@ -27,7 +27,7 @@
 namespace memgraph::query::plan::v2 {
 
 // ========================================================================
-// symbol_make_traits — single place where per-symbol semantics live.
+// symbol_make_traits - single place where per-symbol semantics live.
 //
 // Every specialisation provides:
 //   - storage_type: what auxiliary side-data this symbol needs (interning

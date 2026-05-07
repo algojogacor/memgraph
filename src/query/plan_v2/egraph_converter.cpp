@@ -28,7 +28,7 @@
 namespace memgraph::query::plan::v2 {
 
 // ============================================================================
-// Plan extraction cost model — Pareto frontier with symbol demand tracking
+// Plan extraction cost model - Pareto frontier with symbol demand tracking
 // ============================================================================
 namespace {
 
@@ -70,7 +70,7 @@ struct CombineAltsFn {
     boost::container::small_vector<planner::core::EClassId, 16> buf;
     buf.reserve(l.required.size() + r.required.size());
     std::ranges::set_union(l.required, r.required, std::back_inserter(buf));
-    // set_union on two sorted flat_sets produces sorted unique output —
+    // set_union on two sorted flat_sets produces sorted unique output -
     // ordered_unique_range skips redundant sorting in the flat_set constructor.
     SymbolSet required(boost::container::ordered_unique_range, buf.begin(), buf.end());
     return {.cost = extra_cost + l.cost + r.cost, .required = std::move(required), .enode_id = enode_id};
@@ -81,7 +81,7 @@ auto CombineAlts(double extra_cost, planner::core::ENodeId enode_id) -> CombineA
   return CombineAltsFn{extra_cost, enode_id};
 }
 
-/// Map over a single frontier — adjust each alternative's cost by `extra_cost`
+/// Map over a single frontier - adjust each alternative's cost by `extra_cost`
 /// and re-stamp `enode_id`.  Single-frontier sibling of CombineAlts.
 /// Pareto invariant is preserved: a uniform cost shift does not change relative
 /// ordering, `required` is untouched, and dominance does not read enode_id or
@@ -106,7 +106,7 @@ struct PlanCostModel {
       // Leaf nodes: single alternative, no demand
       case symbol::Once:
       case symbol::Literal:
-      case symbol::Symbol:  // Leaf invariant — see bind::kSymbolCost.
+      case symbol::Symbol:  // Leaf invariant - see bind::kSymbolCost.
       case symbol::ParamLookup:
         return CostResult{{{.cost = bind::kSymbolCost, .required = {}, .enode_id = enode_id}}};
 
@@ -151,7 +151,7 @@ struct PlanCostModel {
       // Binary expression operators (arithmetic / comparison / boolean):
       // lhs × rhs cartesian product, with the per-class cost looked up via the
       // symbol's descriptor.  Adding a new binary operator is one descriptor
-      // specialisation in private_symbol.hpp — no new case arms here.
+      // specialisation in private_symbol.hpp - no new case arms here.
       case symbol::Add:
       case symbol::Sub:
       case symbol::Mul:
@@ -252,7 +252,7 @@ struct PlanResolver {
       }
       if (!best) {
         throw QueryException{
-            "Plan extraction failed: no compatible alternative at this node — "
+            "Plan extraction failed: no compatible alternative at this node - "
             "a symbol is demanded that no ancestor can provide. "
             "This usually means an Identifier node was not inlined by the rewrite pass."};
       }
@@ -274,7 +274,7 @@ struct PlanResolver {
         resolve_impl(sym_eclass, bind_provided);
         resolve_impl(expr_eclass, bind_provided);
       } else {
-        // Dead: only visit input — sym and expr are unreachable.
+        // Dead: only visit input - sym and expr are unreachable.
         // Erase any stale sym/expr entries from a prior alive resolution
         // (cascade alive->dead transition).
         resolved.erase(sym_eclass);
@@ -473,7 +473,7 @@ struct Builder {
     return ast_storage_.Create<AstOp>(operand);
   }
 
-  // Binary / unary Build overloads — generated from the X-lists.
+  // Binary / unary Build overloads - generated from the X-lists.
   // NOLINTBEGIN(cppcoreguidelines-macro-usage)
 #define MG_BUILD_BINARY(Name, AstOp)                                                                             \
   auto Build(utils::tag_value<symbol::Name> /*tag*/, enode_ref /*node*/, children_ref children) -> BuildResult { \
@@ -587,11 +587,11 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
                          impl.storage<symbol::Symbol>().store};
 
   // ---------------------------------------------------------------------------
-  // build_cache reference-stability contract — DO NOT REGRESS.
+  // build_cache reference-stability contract - DO NOT REGRESS.
   // ---------------------------------------------------------------------------
   //
   // build_cache uses open-addressing (boost::unordered_flat_map).  On rehash,
-  // ALL references / iterators / pointers into the table are invalidated —
+  // ALL references / iterators / pointers into the table are invalidated -
   // there are no stable nodes to fall back to.  Two consequences for the
   // Builder loop:
   //
@@ -633,7 +633,7 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
     // builder loop never inserts them into build_cache.
     //
     // Invariant: sym (children()[1]) is in build_cache <-> Bind is alive.
-    // Note: this is the *post-resolution observation* of aliveness — the resolver
+    // Note: this is the *post-resolution observation* of aliveness - the resolver
     // has already decided alive vs dead via bind::IsAlive on the input alt's demand
     // set, and the topo-sort either includes or excludes sym based on that.  We
     // observe the result here rather than re-deciding.  Checking sym (not expr) is

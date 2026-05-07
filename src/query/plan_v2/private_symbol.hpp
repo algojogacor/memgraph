@@ -54,7 +54,7 @@ enum struct symbol : std::uint8_t {
 };
 
 // ============================================================================
-// Symbol descriptors — one source of truth for each symbol's properties.
+// Symbol descriptors - one source of truth for each symbol's properties.
 // ============================================================================
 //
 // Adding a new symbol requires:
@@ -65,18 +65,18 @@ enum struct symbol : std::uint8_t {
 //   4. a `Build(tag<symbol::Foo>, ...)` overload in egraph_converter.cpp,
 //   5. an ast_converter visitor pair (PreVisit/PostVisit) for the AST node.
 //
-// (1) and (2) are the *categorical* declaration — what kind of symbol is this?
+// (1) and (2) are the *categorical* declaration - what kind of symbol is this?
 // They live next to each other so a missing descriptor is a compile error at
 // the first template instantiation that needs it (predicates, cost-class
-// lookup, etc.).  (3)-(5) are the *behavioural* declarations — true forks
+// lookup, etc.).  (3)-(5) are the *behavioural* declarations - true forks
 // because each operator has a unique lowering and AST mapping.
 
 /// Arity / shape category for a symbol.  Drives Make* signatures and the
 /// classification predicates below.
 enum class Arity : std::uint8_t {
-  Leaf,     ///< Once, Symbol, Literal, ParamLookup — no children.
-  Unary,    ///< Identifier, Not, UnaryMinus, UnaryPlus — exactly one child.
-  Binary,   ///< Add, Sub, ..., Eq, ..., And, Or, Xor — exactly two children.
+  Leaf,     ///< Once, Symbol, Literal, ParamLookup - no children.
+  Unary,    ///< Identifier, Not, UnaryMinus, UnaryPlus - exactly one child.
+  Binary,   ///< Add, Sub, ..., Eq, ..., And, Or, Xor - exactly two children.
   Special,  ///< Bind (3 children), Output (variable), NamedOutput (2 children).
 };
 
@@ -84,13 +84,13 @@ enum class Arity : std::uint8_t {
 /// cost constant from expression_cost.hpp; structural symbols are scored
 /// directly by PlanCostModel rather than via a constant.
 enum class CostClass : std::uint8_t {
-  Arithmetic,  ///< Add, Sub, Mul, Div, Mod, Exp — expression_cost::kArithmetic.
-  Comparison,  ///< Eq, Neq, Lt, Lte, Gt, Gte — expression_cost::kComparison.
-  Boolean,     ///< And, Or, Xor — expression_cost::kBoolean.
-  Unary,       ///< Not, UnaryMinus, UnaryPlus — expression_cost::kUnary.
-  Identifier,  ///< Identifier — expression_cost::kIdentifier (+ child cost).
-  Structural,  ///< Bind, Output, NamedOutput — scored by PlanCostModel directly.
-  Leaf,        ///< Once, Symbol, Literal, ParamLookup — bind::kSymbolCost.
+  Arithmetic,  ///< Add, Sub, Mul, Div, Mod, Exp - expression_cost::kArithmetic.
+  Comparison,  ///< Eq, Neq, Lt, Lte, Gt, Gte - expression_cost::kComparison.
+  Boolean,     ///< And, Or, Xor - expression_cost::kBoolean.
+  Unary,       ///< Not, UnaryMinus, UnaryPlus - expression_cost::kUnary.
+  Identifier,  ///< Identifier - expression_cost::kIdentifier (+ child cost).
+  Structural,  ///< Bind, Output, NamedOutput - scored by PlanCostModel directly.
+  Leaf,        ///< Once, Symbol, Literal, ParamLookup - bind::kSymbolCost.
 };
 
 /// Per-symbol descriptor.  Each enum value MUST have a specialisation; missing
@@ -139,7 +139,7 @@ template<> struct symbol_descriptor<symbol::UnaryPlus>   { static constexpr Arit
 // clang-format on
 
 // ============================================================================
-// Classification predicates — derived from descriptors.
+// Classification predicates - derived from descriptors.
 // ============================================================================
 //
 // These are the entry points used by the rest of the planner-v2 code to ask
@@ -198,7 +198,7 @@ using AllSymbolsSeq =
                     symbol::And, symbol::Or, symbol::Xor, symbol::Not, symbol::UnaryMinus, symbol::UnaryPlus>;
 
 // ============================================================================
-// Exhaustiveness check — every enum value MUST have a descriptor.
+// Exhaustiveness check - every enum value MUST have a descriptor.
 // ============================================================================
 //
 // If you add a value to `enum class symbol` and forget the descriptor, the
@@ -234,11 +234,11 @@ constexpr auto CountUnaryExprImpl(symbol_sequence<Ss...>) -> std::size_t {
 
 }  // namespace detail
 
-/// Count of binary expression operators in AllSymbolsSeq — cross-checked against
+/// Count of binary expression operators in AllSymbolsSeq - cross-checked against
 /// EGRAPH_BINARY_OPS in egraph.cpp.
 constexpr std::size_t binary_expr_op_count_v = detail::CountBinaryExprImpl(AllSymbolsSeq{});
 
-/// Count of unary expression operators in AllSymbolsSeq — cross-checked against
+/// Count of unary expression operators in AllSymbolsSeq - cross-checked against
 /// EGRAPH_UNARY_OPS in egraph.cpp.
 constexpr std::size_t unary_expr_op_count_v = detail::CountUnaryExprImpl(AllSymbolsSeq{});
 
@@ -255,11 +255,11 @@ template <symbol... Ss>
 constexpr auto CostClassOfImpl(symbol s, symbol_sequence<Ss...>) -> CostClass {
   CostClass result{};
   bool const found = (((s == Ss) && ((result = symbol_descriptor<Ss>::cost_class), true)) || ...);
-  // `found` should always be true — AllSymbolsSeq is exhaustive over the enum.
+  // `found` should always be true - AllSymbolsSeq is exhaustive over the enum.
   // If a symbol is added to the enum but not to AllSymbolsSeq, this returns the
   // default-initialised CostClass; the static_assert above wouldn't fire (it
   // checks descriptors, not sequence membership).  Belt-and-braces:
-  assert(found && "CostClassOf: symbol missing from AllSymbolsSeq — see private_symbol.hpp");
+  assert(found && "CostClassOf: symbol missing from AllSymbolsSeq - see private_symbol.hpp");
   return result;
 }
 

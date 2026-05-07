@@ -14,7 +14,7 @@
 // Master X-lists for arithmetic, comparison, boolean, and unary symbol categories.
 //
 // Each row is (Symbol-name, Frontend-AST-type).  The AST-type column is
-// opaque text in this header — token-pasted at expansion sites — and is only
+// opaque text in this header - token-pasted at expansion sites - and is only
 // resolved as a real type by the two converter .cpps that already include
 // the frontend AST headers.  egraph.hpp expands these lists with a callback
 // that ignores the AST-type column entirely, so this header has zero
@@ -23,7 +23,7 @@
 // Cross-check (in egraph.cpp): every entry must satisfy is_binary_op_v / is_unary_op_v,
 // and the X-list count must match the count of binary/unary symbols in AllSymbolsSeq.
 // Adding a new binary/unary symbol therefore requires updating the symbol enum,
-// AllSymbolsSeq, symbol_descriptor, AND this list — the cross-check fails loudly
+// AllSymbolsSeq, symbol_descriptor, AND this list - the cross-check fails loudly
 // if any are out of sync.
 
 // NOLINTBEGIN(cppcoreguidelines-macro-usage)

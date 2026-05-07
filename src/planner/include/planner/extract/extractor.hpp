@@ -45,11 +45,11 @@ namespace memgraph::planner::core::extract {
 // CostResult must satisfy CostResultType (defined below).  ParetoFrontier-based
 // cost models derive from CostResultBase (planner/extract/pareto_frontier.hpp).
 
-/// CostResult contract — enforced at compile time.
+/// CostResult contract - enforced at compile time.
 /// Every CostResult type must provide:
-///   cost_t                  — the scalar cost type (must be totally_ordered)
-///   a.merge_in_place(b)     — fold `b` (an rvalue) into `a`, mutating `a`
-///   a.resolve()             — paired (enode_id, cost-by-const-ref) of the
+///   cost_t                  - the scalar cost type (must be totally_ordered)
+///   a.merge_in_place(b)     - fold `b` (an rvalue) into `a`, mutating `a`
+///   a.resolve()             - paired (enode_id, cost-by-const-ref) of the
 ///                             chosen alternative; the reference is valid
 ///                             for the lifetime of the frontier
 template <typename CR>
@@ -147,7 +147,7 @@ template <typename Symbol, typename Analysis, typename CostModel>
       auto frontier = ComputeFrontiers(egraph, cost_model, child, frontier_map);
       if (!frontier) {
         has_cyclic_child = true;
-        // N.B. intentionally no break — continue processing remaining children
+        // N.B. intentionally no break - continue processing remaining children
         // so their costs are computed and cached for other extraction paths
       } else {
         children_frontiers.emplace_back(std::move(*frontier));
@@ -169,7 +169,7 @@ template <typename Symbol, typename Analysis, typename CostModel>
     return merged_frontier;
   }
 
-  // All enodes cyclic — remove sentinel
+  // All enodes cyclic - remove sentinel
   frontier_map.erase(eclass_id);
   return std::nullopt;
 }
@@ -216,7 +216,7 @@ void CollectDependencies(EGraph<Symbol, Analysis> const &egraph, SelectionMap<Co
   }
 }
 
-/// Kahn's topological sort.  `in_degree` is consumed in place — its counts are
+/// Kahn's topological sort.  `in_degree` is consumed in place - its counts are
 /// decremented to zero by the algorithm; on return its contents are unspecified
 /// from the caller's perspective.  `out` and `ready` are filled (caller-clears).
 template <typename Symbol, typename Analysis, typename CostResult>
@@ -242,7 +242,7 @@ void TopologicalSort(EGraph<Symbol, Analysis> const &egraph, SelectionMap<CostRe
     auto const &enode = egraph.get_enode(enode_id);
     for (EClassId child : enode.children()) {
       auto deg_it = in_degree.find(child);
-      if (deg_it == in_degree.end()) continue;  // resolver excluded child — see Resolver contract
+      if (deg_it == in_degree.end()) continue;  // resolver excluded child - see Resolver contract
       if (--deg_it->second == 0) {
         ready.push_back(child);
       }
@@ -251,14 +251,14 @@ void TopologicalSort(EGraph<Symbol, Analysis> const &egraph, SelectionMap<CostRe
 
   // Post-condition: all nodes must have been emitted. If not, the input contained a cycle,
   // which means an upstream stage (ComputeFrontiers or the Resolver) admitted a cyclic
-  // dependency into the resolved selection — a bug in that stage.
+  // dependency into the resolved selection - a bug in that stage.
   assert(out.size() == expected &&
-         "TopologicalSort: cycle detected — resolved selection is not a DAG; "
+         "TopologicalSort: cycle detected - resolved selection is not a DAG; "
          "check ComputeFrontiers and the Resolver for upstream bug");
 }
 
 // ============================================================================
-// Extract — single deep entry point
+// Extract - single deep entry point
 // ============================================================================
 //
 // The pipeline (frontier-build → resolve → collect-deps → topo-sort) lives

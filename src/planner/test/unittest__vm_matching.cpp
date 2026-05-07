@@ -263,7 +263,7 @@ auto const kMatchingCases = std::to_array<MatchingTestCase>({
   t.node(Op::Add, a, b);
   auto neg = t.node(Op::Neg, c);
   t.node(Op::Mul, neg, d);
-  // No merge — ?x from Add won't have a Neg in its e-class
+  // No merge - ?x from Add won't have a Neg in its e-class
   t.use_patterns(TestPattern::build(Op::Add, {Var{kVarX}, Var{kVarY}}),
                  TestPattern::build(Op::Mul, {BoundSym(kVarX, Op::Neg, Var{kVarZ}), Var{kVarW}}));
   return {};
@@ -689,10 +689,10 @@ auto const kMatchingCases = std::to_array<MatchingTestCase>({
   auto h_b = t.node(Op::H, b);       // H(B)
   t.merge(h_a, h_b);                        // merged eclass M_h has enodes H(A), H(B)
   auto g = t.node(Op::G, h_a);       // G(M_h)
-  t.node(Op::Bind, c, g, d);                // Bind(C, G(...), D) — pattern A root
-  t.node(Op::F, g);                         // F(G(...)) — pattern B root
-  // Pattern A: Bind(?w, ?x, ?y) — 3 vars, anchor
-  // Pattern B: F(?x=G(H(?z))) — 2 vars, enters at G via JoinVar
+  t.node(Op::Bind, c, g, d);                // Bind(C, G(...), D) - pattern A root
+  t.node(Op::F, g);                         // F(G(...)) - pattern B root
+  // Pattern A: Bind(?w, ?x, ?y) - 3 vars, anchor
+  // Pattern B: F(?x=G(H(?z))) - 2 vars, enters at G via JoinVar
   t.use_patterns(TestPattern::build(Op::Bind, {Var{kVarW}, Var{kVarX}, Var{kVarY}}),
                  TestPattern::build(Op::F, {BoundSym(kVarX, Op::G, Sym(Op::H, Var{kVarZ}))}));
   return {{{{kVarW, c}, {kVarX, g}, {kVarY, d}, {kVarZ, a}},
@@ -1038,7 +1038,7 @@ TEST_F(PatternVM_Matching, Dedup_WideEClass) {
 }
 
 TEST_F(PatternVM_Matching, SelfLoop_SharedVarExploresAllPaths) {
-  // Exact fuzzer structure — do not simplify.
+  // Exact fuzzer structure - do not simplify.
   auto n0 = leaf(Op::D, 1653159021);
   auto n1 = leaf(Op::D, 2573693081);
   [[maybe_unused]] auto n2 = node(Op::Mul, n1, n1);
@@ -1375,7 +1375,7 @@ TEST_F(PatternVM_Matching, Deep_VeryNestedPattern) {
 //
 //   E-graph:  Plus(H(a), p)   where p = {Plus(b,c), Plus(b,b)}
 //   Pattern:  Plus(H(?x), Plus(?y, ?z))
-//   Expected: 2 matches — one per Plus enode in p.
+//   Expected: 2 matches - one per Plus enode in p.
 TEST_F(PatternVM_Matching, ParentWalk_SymbolChildMultipleEnodes) {
   auto a = leaf(Op::A);
   auto b = leaf(Op::B);

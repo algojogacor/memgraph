@@ -29,7 +29,7 @@ import memgraph.planner.core.egraph;
 
 namespace memgraph::query::plan::v2::bind {
 
-/// Set of EClassIds — used for "demand" sets (`required`) and "provided"
+/// Set of EClassIds - used for "demand" sets (`required`) and "provided"
 /// contexts in the resolver.  flat_set + small_vector keeps small sets
 /// (typical Cypher demand depth ≤ 8) heap-free.
 using SymbolSet = boost::container::flat_set<planner::core::EClassId, std::less<>,
@@ -49,7 +49,7 @@ inline auto IsCompatible(SymbolSet const &required, SymbolSet const &provided) -
   return std::ranges::includes(provided, required);
 }
 
-/// Predicate — is the Bind alive given the input alt's demand set?
+/// Predicate - is the Bind alive given the input alt's demand set?
 ///
 /// A Bind is *alive* when the input demands the symbol it would bind: the
 /// expr must run, sym must be evaluated, the binding has work to do.
@@ -67,7 +67,7 @@ inline auto AliveCost(double input_cost, double sym_cost, double expr_cost) -> d
 /// Cost of the dead branch.  Only the input runs; sym and expr are skipped.
 inline auto DeadCost(double input_cost) -> double { return input_cost; }
 
-/// Required-set algebra for the alive branch — `(input.required \ {sym}) ∪ expr.required`.
+/// Required-set algebra for the alive branch - `(input.required \ {sym}) ∪ expr.required`.
 ///
 /// Removing `sym` reflects that the Bind itself supplies that symbol; whatever
 /// `expr` demands flows up because the binding does not satisfy expr's needs.

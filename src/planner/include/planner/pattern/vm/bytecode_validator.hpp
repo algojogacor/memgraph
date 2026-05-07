@@ -16,7 +16,7 @@
 /// Validators are parameterized on a Reporter policy so they work in both
 /// gtest (EXPECT_*/ASSERT_*) and fuzzer (log + abort) contexts.
 ///
-/// Reporter concept — methods take (condition args..., fmt::format_string, format_args...):
+/// Reporter concept - methods take (condition args..., fmt::format_string, format_args...):
 ///   void expect_true(bool, fmt_str, args...)
 ///   void expect_eq(a, b, fmt_str, args...)
 ///   void expect_lt(a, b, fmt_str, args...)
@@ -208,7 +208,7 @@ inline auto collect_register_usage(std::span<Instruction const> code) -> RegUsag
 }
 
 // ============================================================================
-// CompiledMatcherInfo — lightweight metadata for validators
+// CompiledMatcherInfo - lightweight metadata for validators
 // ============================================================================
 
 struct CompiledMatcherInfo {

@@ -10,7 +10,7 @@
 // licenses/APL.txt.
 
 // Pure-algebra tests for the Bind semantics module.  These do not construct
-// an egraph or invoke the planner — they exercise the alive/dead predicate,
+// an egraph or invoke the planner - they exercise the alive/dead predicate,
 // cost formulas, and required-set algebra directly.  Behaviour changes to any
 // of them would shift the cost-model and resolver simultaneously and benefit
 // from being caught at the algebra level rather than via the full pipeline.

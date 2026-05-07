@@ -44,12 +44,12 @@ struct egraph {
   auto MakeOutputs(eclass input, std::vector<eclass> named_outputs) -> eclass;
   auto MakeNamedOutput(std::string_view name, eclass sym, eclass expr) -> eclass;
 
-  // Binary operators (arithmetic / comparison / boolean) — generated from EGRAPH_BINARY_OPS.
+  // Binary operators (arithmetic / comparison / boolean) - generated from EGRAPH_BINARY_OPS.
 #define MG_DECL_MAKE_BINARY(Name, ...) auto Make##Name(eclass lhs, eclass rhs) -> eclass;
   EGRAPH_BINARY_OPS(MG_DECL_MAKE_BINARY)
 #undef MG_DECL_MAKE_BINARY
 
-  // Unary operators — generated from EGRAPH_UNARY_OPS.
+  // Unary operators - generated from EGRAPH_UNARY_OPS.
 #define MG_DECL_MAKE_UNARY(Name, ...) auto Make##Name(eclass operand) -> eclass;
   EGRAPH_UNARY_OPS(MG_DECL_MAKE_UNARY)
 #undef MG_DECL_MAKE_UNARY

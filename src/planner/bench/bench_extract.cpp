@@ -12,9 +12,9 @@
 // Microbenchmarks for the extraction pipeline (planner::core::extract).
 //
 // Targets `ComputeFrontiers` under three shapes:
-//   * deep linear chain          — recursion depth, single enode per eclass.
-//   * wide multi-enode eclasses  — exercises ParetoFrontier merge across enodes.
-//   * shared-DAG re-visit        — exercises the frontier_map cache.
+//   * deep linear chain          - recursion depth, single enode per eclass.
+//   * wide multi-enode eclasses  - exercises ParetoFrontier merge across enodes.
+//   * shared-DAG re-visit        - exercises the frontier_map cache.
 //
 // Cost model carries a small required-set so we land on the Pareto-frontier
 // CostResultBase path (the production cost model shape), not the scalar
@@ -98,7 +98,7 @@ struct CostModel {
   }
 };
 
-// Build helpers — invoked once per benchmark size; the for-loop body just
+// Build helpers - invoked once per benchmark size; the for-loop body just
 // calls ComputeFrontiers on a fresh frontier_map.  Avoids per-iter rebuild
 // dominating wall time.
 
@@ -131,7 +131,7 @@ static void BM_Extract_DeepChain(benchmark::State &state) {
 BENCHMARK(BM_Extract_DeepChain)->RangeMultiplier(8)->Range(64, 4096)->Unit(benchmark::kMicrosecond);
 
 // ---------------------------------------------------------------------------
-// Wide multi-enode eclass — N enodes (each F(const_i) with a distinct leaf)
+// Wide multi-enode eclass - N enodes (each F(const_i) with a distinct leaf)
 // share a single canonical eclass via merge().  ComputeFrontiers must merge()
 // the per-enode frontiers N-1 times to fold them.  Stresses the rvalue-merge
 // path inside the eclass-level accumulation loop.
@@ -170,7 +170,7 @@ static void BM_Extract_WideMerge(benchmark::State &state) {
 BENCHMARK(BM_Extract_WideMerge)->RangeMultiplier(4)->Range(8, 128)->Unit(benchmark::kMicrosecond);
 
 // ---------------------------------------------------------------------------
-// Full-pipeline shapes — Extract() invokes all four stages:
+// Full-pipeline shapes - Extract() invokes all four stages:
 //   1. ComputeFrontiers        (already covered above in isolation)
 //   2. Resolver                (DefaultResolver: picks min-cost alt per eclass)
 //   3. CollectDependencies     (in-degree counting over selected children)

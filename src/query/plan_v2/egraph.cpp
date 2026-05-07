@@ -55,7 +55,7 @@ auto egraph::MakeNamedOutput(std::string_view name, eclass sym, eclass expr) -> 
   return pimpl_->Make<symbol::NamedOutput>(name, sym, expr);
 }
 
-// Binary / unary public-API definitions — generated from EGRAPH_*_OPS.
+// Binary / unary public-API definitions - generated from EGRAPH_*_OPS.
 // NOLINTBEGIN(cppcoreguidelines-macro-usage)
 #define MG_DEFN_MAKE_BINARY(Name, ...) \
   auto egraph::Make##Name(eclass lhs, eclass rhs)->eclass { return pimpl_->Make<symbol::Name>(lhs, rhs); }

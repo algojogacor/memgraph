@@ -22,7 +22,7 @@
 //
 // These are the per-application costs the planner attributes to expression
 // operators (arithmetic, comparison, boolean, unary) when deciding between
-// equivalent rewrites.  Today every value is 1.0 — differentiating without
+// equivalent rewrites.  Today every value is 1.0 - differentiating without
 // measured data would just calcify guesses into the planner.
 //
 // When you have benchmark data showing a class of operator should bias the
@@ -32,7 +32,7 @@
 //
 // Out of scope: the *runtime* cost of evaluating an operator on TypedValue
 // (which depends on operand type, value size, and cardinality) is not what
-// the planner cost model is about — that lives in the executor and the
+// the planner cost model is about - that lives in the executor and the
 // cardinality estimator.  These constants are the *structural* per-operator
 // cost the planner uses to compare plans.
 
@@ -50,13 +50,13 @@ inline constexpr double kBoolean = 1.0;
 /// Unary operators: Not, UnaryMinus, UnaryPlus.
 inline constexpr double kUnary = 1.0;
 
-/// Identifier reference — pays for the lookup of a bound symbol.
+/// Identifier reference - pays for the lookup of a bound symbol.
 /// Distinct from the operator costs above because it's a structural reference,
 /// not an arithmetic application.
 inline constexpr double kIdentifier = 1.0;
 
 // TODO: tune these once benchmarks show per-class differentiation actually
-// flips a plan.  Until then they are deliberately uniform — a uniform-but-
+// flips a plan.  Until then they are deliberately uniform - a uniform-but-
 // honest model beats a guessed-differential model.
 
 /// Look up the per-operator cost for a CostClass.  Used by PlanCostModel to

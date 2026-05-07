@@ -436,7 +436,7 @@ struct AstConverterVisitor : HierarchicalTreeVisitor {
 
   bool PostVisit(RangeOperator & /*range_operator*/) override { return true; }
 
-  // Binary / unary AST-operator PostVisits — generated from the X-lists.
+  // Binary / unary AST-operator PostVisits - generated from the X-lists.
   // NOLINTBEGIN(cppcoreguidelines-macro-usage)
 #define MG_POST_VISIT_BINARY(Name, AstOp)                      \
   bool PostVisit(AstOp & /*op*/) override {                    \

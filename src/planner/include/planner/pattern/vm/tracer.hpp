@@ -50,7 +50,7 @@ struct VMStats {
 
 /// Tracer interface for VM execution debugging.
 ///
-/// All methods receive raw typed values — implementations decide how to
+/// All methods receive raw typed values - implementations decide how to
 /// capture or format them.  The pc parameter is the program counter of the
 /// instruction that triggered the event.
 struct VMTracer {

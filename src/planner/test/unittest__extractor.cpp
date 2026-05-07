@@ -38,7 +38,7 @@ auto Add(EGraph &egraph, EClassId left, EClassId right) {
   return egraph.emplace(symbol::ADD, {left, right});
 }
 
-/// Test-local scalar CostResult — pairs a cost with the enode it came from.
+/// Test-local scalar CostResult - pairs a cost with the enode it came from.
 /// Production cost models use ParetoFrontier-based CostResultBase; this is the
 /// minimal CostResultType implementation the simple test models need.
 template <std::totally_ordered T>
@@ -523,7 +523,7 @@ TEST(Extract_Dependencies, DeadBindChildrenSkipped) {
   SelectionMap<double> selection;
   selection[bind_class] = Sel{bind_node, 1.0};
   selection[input_class] = Sel{input_node, 1.0};
-  // sym_class and expr_class intentionally absent — dead Bind
+  // sym_class and expr_class intentionally absent - dead Bind
 
   extract::InDegreeMap in_degree;
   extract::DependencyScratch deps_scratch;
@@ -670,7 +670,7 @@ TEST(Extract_TopologicalSort, CycleDetection_IncompleteResult) {
   // reaches in-degree 0, so result.size() == 0 != in_degree.size() == 2.
   // In debug builds (assert enabled), ASSERT_DEATH verifies the assertion fires.
   // In release builds (NDEBUG defined), assert is compiled out and TopologicalSort
-  // silently returns an incomplete result — the test verifies the truncation instead.
+  // silently returns an incomplete result - the test verifies the truncation instead.
 #ifdef NDEBUG
   std::vector<std::pair<EClassId, ENodeId>> result;
   std::deque<EClassId> ready_scratch;
@@ -880,7 +880,7 @@ TEST(Extract_Safety, ComputeFrontiers_CyclicExprChildOfBind) {
   TestFrontierMap<UniformCostModel> frontiers;
   auto cost = extract::ComputeFrontiers(egraph, UniformCostModel{}, bind_class, frontiers);
 
-  // cyclic_expr has LITERAL(99) as an escape — it resolves, so the Bind enode is NOT
+  // cyclic_expr has LITERAL(99) as an escape - it resolves, so the Bind enode is NOT
   // skipped. The Bind enode's cost = 1 (self) + 1 (input) + 1 (sym) + 1 (cyclic_expr LITERAL) = 4.
   ASSERT_TRUE(cost.has_value());
   ASSERT_EQ(cost->cost, 4.0);
@@ -888,7 +888,7 @@ TEST(Extract_Safety, ComputeFrontiers_CyclicExprChildOfBind) {
   // All children must be cached
   EXPECT_TRUE(frontiers.contains(input_class));
   EXPECT_TRUE(frontiers.contains(sym_class));
-  EXPECT_TRUE(frontiers.contains(cyclic_expr)) << "cyclic_expr has a LITERAL escape path — must be cached";
+  EXPECT_TRUE(frontiers.contains(cyclic_expr)) << "cyclic_expr has a LITERAL escape path - must be cached";
 }
 
 // ========================================
@@ -920,7 +920,7 @@ struct TestFrontier : CostResultBase<TestDemandAlt, TestDominance> {
 
 /// Pick the cheapest alt whose required set is a subset of `provided`. Returns
 /// nullptr when no compatible alt exists. Shared by the DAG-resolution tests
-/// below — extracted once because each test re-implementing this lambda hides
+/// below - extracted once because each test re-implementing this lambda hides
 /// the actual variation in resolver behaviour.
 ///
 /// NOTE: production `PlanResolver::pick_compatible` (egraph_converter.cpp)
@@ -1024,9 +1024,9 @@ TEST(ParetoFrontier_Prune, DuplicateAlternatives) {
 TEST(ParetoFrontier_Prune, TransitiveDominance) {
   // A dominates B, B dominates C. After prune, only A survives.
   // A: cost=1, req={}
-  // B: cost=2, req={1}    — A dominates B: A.cost<=B.cost && B.req ⊇ A.req → 1<=2 && {1}⊇{} → true
-  // C: cost=3, req={1,2}  — B dominates C: B.cost<=C.cost && C.req ⊇ B.req → 2<=3 && {1,2}⊇{1} → true
-  //                        — A dominates C: 1<=3 && {1,2}⊇{} → true (transitivity)
+  // B: cost=2, req={1}    - A dominates B: A.cost<=B.cost && B.req ⊇ A.req → 1<=2 && {1}⊇{} → true
+  // C: cost=3, req={1,2}  - B dominates C: B.cost<=C.cost && C.req ⊇ B.req → 2<=3 && {1,2}⊇{1} → true
+  //                        - A dominates C: 1<=3 && {1,2}⊇{} → true (transitivity)
   // The break optimization: when i=1 (B) is checked, it gets marked dominated by i=0 (A)
   // in the i=0 loop, so B is skipped. C is also marked dominated in the i=0 loop.
   auto frontier = TestFrontier{{
@@ -1089,7 +1089,7 @@ TEST(Extract_MultiAlt, TwoAlternatives_MergeFrontier) {
   // After merge: B's {cost=1,req={}} dominates A's {cost=2,req={}},
   // and A's {cost=1,req={1}} is non-dominated.
   // Frontier = [{cost=1,req={1},B}, {cost=1,req={},B}]
-  // Wait — B's alt has cost=1,req={} which dominates A's cost=2,req={}.
+  // Wait - B's alt has cost=1,req={} which dominates A's cost=2,req={}.
   // A's cost=1,req={1} is not dominated by B's cost=1,req={} because req={1} ⊄ req={}.
   // Actually, dominated_by checks: other.cost <= cost && required ⊇ other.required
   // A's {cost=1,req={1}} dominated by B's {cost=1,req={}}? other.cost=1 <= 1 ✓, req={1} ⊇ {} ✓ → YES!
@@ -1136,8 +1136,8 @@ TEST(Extract_MultiAlt, DemandPropagation) {
 TEST(Extract_MultiAlt, DominatedPruning) {
   // Test that dominated alternatives are correctly pruned.
   // Create two equivalent enodes where one strictly dominates the other.
-  // A: {cost=1,req={1}} and {cost=2,req={}} — two alternatives
-  // A (another): {cost=3,req={}} — one alternative
+  // A: {cost=1,req={1}} and {cost=2,req={}} - two alternatives
+  // A (another): {cost=3,req={}} - one alternative
   // After merge: {cost=1,req={1}}, {cost=2,req={}}, {cost=3,req={}}
   // {cost=2,req={}} dominates {cost=3,req={}} → pruned
   // Final: {cost=1,req={1}}, {cost=2,req={}}
@@ -1409,7 +1409,7 @@ TEST(Extract_MultiAlt, DAGResolution_AliveToDeadErasesStaleChildren) {
   // 4-level structure simulating a Bind with sym and expr children:
   //   Root(B) → Left(B, {BindLike}), Right(B, {BindLike})
   //   BindLike(A, {Input, Sym, Expr})
-  //   Input(B), Sym(B), Expr(B) — all leaves
+  //   Input(B), Sym(B), Expr(B) - all leaves
   //
   // DemandAwareMultiAltCostModel: A produces {cost=1,req={1}} and {cost=2,req={}}.
   // Left provides {1} → BindLike picks req={1} → all 3 children resolved.

@@ -598,7 +598,7 @@ INSTANTIATE_TEST_SUITE_P(
             .min_rewrites = 0,
             .should_saturate = true,
         },
-        // Same symbol used in multiple outputs — both inline to Literal(1)
+        // Same symbol used in multiple outputs - both inline to Literal(1)
         PipelineTestCase{
             .name = "MultipleUsesOfSameSymbol",
             .query = "WITH 1 AS x RETURN x AS a, x AS b;",
@@ -606,7 +606,7 @@ INSTANTIATE_TEST_SUITE_P(
             .min_rewrites = 1,
             .should_saturate = true,
         },
-        // Triple chained aliases — all three binds eliminated
+        // Triple chained aliases - all three binds eliminated
         PipelineTestCase{
             .name = "TripleChainedAliases",
             .query = "WITH 1 AS a WITH a AS b WITH b AS c RETURN c;",
@@ -665,7 +665,7 @@ INSTANTIATE_TEST_SUITE_P(
             .min_rewrites = 0,
             .should_saturate = true,
         },
-        // Shared subexpression with Bind — after inline, Identifier(a) merges with
+        // Shared subexpression with Bind - after inline, Identifier(a) merges with
         // Add(1,2). The return expression a + (1+2) becomes Add(merged, merged) where
         // both children are the same eclass. This is a diamond DAG.
         PipelineTestCase{
@@ -700,7 +700,7 @@ INSTANTIATE_TEST_SUITE_P(
             .min_rewrites = 1,
             .should_saturate = true,
         },
-        // Dead bind with parameter — param never used, bind eliminated
+        // Dead bind with parameter - param never used, bind eliminated
         PipelineTestCase{
             .name = "UnusedParamBinding",
             .query = "WITH $x AS unused RETURN 1 AS r;",
@@ -718,7 +718,7 @@ INSTANTIATE_TEST_SUITE_P(
     DeadStoreElimination,
     PlannerV2PipelineTest,
     ::testing::Values(
-        // Dead bind: unused variable — Bind eliminated entirely
+        // Dead bind: unused variable - Bind eliminated entirely
         PipelineTestCase{
             .name = "UnusedVariable",
             .query = "WITH 1 AS unused RETURN 2 AS r;",
@@ -726,7 +726,7 @@ INSTANTIATE_TEST_SUITE_P(
             .min_rewrites = 0,
             .should_saturate = true,
         },
-        // After inline, Identifier(a) is replaced by Literal(1) — Bind dead
+        // After inline, Identifier(a) is replaced by Literal(1) - Bind dead
         PipelineTestCase{
             .name = "InlinedVariableBindDead",
             .query = "WITH 1 AS a RETURN a AS r;",
@@ -768,7 +768,7 @@ INSTANTIATE_TEST_SUITE_P(
     DAGResolution,
     PlannerV2PipelineTest,
     ::testing::Values(
-        // Shared Bind consumed by two outputs — exercises DAG memoization in resolver
+        // Shared Bind consumed by two outputs - exercises DAG memoization in resolver
         PipelineTestCase{
             .name = "SharedBindTwoConsumers",
             .query = "WITH 1 AS a RETURN a AS x, a AS y;",
@@ -776,7 +776,7 @@ INSTANTIATE_TEST_SUITE_P(
             .min_rewrites = 1,
             .should_saturate = true,
         },
-        // Chained Binds with cascade — both eliminated after inline
+        // Chained Binds with cascade - both eliminated after inline
         PipelineTestCase{
             .name = "ChainedBindCascade",
             .query = "WITH 1 AS a WITH a AS b RETURN b AS x, 1 AS y;",

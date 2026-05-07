@@ -25,7 +25,7 @@ namespace memgraph::planner::core::extract {
 /// A dominance relation over Alt: a default-constructible binary callable
 /// (Alt const&, Alt const&) -> convertible-to-bool returning true when the
 /// first argument is dominated by the second. The relation MUST be transitive
-/// — if dominates(a, b) and dominates(b, c) then dominates(a, c). prune()'s
+/// - if dominates(a, b) and dominates(b, c) then dominates(a, c). prune()'s
 /// early break relies on this property and on nothing else; reflexivity is
 /// permitted (a may dominate itself), and antisymmetry is not required.
 /// Reflexive duplicates resolve to "the later index in iteration order survives."
@@ -48,7 +48,7 @@ concept Combiner = std::invocable<Fn const &, Alt const &, Alt const &> &&
 
 /// Generic Pareto frontier over alternatives of type Alt.
 ///
-/// DominanceFn must satisfy `DominanceRelation<DominanceFn, Alt>` — see the
+/// DominanceFn must satisfy `DominanceRelation<DominanceFn, Alt>` - see the
 /// concept above for the transitivity contract.
 ///
 /// CombineFn (used by combine/flat_map, not part of the type): (Alt, Alt) -> Alt
@@ -85,7 +85,7 @@ struct ParetoFrontier {
   /// In-place mutation that the caller promises preserves the Pareto invariant.
   /// Calls fn(alt) on each surviving alt; no re-prune is performed.
   ///
-  /// Contract: fn must not change relative ordering under DominanceFn — i.e.,
+  /// Contract: fn must not change relative ordering under DominanceFn - i.e.,
   /// for any two alts A and B in the frontier, the truth value of
   /// DominanceFn{}(A, B) must be the same after fn(A) and fn(B) as before.
   /// Adding a uniform constant to a `cost` field, or rewriting a field that
@@ -101,7 +101,7 @@ struct ParetoFrontier {
   /// Flat-map: for each alternative, produce zero or more new alternatives via a callback,
   /// collect into a new frontier, then prune. This is the general pattern for
   /// per-alt conditional emission.
-  /// @param fn  (Alt const&, auto emit) -> void — calls emit(Alt&&) to produce output alternatives.
+  /// @param fn  (Alt const&, auto emit) -> void - calls emit(Alt&&) to produce output alternatives.
   template <typename Fn>
   [[nodiscard]] static auto flat_map(ParetoFrontier const &input, Fn &&fn) -> ParetoFrontier {
     auto result = ParetoFrontier{};
@@ -149,13 +149,13 @@ struct ParetoFrontier {
   /// Remove alternatives dominated by any other alternative in the frontier.
   /// Two-pass: first mark dominated indices, then erase. This avoids reading
   /// moved-from elements (std::erase_if/remove_if moves elements during its pass).
-  /// Private — there is no path to seed an unpruned frontier from outside, so
+  /// Private - there is no path to seed an unpruned frontier from outside, so
   /// external prune() calls would always be no-ops.
   void prune() { prune_with_pruned_prefix(0); }
 
   /// Prune assuming `alts_[0..pruned_prefix)` is already Pareto-pruned: avoids
   /// re-checking pairs within the already-pruned prefix.  Used by
-  /// `merge_in_place` where two pre-pruned sets are concatenated — only
+  /// `merge_in_place` where two pre-pruned sets are concatenated - only
   /// cross-pairs and within-suffix pairs need checking.
   void prune_with_pruned_prefix(size_t pruned_prefix) {
     auto const n = alts_.size();
@@ -186,7 +186,7 @@ struct ParetoFrontier {
         if (dominated[j]) continue;
         if (DominanceFn{}(alts_[i], alts_[j])) {
           dominated[i] = true;
-          // Transitivity break — see prune() / DominanceRelation concept.
+          // Transitivity break - see prune() / DominanceRelation concept.
           break;
         }
         if (DominanceFn{}(alts_[j], alts_[i])) {
@@ -232,7 +232,7 @@ struct CostResultBase : ParetoFrontier<Alt, DominanceFn> {
   // NOLINTNEXTLINE(google-explicit-constructor)
   CostResultBase(Base base) : Base(std::move(base)) {}
 
-  /// Initializer-list construction prunes on construction — no path to a
+  /// Initializer-list construction prunes on construction - no path to a
   /// non-pruned frontier from outside the class hierarchy.
   CostResultBase(std::initializer_list<Alt> init) : Base(Base::from_unpruned(std::vector<Alt>(init))) {}
 

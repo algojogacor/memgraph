@@ -350,7 +350,7 @@ TEST(EGraph_DuplicateRemoval, TwoCongruentParentsCollapseAfterChildMerge) {
   // repair_hashcons_enode (hashcons_.find(ENodeRef{enode}) != end) cannot fire: each
   // parent has a DISTINCT pre-canonical hashcons key (otherwise add_enode would have
   // deduplicated at insertion), and repair only erases the key of the enode currently
-  // being repaired — it never removes a sibling's entry.
+  // being repaired - it never removes a sibling's entry.
   //
   // This test empirically confirms that: two F(a_i) nodes are forced into one
   // canonical_to_parents group by merging their children, rebuild must not trip the
@@ -375,8 +375,8 @@ TEST(EGraph_SelfReference, ChainCollapseWithDeferredNodes) {
   // Self-referential chain F(F(F(a))) where nodes are created between merge and rebuild.
   //
   //   n0 = A, n1 = F(n0), n2 = F(n1)
-  //   merge(n0, n1) — creates self-referential class
-  //   n3 = F(n2) — created AFTER merge, BEFORE rebuild
+  //   merge(n0, n1) - creates self-referential class
+  //   n3 = F(n2) - created AFTER merge, BEFORE rebuild
   //   rebuild()
   //
   // After merge, n1 = F(class_01) and n2 = F(class_01) become congruent duplicates.
@@ -432,8 +432,8 @@ TEST(EGraph_SelfReference, IndirectCongruenceViaChildMerges) {
   // indirectly congruent.
   //
   //   c = F(a), d = F(b)
-  //   merge(c, a) — a's class now contains {a, F(a)}, so find(c) = find(a)
-  //   merge(d, b) — b's class now contains {b, F(b)}, so find(d) = find(b)
+  //   merge(c, a) - a's class now contains {a, F(a)}, so find(c) = find(a)
+  //   merge(d, b) - b's class now contains {b, F(b)}, so find(d) = find(b)
   //
   //   e = G(c, b) → G(E_a, E_b)
   //   f = G(a, d) → G(E_a, E_b)
@@ -493,18 +493,18 @@ TEST(EGraph_SelfReference, TransitiveSelfRefCreatesIndirectCongruence) {
   // detecting that parent nodes are congruent.
   //
   //   a, b = leaves
-  //   fa = F(a, a),  fb = F(b, b)       — level 1
-  //   ffa = F(fa, fa), ffb = F(fb, fb)  — level 2
-  //   p = G(ffa, b),  q = G(a, ffb)     — parents using nodes from different chains
+  //   fa = F(a, a),  fb = F(b, b)       - level 1
+  //   ffa = F(fa, fa), ffb = F(fb, fb)  - level 2
+  //   p = G(ffa, b),  q = G(a, ffb)     - parents using nodes from different chains
   //
-  //   merge(fa, a) — a's class absorbs F(a,a), so fa collapses into a
-  //   merge(fb, b) — b's class absorbs F(b,b), so fb collapses into b
+  //   merge(fa, a) - a's class absorbs F(a,a), so fa collapses into a
+  //   merge(fb, b) - b's class absorbs F(b,b), so fb collapses into b
   //
   // After rebuild (transitive collapse, 2 hops each):
   //   fa → E_a, ffa = F(fa,fa) → F(E_a,E_a) → E_a
   //   fb → E_b, ffb = F(fb,fb) → F(E_b,E_b) → E_b
   //   p = G(ffa, b) → G(E_a, E_b)
-  //   q = G(a, ffb) → G(E_a, E_b)  — congruent with p
+  //   q = G(a, ffb) → G(E_a, E_b)  - congruent with p
 
   TestEGraph egraph;
   TestProcessingContext ctx;
@@ -516,7 +516,7 @@ TEST(EGraph_SelfReference, TransitiveSelfRefCreatesIndirectCongruence) {
   auto fa = egraph.emplace(Op::F, {a, a}).eclass_id;
   auto fb = egraph.emplace(Op::F, {b, b}).eclass_id;
 
-  // Level 2: F(F(x,x), F(x,x)) — two hops from leaf
+  // Level 2: F(F(x,x), F(x,x)) - two hops from leaf
   auto ffa = egraph.emplace(Op::F, {fa, fa}).eclass_id;
   auto ffb = egraph.emplace(Op::F, {fb, fb}).eclass_id;
 

@@ -94,7 +94,7 @@ class PatternVM_Trace : public PatternVM_Matching {
 // ============================================================================
 
 TEST_F(PatternVM_Trace, SimpleMatch_TracesBindAndYield) {
-  // Neg(?x) against a single Neg(a) — verify we see exactly one bind and one yield.
+  // Neg(?x) against a single Neg(a) - verify we see exactly one bind and one yield.
   //
   //   E-graph:    Neg(a)
   //   Pattern:    Neg(?x)
@@ -119,7 +119,7 @@ TEST_F(PatternVM_Trace, SimpleMatch_TracesBindAndYield) {
 }
 
 TEST_F(PatternVM_Trace, NoMatch_TracesCheckFailure) {
-  // Neg(?x) against Add(a, b) — symbol check fails, no yield.
+  // Neg(?x) against Add(a, b) - symbol check fails, no yield.
   //
   //   E-graph:    Add(a, b)
   //   Pattern:    Neg(?x)
@@ -140,7 +140,7 @@ TEST_F(PatternVM_Trace, NoMatch_TracesCheckFailure) {
 TEST_F(PatternVM_Trace, Deduplication_TracesBindDuplicate) {
   // Two F e-nodes in the same e-class whose children canonicalize to the
   // same value. We skip rebuild_egraph() so congruence closure doesn't
-  // merge the F e-nodes — this lets the VM encounter the duplicate path.
+  // merge the F e-nodes - this lets the VM encounter the duplicate path.
   //
   //   E-graph (no congruence closure):
   //     a = A(1), b = A(2), merge(a, b) → same canonical e-class
@@ -156,7 +156,7 @@ TEST_F(PatternVM_Trace, Deduplication_TracesBindDuplicate) {
   auto f2 = node(Op::F, b);
   merge(a, b);
   merge(f1, f2);
-  // Deliberately skip rebuild_egraph() — congruence closure would merge
+  // Deliberately skip rebuild_egraph() - congruence closure would merge
   // the F e-nodes since they now have the same canonical children.
   rebuild_index();
 
@@ -233,7 +233,7 @@ TEST_F(PatternVM_Trace, MultiPatternJoin_TracesParentTraversal) {
 }
 
 TEST_F(PatternVM_Trace, MultiPatternJoin_NoMatch_TracesCheckSlotMiss) {
-  // Join fails because ?sym differs between patterns — should see slot mismatch.
+  // Join fails because ?sym differs between patterns - should see slot mismatch.
   //
   //   E-graph:    Bind(_, sym1, expr)    Ident(sym2)
   //   Pattern 1:  Bind(_, ?sym, ?expr)
@@ -273,12 +273,12 @@ TEST_F(PatternVM_Trace, FullFeatureExercise_ThreePatternJoinWithMerge) {
   //
   //   Patterns:
   //     P1 (anchor): F(?x, ?y)
-  //     P2 (joined): G(?x, ?z)  — shares ?x with P1, parent traversal
-  //     P3 (joined): H(?y)      — shares ?y with P1, parent traversal
+  //     P2 (joined): G(?x, ?z)  - shares ?x with P1, parent traversal
+  //     P3 (joined): H(?y)      - shares ?y with P1, parent traversal
   //
   //   Expected execution order (annotated):
   //
-  //   Join order: [F(?x,?y), H(?y), G(?x,?z)] — H before G (fewer new vars)
+  //   Join order: [F(?x,?y), H(?y), G(?x,?z)] - H before G (fewer new vars)
   //   Since ?x,?y bound at enode level (children of F), H and G parent walks
   //   follow F's enode verification in join order.
   //
@@ -307,7 +307,7 @@ TEST_F(PatternVM_Trace, FullFeatureExercise_ThreePatternJoinWithMerge) {
   //     [pc=26] Yield               → emit match {?x=a, ?y=b, ?z=c}
   //     [pc=27] Jump @19            → continue G parent loop
   //     [pc=19] NextParent          → second parent of a (remaining=1)
-  //     [pc=20] CheckSymbol G       → FAIL (F(a,b) is not G) — backtrack
+  //     [pc=20] CheckSymbol G       → FAIL (F(a,b) is not G) - backtrack
   //     [pc=19] NextParent          → exhausted (remaining=0) → backtrack to @5
   //     [pc=5]  NextENode           → exhausted (remaining=0) → backtrack to @2
   //     [pc=2]  NextSymbolEClass    → exhausted (remaining=0) → jump to @28
@@ -365,7 +365,7 @@ TEST_F(PatternVM_Trace, FullFeatureExercise_ThreePatternJoinWithMerge) {
   EXPECT_EQ(code[28].op, VMOp::Halt);
 
   // ---------------------------------------------------------------------------
-  // Exact execution trace — assert every event in order
+  // Exact execution trace - assert every event in order
   // ---------------------------------------------------------------------------
   //
   // Each event is (Type, pc, detail_substring). We walk through the trace
@@ -422,7 +422,7 @@ TEST_F(PatternVM_Trace, FullFeatureExercise_ThreePatternJoinWithMerge) {
   expect_event(EventType::IterStart, 12, "count=2");  // b has 2 parents: H(b), F(a,b)
   expect_instr(13, "Jump");
 
-  // First parent of b: H(b) — passes H check
+  // First parent of b: H(b) - passes H check
   expect_instr(15, "CheckSymbol");  // H ✓
   expect_event(EventType::CheckPass, 15, "symbol match");
   expect_instr(16, "CheckArity");  // arity 1 ✓
@@ -433,7 +433,7 @@ TEST_F(PatternVM_Trace, FullFeatureExercise_ThreePatternJoinWithMerge) {
   expect_event(EventType::IterStart, 17, "count=2");  // a has 2 parents: G(a,c), F(a,b)
   expect_instr(18, "Jump");
 
-  // First parent of a: G(a,c) — passes G check
+  // First parent of a: G(a,c) - passes G check
   expect_instr(20, "CheckSymbol");  // G ✓
   expect_event(EventType::CheckPass, 20, "symbol match");
   expect_instr(21, "CheckArity");  // arity 2 ✓
@@ -453,7 +453,7 @@ TEST_F(PatternVM_Trace, FullFeatureExercise_ThreePatternJoinWithMerge) {
   // --- Continue: backtrack through G parent loop ---
   expect_instr(27, "Jump");  // → @19 (G's NextParent)
 
-  // Second parent of a: F(a,b) — fails G symbol check
+  // Second parent of a: F(a,b) - fails G symbol check
   expect_instr(19, "NextParent");  // G's NextParent
   expect_event(EventType::IterAdvance, 19, "remaining=1");
   expect_instr(20, "CheckSymbol");  // G ✗ (it's F)
@@ -490,7 +490,7 @@ TEST_F(PatternVM_Trace, FullFeatureExercise_ThreePatternJoinWithMerge) {
 }
 
 TEST_F(PatternVM_Trace, FullFeatureExercise_WithMergeAndDedup) {
-  // Three-pattern join with merged e-classes — exercises deduplication and canonicalization.
+  // Three-pattern join with merged e-classes - exercises deduplication and canonicalization.
   //
   //   E-graph:
   //     a1, a2 = distinct A leaves, then merged into one e-class
@@ -510,7 +510,7 @@ TEST_F(PatternVM_Trace, FullFeatureExercise_WithMergeAndDedup) {
   node(Op::G, a2, c);
   node(Op::H, b);
 
-  // Merge a1 and a2 — now ?x from F and ?x from G resolve to the same e-class
+  // Merge a1 and a2 - now ?x from F and ?x from G resolve to the same e-class
   merge(a1, a2);
   rebuild_egraph();
   rebuild_index();
@@ -553,7 +553,7 @@ TEST_F(PatternVM_Trace, Stats_ParentFilterRate) {
 
   auto const &s = stats();
   EXPECT_GT(s.symbol_check_hits, 0u) << "Expected at least one parent symbol hit\n" << trace_dump();
-  // H(a) and F(a,b) are parents of a but don't match G — should be misses
+  // H(a) and F(a,b) are parents of a but don't match G - should be misses
   EXPECT_GT(s.symbol_check_misses, 0u) << "Expected parent symbol miss for H/F\n" << trace_dump();
   EXPECT_GT(s.symbol_filter_rate(), 0.0) << "Filter rate should be non-zero\n" << trace_dump();
 }

@@ -76,7 +76,7 @@ void VerifyBytecode(std::span<Instruction const> code, std::span<Symbol const> s
 }
 
 // ============================================================================
-// GTestReporter — adapts validator Reporter concept to gtest
+// GTestReporter - adapts validator Reporter concept to gtest
 // ============================================================================
 
 /// Reporter that delegates to gtest EXPECT_* macros.
@@ -149,7 +149,7 @@ class GTestReporter {
 };
 
 // ============================================================================
-// ExpectValidBytecode — gtest entry points
+// ExpectValidBytecode - gtest entry points
 // ============================================================================
 
 /// Run all structural invariant checks on a compiled pattern.
