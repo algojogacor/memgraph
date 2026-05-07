@@ -210,8 +210,8 @@ struct ParetoFrontier {
   /// passes into one loop.
   void prune_with_pruned_prefix(size_t pruned_prefix) {
     auto const n = alts_.size();
-    if (n - pruned_prefix == 0) return;  // nothing newly added; no new pairs
-    if (n <= 1) return;                  // 0 or 1 alt total: no pairs at all
+    if (n <= pruned_prefix) return;  // nothing newly added; no new pairs
+    if (n <= 1) return;              // 0 or 1 alt total: no pairs at all
 
     // SBO buffer for the dominated-flag array.  Frontiers rarely exceed 64
     // alternatives after pruning; larger ones fall back to heap.
