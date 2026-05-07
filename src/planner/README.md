@@ -70,6 +70,13 @@ Bytecode-based pattern matching for performance:
 
 ### Extraction (`extract/`)
 - `extractor.hpp` - Cost-based expression extraction
+  - Public stages: `ComputeFrontiers`, `CollectDependencies`, `TopologicalSort`
+  - `ExtractionContext` - reusable per-extraction storage (frontier map, selection, in-degree, order)
+  - `Extract(ctx, ...)` - one-shot sugar over the four stages
+- `pareto_frontier.hpp` - `ParetoFrontier<Alt, Dominance>`
+  - Used by cost models that propagate demand sets (or any per-alt context)
+  - Dominance pruning, merge, and `mutate_pruning_invariant_preserving` for
+    in-place edits that preserve the Pareto invariant
 
 ## Testing
 
@@ -150,21 +157,22 @@ auto result = rewriter.saturate(RewriteConfig::Default());
 
 ### Eclass-Level Join Hoisting
 
-Multi-pattern rules like `F(?x), Mul(?r, ?y)` match an anchor pattern then traverse parents to find joined patterns. The joined pattern's parent traversal depends on `?r`, which is the anchor's **eclass** — it doesn't change across enodes within that eclass. Without hoisting, the parent traversal sits inside the enode loop and re-walks the same parent set for every enode, producing identical results each time.
+Multi-pattern rules like `F(?x), Mul(?r, ?y)` match an anchor pattern then
+traverse parents to find joined patterns. When the joined pattern's parent
+traversal depends only on the anchor's **eclass** (not the specific enode),
+the traversal can be hoisted above the enode loop so it runs once per eclass
+instead of once per enode. Both orderings produce the same matches; hoisting
+eliminates the redundant repetitions.
 
-Hoisting moves the parent traversal above the enode loop so it runs once per eclass instead of once per enode. Both orderings produce the same matches — hoisting just eliminates the redundant repetitions.
-
-With N enodes and P parents, the non-yield overhead is:
-- **Without hoisting:** N(4 + 6P) — 4 instructions per enode, 6 per parent, parent loop repeated N times
-- **With hoisting:** P(6 + 4N) — parent loop runs once, enode loop (cheaper at 4 instructions) runs P times
-
-**Benchmark:** `VMEclassHoistFixture` in `bench/bench_vm.cpp` varies eclasses, enodes-per-eclass, and parents to isolate the effect. The benefit scales with enodes-per-eclass (the redundancy factor).
+The benefit scales with enodes-per-eclass — the redundancy factor.
 
 ### O(1) Parent Iteration
 
-`ParentsIter` stores iterator pairs into the parent set (`boost::unordered_flat_set`) rather than an index that requires `begin()` + `std::advance(index)` on each `NextParent` call. The parent set is immutable during matching so iterators stay valid. This makes each `NextParent` O(1) instead of O(index), eliminating O(N²) total cost per parent traversal.
-
-**Benchmark:** The same `VMEclassHoistFixture` captures this — the benefit scales with parent set size.
+`ParentsIter` stores iterator pairs into the parent set (a
+`boost::unordered_flat_set`) rather than an index that would require
+`begin()` + `std::advance(index)` on each `NextParent` call. The parent set
+is immutable during matching, so iterators stay valid. Each `NextParent`
+becomes constant-time, eliminating quadratic cost on long parent traversals.
 
 ## Related Documentation
 
