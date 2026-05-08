@@ -3514,7 +3514,6 @@ PreparedQuery PrepareCypherQuery(ParsedQuery parsed_query, std::map<std::string,
                                 parsed_query.parameters,
                                 plan_cache,
                                 dba,
-                                {},
                                 interpreter.query_planner_context());
 
   auto hints = plan::ProvidePlanHints(&plan->plan(), plan->symbol_table());
@@ -3633,7 +3632,6 @@ PreparedQuery PrepareExplainQuery(ParsedQuery parsed_query, std::vector<Notifica
                                              parsed_inner_query.parameters,
                                              plan_cache,
                                              dba,
-                                             {},
                                              interpreter.query_planner_context());
 
   auto hints = plan::ProvidePlanHints(&cypher_query_plan->plan(), cypher_query_plan->symbol_table());
@@ -3741,7 +3739,6 @@ PreparedQuery PrepareProfileQuery(ParsedQuery parsed_query, bool in_explicit_tra
                                              parsed_inner_query.parameters,
                                              plan_cache,
                                              dba,
-                                             {},
                                              interpreter.query_planner_context());
 
 #ifdef MG_ENTERPRISE

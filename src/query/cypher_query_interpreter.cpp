@@ -211,8 +211,8 @@ auto MakeLogicalPlan(AstStorage ast_storage, CypherQuery *query, const Parameter
 std::shared_ptr<PlanWrapper> CypherQueryToPlan(frontend::StrippedQuery const &stripped_query, AstStorage ast_storage,
                                                CypherQuery *query, const Parameters &parameters,
                                                PlanCacheLRU *plan_cache, DbAccessor *db_accessor,
-                                               const std::vector<Identifier *> &predefined_identifiers,
-                                               plan::v2::QueryPlannerContext &planner_context) {
+                                               plan::v2::QueryPlannerContext &planner_context,
+                                               const std::vector<Identifier *> &predefined_identifiers) {
   // Skip plan cache when using experimental v2 planner - plans may change as v2 evolves
   const bool use_plan_cache = plan_cache && !flags::AreExperimentsEnabled(flags::Experiments::PLANNER_V2);
   if (use_plan_cache) {

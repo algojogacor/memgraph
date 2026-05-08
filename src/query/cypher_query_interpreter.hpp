@@ -170,7 +170,7 @@ auto MakeLogicalPlan(AstStorage ast_storage, CypherQuery *query, const Parameter
 std::shared_ptr<PlanWrapper> CypherQueryToPlan(frontend::StrippedQuery const &stripped_query, AstStorage ast_storage,
                                                CypherQuery *query, const Parameters &parameters,
                                                PlanCacheLRU *plan_cache, DbAccessor *db_accessor,
-                                               const std::vector<Identifier *> &predefined_identifiers,
-                                               plan::v2::QueryPlannerContext &planner_context);
+                                               plan::v2::QueryPlannerContext &planner_context,
+                                               const std::vector<Identifier *> &predefined_identifiers = {});
 
 }  // namespace memgraph::query
