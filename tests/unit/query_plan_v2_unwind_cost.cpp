@@ -137,6 +137,36 @@ TEST(SubqueryBarrier, InnerBindingsStripped) {
   EXPECT_THROW((void)ConvertToLogicalOperator(eg, outer_root_bad, ctx_bad), QueryException);
 }
 
+// Importing CALL surfaces as NotYetImplemented at the Subquery cost case,
+// not as the downstream "no self-contained alternative" extraction failure.
+// Today the AST converter rejects all syntactic forms of importing CALL up
+// front; this test exercises the planner-side defence by bypassing the
+// converter and constructing a Subquery whose inner alts all reference an
+// outer-scope symbol.
+TEST(SubqueryBarrier, ImportingCallSurfacesNotYetImplemented) {
+  egraph eg;
+  auto outer_sym = eg.MakeSymbol(0, "x");
+  auto outer_once = eg.MakeOnce();
+  auto outer_bind = eg.MakeBind(outer_once, outer_sym, eg.MakeLiteral(storage::ExternalPropertyValue{int64_t{1}}));
+
+  // Inner block references outer_sym - inner alts all carry required={outer_sym}.
+  auto inner_once = eg.MakeOnce();
+  auto inner_id = eg.MakeIdentifier(outer_sym);
+  auto y_sym = eg.MakeSymbol(1, "y");
+  auto inner_named = eg.MakeNamedOutput("y", y_sym, inner_id);
+  auto inner_root = eg.MakeOutputs(inner_once, {inner_named});
+
+  auto subq = eg.MakeSubquery(outer_bind, inner_root, {y_sym});
+
+  auto col_y_sym = eg.MakeSymbol(2, "y");
+  auto outer_id_y = eg.MakeIdentifier(y_sym);
+  auto outer_named = eg.MakeNamedOutput("y", col_y_sym, outer_id_y);
+  auto outer_root = eg.MakeOutputs(subq, {outer_named});
+
+  QueryPlannerContext ctx;
+  EXPECT_THROW((void)ConvertToLogicalOperator(eg, outer_root, ctx), NotYetImplemented);
+}
+
 TEST(OutputCardinality, ScalarReturnIsOneRowEvenWhenValueIsList) {
   // RETURN range(0, 5) AS r produces ONE row containing a 6-element list,
   // not six rows.  Pins the contract that NamedOutput is per-evaluation

@@ -21,12 +21,12 @@
 #include <boost/unordered/unordered_flat_map.hpp>
 
 #include "planner/extract/extractor.hpp"
+#include "query/exceptions.hpp"
 #include "query/plan/operator.hpp"
 #include "query/plan_v2/bind_semantics.hpp"
 #include "query/plan_v2/builtin_estimator.hpp"
 #include "query/plan_v2/cardinality.hpp"
 #include "query/plan_v2/cardinality_estimator.hpp"
-#include "query/plan_v2/default_estimator.hpp"
 #include "query/plan_v2/egraph_internal.hpp"
 #include "query/plan_v2/expression_cost.hpp"
 #include "query/plan_v2/plan_alternative.hpp"
@@ -37,15 +37,19 @@ namespace memgraph::query::plan::v2 {
 // ============================================================================
 // Plan extraction cost model - Pareto frontier with symbol demand tracking
 // ----------------------------------------------------------------------------
-// The cluster below has three layers, each depending on the one above:
+// The TU is structured bottom-up; each section depends on the ones above:
 //   1. Alternatives    : the (cost, required, enode_id, is_alive) tuple, its
 //                        dominance relation, and the Pareto frontier type.
 //   2. Frontier ops    : Cartesian product (CombineAlts) and in-place
 //                        re-stamping (MapAlts) used by the cost model.
-//   3. Policies        : PlanCostModel (per-enode dispatch into ops),
-//                        PlanResolver (top-down DAG walk picking compatible
-//                        alts).  These are the two customisation points the
-//                        generic extractor takes.
+//   3. Policies        : PlanCostModel (per-enode dispatch into ops) and
+//                        PlanResolver (demand-aware top-down DAG walk).
+//                        These are the two customisation points the generic
+//                        extractor takes.
+//   4. Builder         : turns the resolver's topological order into the
+//                        LogicalOperator / Expression tree the executor runs.
+// The public surface (ConvertToLogicalOperator, BuiltinEstimator impl,
+// QueryPlannerContext impl) sits below the four sections.
 // ============================================================================
 namespace {
 
@@ -325,6 +329,17 @@ struct PlanCostModel {
         auto const &outer_frontier = *children[0];
         auto const &inner_frontier = *children[1];
 
+        // Importing-CALL guard: every inner alt with non-empty `required`
+        // is silently rejected below.  If no inner alt is self-contained,
+        // the Subquery eclass would emit an empty frontier and the root
+        // satisfiability check would later throw an opaque "no self-
+        // contained alternative".  Surface the actual cause here.
+        bool const has_self_contained_inner =
+            std::ranges::any_of(inner_frontier.alts(), [](Alternative const &a) { return a.required.empty(); });
+        if (!has_self_contained_inner) {
+          throw NotYetImplemented{"importing CALL subqueries"};
+        }
+
         SymbolSet exposed_syms;
         {
           auto seq = exposed_syms.extract_sequence();
@@ -485,7 +500,7 @@ void for_each_resolved_child(planner::core::ENode<symbol> const &enode, Resolved
   if (is_bind_or_unwind && is_alive) {
     auto alive_provided = parent_key.provided;
     alive_provided.insert(children[1]);
-    auto downstream_demand = SetDifference(parent_key.demanded_introduces, SymbolSet{children[1]});
+    auto downstream_demand = bind::SetDifferenceOne(parent_key.demanded_introduces, children[1]);
     visit(ResolvedKey{children[0], std::move(alive_provided), std::move(downstream_demand)});
     visit(ResolvedKey{children[1], parent_key.provided, {}});
     visit(ResolvedKey{children[2], parent_key.provided, {}});
