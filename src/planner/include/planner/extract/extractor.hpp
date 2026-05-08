@@ -117,6 +117,58 @@ concept Resolver =
 /// In-degree map for topological sorting.
 using InDegreeMap = boost::unordered_flat_map<EClassId, int>;
 
+/// Pool of children-frontier buffers used by ComputeFrontiers' recursive
+/// descent.  Each recursive frame acquires one buffer; nested frames acquire
+/// fresh buffers further down the pool, then release them on return.  A single
+/// shared buffer would not work because the recursive call to ComputeFrontiers
+/// happens inside the per-enode loop, which would clobber the caller frame's
+/// buffer.  Capacity of inner vectors persists across queries because the
+/// outer pool is owned by ExtractionContext.
+template <CostResultType CostResult>
+struct FrontierBufferPool {
+  // std::deque so references into pool entries remain valid when the pool
+  // grows during a deeper recursive frame's acquire().  std::vector would
+  // reallocate and dangle the outer caller's children_frontiers reference.
+  std::deque<std::vector<CostResult const *>> pool;
+  size_t depth = 0;
+
+  /// Acquire a buffer for the current recursive frame.  Cleared on entry but
+  /// keeps its capacity from previous uses at the same depth.
+  auto acquire() -> std::vector<CostResult const *> & {
+    if (depth == pool.size()) pool.emplace_back();
+    auto &buf = pool[depth++];
+    buf.clear();
+    return buf;
+  }
+
+  void release() noexcept { --depth; }
+
+  /// RAII guard: acquires on construction, releases on destruction.  Safe for
+  /// early returns.
+  struct Acquired {
+    FrontierBufferPool *owner;
+    std::vector<CostResult const *> *buf;
+
+    explicit Acquired(FrontierBufferPool &p) : owner{&p}, buf{&p.acquire()} {}
+
+    ~Acquired() { owner->release(); }
+
+    Acquired(Acquired const &) = delete;
+    Acquired(Acquired &&) = delete;
+    auto operator=(Acquired const &) -> Acquired & = delete;
+    auto operator=(Acquired &&) -> Acquired & = delete;
+
+    auto get() noexcept -> std::vector<CostResult const *> & { return *buf; }
+  };
+
+  void clear() noexcept {
+    // Preserve outer capacity AND inner-vector capacities across queries: a
+    // pool entry only ever grows.  depth resets to 0 so the next Extract()
+    // re-uses the same buffers from depth 0 upward.
+    depth = 0;
+  }
+};
+
 /// Bottom-up cost propagation. Calls cost_model(enode, enode_id, children) for each enode,
 /// merges results via CostResult::merge across enodes in the same eclass.
 ///
@@ -128,7 +180,8 @@ using InDegreeMap = boost::unordered_flat_map<EClassId, int>;
 template <typename Symbol, typename Analysis, typename CostModel>
   requires CostResultType<typename CostModel::CostResult>
 [[nodiscard]] auto ComputeFrontiers(EGraph<Symbol, Analysis> const &egraph, CostModel const &cost_model,
-                                    EClassId eclass_id, FrontierMap<typename CostModel::CostResult> &out)
+                                    EClassId eclass_id, FrontierMap<typename CostModel::CostResult> &out,
+                                    FrontierBufferPool<typename CostModel::CostResult> &buffers)
     -> CostModel::CostResult const * {
   using CostResult = CostModel::CostResult;
 
@@ -147,7 +200,11 @@ template <typename Symbol, typename Analysis, typename CostModel>
 
   auto merged_frontier = std::optional<CostResult>{};
 
-  auto children_frontiers = std::vector<CostResult const *>{};
+  // Acquire a per-frame buffer for collecting child-frontier pointers.  Each
+  // recursive call further down acquires its own slot in the pool, so this
+  // frame's buffer is not clobbered.
+  typename FrontierBufferPool<CostResult>::Acquired acquired{buffers};
+  auto &children_frontiers = acquired.get();
   for (auto const &enode_id : eclass.nodes()) {
     auto const &enode = egraph.get_enode(enode_id);
 
@@ -155,7 +212,7 @@ template <typename Symbol, typename Analysis, typename CostModel>
     // pointers because subsequent recursive inserts may rehash and invalidate
     // them (boost::unordered_flat_map uses open addressing).
     for (auto child : enode.children()) {
-      (void)ComputeFrontiers(egraph, cost_model, child, out);
+      (void)ComputeFrontiers(egraph, cost_model, child, out, buffers);
     }
 
     // Phase 2: look up each child's frontier now that no further inserts will
@@ -199,6 +256,19 @@ template <typename Symbol, typename Analysis, typename CostModel>
   // All enodes cyclic - remove sentinel
   out.erase(sentinel_it);
   return nullptr;
+}
+
+/// Convenience overload for callers that don't want to thread a buffer pool
+/// (tests, benches, one-shot uses).  Allocates a temporary pool per call.
+/// Production code paths (Extract) should pass the long-lived pool from
+/// ExtractionContext to amortise the inner-vector capacities.
+template <typename Symbol, typename Analysis, typename CostModel>
+  requires CostResultType<typename CostModel::CostResult>
+[[nodiscard]] auto ComputeFrontiers(EGraph<Symbol, Analysis> const &egraph, CostModel const &cost_model,
+                                    EClassId eclass_id, FrontierMap<typename CostModel::CostResult> &out)
+    -> CostModel::CostResult const * {
+  FrontierBufferPool<typename CostModel::CostResult> pool;
+  return ComputeFrontiers(egraph, cost_model, eclass_id, out, pool);
 }
 
 /// Scratch buffers used by the dependency traversal in CollectDependencies.
@@ -308,6 +378,7 @@ struct ExtractionContext {
   std::vector<std::pair<EClassId, ENodeId>> order;
   TraversalScratch deps;
   std::deque<EClassId> ready;
+  FrontierBufferPool<CostResult> frontier_buffers;
 
   void clear() {
     frontier_map.clear();
@@ -316,6 +387,7 @@ struct ExtractionContext {
     order.clear();
     deps.clear();
     ready.clear();
+    frontier_buffers.clear();
   }
 };
 
@@ -342,7 +414,7 @@ template <typename Symbol, typename Analysis, typename CostModel, typename Resol
   // Stage 1: bottom-up cost propagation.  Reserve up-front so the recursive
   // descent doesn't re-hash as eclasses are inserted.
   ctx.frontier_map.reserve(egraph.num_classes());
-  (void)ComputeFrontiers(egraph, cost_model, root, ctx.frontier_map);
+  (void)ComputeFrontiers(egraph, cost_model, root, ctx.frontier_map, ctx.frontier_buffers);
 
   // Stage 2: top-down resolution.  Resolver is responsible for the contract
   // documented above (chosen-coverage selection map).
