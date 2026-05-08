@@ -62,19 +62,20 @@ inline constexpr double kIdentifier = 1.0;
 /// Look up the per-operator cost for a CostClass.  Used by PlanCostModel to
 /// dispatch via symbol_descriptor<S>::cost_class without enumerating cases.
 inline constexpr auto FromClass(CostClass c) -> double {
+  using enum CostClass;
   switch (c) {
-    case CostClass::Arithmetic:
+    case Arithmetic:
       return kArithmetic;
-    case CostClass::Comparison:
+    case Comparison:
       return kComparison;
-    case CostClass::Boolean:
+    case Boolean:
       return kBoolean;
-    case CostClass::Unary:
+    case Unary:
       return kUnary;
-    case CostClass::Identifier:
+    case Identifier:
       return kIdentifier;
-    case CostClass::Structural:
-    case CostClass::Leaf:
+    case Structural:
+    case Leaf:
       // Structural and Leaf are scored directly by PlanCostModel; reaching
       // them here means a caller forgot the distinction.  Returning 0.0
       // would silently corrupt costs upstream.
