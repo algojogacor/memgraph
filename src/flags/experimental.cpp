@@ -38,7 +38,13 @@
 
 // Bolt server flags.
 // NOLINTNEXTLINE (cppcoreguidelines-avoid-non-const-global-variables)
-DEFINE_VALIDATED_string(experimental_enabled, "", "Experimental features to be used, comma-separated. Options []",
+// Help text is a literal: gflags' DEFINE_string captures it at macro-
+// expansion time, so the option list has to be hand-maintained alongside
+// the `mapping` table below.  When you add an entry to that table, append
+// it here too (and to experimental_config's list when it accepts an
+// option).
+DEFINE_VALIDATED_string(experimental_enabled, "",
+                        "Experimental features to be used, comma-separated. Options [planner-v2]",
                         { return memgraph::flags::ValidExperimentalFlag(value); });
 
 // NOLINTNEXTLINE (cppcoreguidelines-avoid-non-const-global-variables)
