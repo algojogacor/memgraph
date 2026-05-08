@@ -11,6 +11,7 @@
 
 #include "query/plan_v2/ast_converter.hpp"
 
+#include "query/exceptions.hpp"
 #include "query/frontend/ast/ast.hpp"
 #include "query/frontend/ast/ast_visitor.hpp"
 #include "query/frontend/semantic/symbol_table.hpp"
@@ -19,6 +20,19 @@ using memgraph::query::plan::v2::egraph;
 
 namespace memgraph::query {
 namespace {
+
+/// Surface an unsupported AST node as a QueryException so the client gets a
+/// clean error response and the server keeps running.  Picks up the AST
+/// node's name from its TypeInfo so each unsupported case doesn't have to
+/// hand-spell its own label.
+[[noreturn]] void ThrowNotImplementedYet(Tree const &op) {
+  throw QueryException(fmt::format("plan_v2: {} not implemented yet", op.GetTypeInfo().name));
+}
+
+[[noreturn]] void ThrowNotImplementedYet(std::string_view feature) {
+  throw QueryException(fmt::format("plan_v2: {} not implemented yet", feature));
+}
+
 struct AstConverterVisitor : HierarchicalTreeVisitor {
   using HierarchicalTreeVisitor::PostVisit;
   using HierarchicalTreeVisitor::PreVisit;
@@ -48,18 +62,14 @@ struct AstConverterVisitor : HierarchicalTreeVisitor {
     return true;
   }
 
-  ReturnType Visit(EnumValueAccess & /*enum_value_access*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  ReturnType Visit(EnumValueAccess &op) override { ThrowNotImplementedYet(op); }
 
   bool PreVisit(CypherQuery &op) override {
-    MG_ASSERT(op.memory_limit_ == nullptr, "Memory limit not implemented yet");
+    if (op.memory_limit_ != nullptr) ThrowNotImplementedYet("query memory limit");
     (void)op.memory_scale_;  // TODO
-    MG_ASSERT(op.pre_query_directives_.commit_frequency_ == nullptr, "Commit frequencey not implemented yet");
-    MG_ASSERT(op.pre_query_directives_.hops_limit_ == nullptr, "Hop limit not implemented yet");
-    MG_ASSERT(op.pre_query_directives_.index_hints_.empty(), "Index hints not implemented yet");
-
+    if (op.pre_query_directives_.commit_frequency_ != nullptr) ThrowNotImplementedYet("commit frequency directive");
+    if (op.pre_query_directives_.hops_limit_ != nullptr) ThrowNotImplementedYet("hop limit directive");
+    if (!op.pre_query_directives_.index_hints_.empty()) ThrowNotImplementedYet("index hints directive");
     return true;
   }
 
@@ -132,15 +142,12 @@ struct AstConverterVisitor : HierarchicalTreeVisitor {
 
   bool PostVisit(Return & /*return_*/) override { return true; }
 
-  bool PreVisit(Where & /*where*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(Where &op) override { ThrowNotImplementedYet(op); }
 
   bool PreVisit(CallSubquery &op) override {
     // Minimum scope (issue 0004 follow-up): non-importing CALL { ... } RETURN ...
-    MG_ASSERT(!op.has_variable_scope_, "importing CALL with explicit scope clause: TODO");
-    MG_ASSERT(!op.all_variables_scoped_, "CALL with implicit star scope clause: TODO");
+    if (op.has_variable_scope_) ThrowNotImplementedYet("importing CALL with explicit scope clause");
+    if (op.all_variables_scoped_) ThrowNotImplementedYet("CALL with implicit star scope clause");
 
     // Save outer state and let the inner cypher_query_'s clauses build a
     // fresh row pipe.  EnsureInput on an empty stack pushes a fresh Once
@@ -150,25 +157,13 @@ struct AstConverterVisitor : HierarchicalTreeVisitor {
     return true;
   }
 
-  bool PreVisit(Exists & /*exists*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(Exists &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(Foreach & /*foreach*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(Foreach &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(LoadCsv & /*load_csv*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(LoadCsv &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(RegexMatch & /*regex_match*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(RegexMatch &op) override { ThrowNotImplementedYet(op); }
 
   bool PreVisit(Unwind &op) override {
     // UNWIND list AS x: bypass the named_expression_'s default visit (which
@@ -187,187 +182,79 @@ struct AstConverterVisitor : HierarchicalTreeVisitor {
     return false;  // children already visited; don't descend through named_expression_
   }
 
-  bool PreVisit(Merge & /*merge*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(Merge &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(RemoveLabels & /*remove_labels*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(RemoveLabels &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(RemoveProperty & /*remove_property*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(RemoveProperty &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(SetLabels & /*set_labels*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(SetLabels &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(SetProperties & /*set_properties*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(SetProperties &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(SetProperty & /*set_property*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(SetProperty &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(Delete & /*delete_*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(Delete &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(EdgeAtom & /*edge_atom*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(EdgeAtom &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(NodeAtom & /*node_atom*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(NodeAtom &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(Pattern & /*pattern*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(Pattern &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(Match & /*match*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(Match &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(Create & /*create*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(Create &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(CallProcedure & /*call_procedure*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(CallProcedure &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(ListComprehension & /*list_comprehension*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(ListComprehension &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(None & /*none*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(None &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(Any & /*any*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(Any &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(Single & /*single*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(Single &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(All & /*all*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(All &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(Extract & /*extract*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(Extract &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(Coalesce & /*coalesce*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(Coalesce &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(Reduce & /*reduce*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(Reduce &op) override { ThrowNotImplementedYet(op); }
 
   bool PreVisit(Function & /*function*/) override { return true; }
 
-  bool PreVisit(Aggregation & /*aggregation*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(Aggregation &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(LabelsTest & /*labels_test*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(LabelsTest &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(AllPropertiesLookup & /*all_properties_lookup*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(AllPropertiesLookup &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(PropertyLookup & /*property_lookup*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(PropertyLookup &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(MapProjectionLiteral & /*map_projection_literal*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(MapProjectionLiteral &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(MapLiteral & /*map_literal*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(MapLiteral &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(ListLiteral & /*list_literal*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(ListLiteral &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(IsNullOperator & /*is_null_operator*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(IsNullOperator &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(IfOperator & /*if_operator*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(IfOperator &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(ListSlicingOperator & /*list_slicing_operator*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(ListSlicingOperator &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(SubscriptOperator & /*subscript_operator*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(SubscriptOperator &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(InListOperator & /*in_list_operator*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(InListOperator &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(RangeOperator & /*range_operator*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(RangeOperator &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(CypherUnion & /*cypher_union*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(CypherUnion &op) override { ThrowNotImplementedYet(op); }
 
-  bool PreVisit(PatternComprehension & /*pattern_comprehension*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
-  }
+  bool PreVisit(PatternComprehension &op) override { ThrowNotImplementedYet(op); }
 
   bool PostVisit(CallSubquery &op) override {
     DMG_ASSERT(builder_stack_.size() == 1, "subquery body must produce exactly one root e-class");
