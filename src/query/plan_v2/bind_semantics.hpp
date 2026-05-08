@@ -79,7 +79,7 @@ inline constexpr double kSymbolCost = 1.0;
 
 /// "Are all the variables this node needs already in scope?"
 /// Used by the resolver going down the plan.
-inline auto IsCompatible(SymbolSet const &required, SymbolSet const &provided) -> bool {
+[[nodiscard]] inline auto IsCompatible(SymbolSet const &required, SymbolSet const &provided) -> bool {
   return std::ranges::includes(provided, required);
 }
 
@@ -87,29 +87,44 @@ inline auto IsCompatible(SymbolSet const &required, SymbolSet const &provided) -
 /// Used by the cost model going up the plan.  If yes, this Bind has work
 /// to do (alive: evaluate expr, introduce sym).  If no, the Bind is dead
 /// weight and we'll skip it.
-inline auto IsAlive(SymbolSet const &input_required, planner::core::EClassId sym) -> bool {
+[[nodiscard]] inline auto IsAlive(SymbolSet const &input_required, planner::core::EClassId sym) -> bool {
   return input_required.contains(sym);
 }
 
 /// Cost of the alive branch.  Pay for input, sym evaluation, and expr.
-inline auto AliveCost(double input_cost, double sym_cost, double expr_cost) -> double {
+[[nodiscard]] inline auto AliveCost(double input_cost, double sym_cost, double expr_cost) -> double {
   return input_cost + sym_cost + expr_cost;
 }
 
 /// Cost of the dead branch.  Only the input runs; sym and expr are skipped.
-inline auto DeadCost(double input_cost) -> double { return input_cost; }
+[[nodiscard]] inline auto DeadCost(double input_cost) -> double { return input_cost; }
 
 /// What variables does an alive Bind still need from above?
 /// Take what the input still needed, drop `sym` (this Bind introduces
 /// it), then add whatever `expr` references - because we're about to
 /// evaluate `expr`, so its needs become this Bind's needs.
-inline auto AliveRequired(SymbolSet const &input_required, planner::core::EClassId sym, SymbolSet const &expr_required)
-    -> SymbolSet {
+///
+/// The filtered view over `input_required` preserves sortedness because
+/// `input_required` is itself sorted (flat_set guarantee) and filtering
+/// drops elements without reordering, so the set_union output is sorted
+/// and unique - safe to adopt as ordered_unique_range.
+[[nodiscard]] inline auto AliveRequired(SymbolSet const &input_required, planner::core::EClassId sym,
+                                        SymbolSet const &expr_required) -> SymbolSet {
   boost::container::small_vector<planner::core::EClassId, 16> buf;
   buf.reserve(input_required.size() + expr_required.size());
   auto input_minus_sym = input_required | std::views::filter([sym](planner::core::EClassId id) { return id != sym; });
   std::ranges::set_union(input_minus_sym, expr_required, std::back_inserter(buf));
   return SymbolSet(boost::container::ordered_unique_range, buf.begin(), buf.end());
+}
+
+/// `a \ {x}`: copy `a`, remove a single element.  Used by the resolver's
+/// alive-Bind dispatch where the bound symbol is subtracted from the
+/// downstream demand.  Cheaper than `SetDifference(a, SymbolSet{x})`
+/// because no temporary single-element set is constructed.
+[[nodiscard]] inline auto SetDifferenceOne(SymbolSet const &a, planner::core::EClassId x) -> SymbolSet {
+  SymbolSet out = a;
+  out.erase(x);
+  return out;
 }
 
 }  // namespace memgraph::query::plan::v2::bind
