@@ -21,6 +21,7 @@
 #include "planner/extract/extractor.hpp"
 #include "query/plan/operator.hpp"
 #include "query/plan_v2/bind_semantics.hpp"
+#include "query/plan_v2/builtin_estimator.hpp"
 #include "query/plan_v2/cardinality_estimator.hpp"
 #include "query/plan_v2/default_estimator.hpp"
 #include "query/plan_v2/egraph_internal.hpp"
@@ -105,6 +106,8 @@ struct PlanCostModel {
 
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   CardinalityEstimator const &estimator;
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
+  EGraph const &egraph;  // passed to estimator for e-class walks (e.g. constant deduction)
 
   auto operator()(planner::core::ENode<symbol> const &current, planner::core::ENodeId enode_id,
                   std::span<CostResult const *const> children) const -> CostResult {
@@ -207,6 +210,36 @@ struct PlanCostModel {
       // sourced from expression_cost.
       case symbol::NamedOutput:
         return CombineAlts(*children[0], *children[1], 1.0, enode_id);
+
+      // Function call: cartesian product over arg frontiers (cost-sum and
+      // required-union via the standard CombineAlts chain), then override
+      // cardinality with the estimator's output for this function id.
+      // Cardinality of a function call is *not* the product of its arg
+      // cardinalities (those are scalars by construction), so the
+      // CombineAlts product is replaced uniformly per-alt.
+      case symbol::Function: {
+        CostResult result;
+        if (children.empty()) {
+          result = CostResult{{{.cost = 0.0, .required = {}, .enode_id = enode_id}}};
+        } else {
+          result = MapAlts(*children[0], 0.0, enode_id);
+          for (size_t i = 1; i < children.size(); ++i) {
+            result = CombineAlts(result, *children[i], 0.0, enode_id);
+          }
+        }
+        auto const cardinality =
+            estimator.EstimateFunctionCardinality(current.disambiguator(), current.children(), egraph);
+        // Uniform per-alt edit: structural +1 cost and cardinality from
+        // estimator.  Same value across alts -> dominance ordering
+        // preserved, mutate_pruning_invariant_preserving holds.
+        result.mutate_pruning_invariant_preserving([&](Alternative &alt) {
+          alt.cost += 1.0;
+          alt.cardinality = cardinality;
+          alt.enode_id = enode_id;
+          alt.is_alive = false;
+        });
+        return result;
+      }
     }
     std::unreachable();
   }
@@ -393,6 +426,7 @@ struct Builder {
       X(Output);
       X(NamedOutput);
       X(ParamLookup);
+      X(Function);
 #define MG_DISPATCH_OP(Name, ...) X(Name);
       EGRAPH_BINARY_OPS(MG_DISPATCH_OP)
       EGRAPH_UNARY_OPS(MG_DISPATCH_OP)
@@ -478,6 +512,20 @@ struct Builder {
     return ast_storage_.Create<ParameterLookup>(dis);
   }
 
+  auto Build(utils::tag_value<symbol::Function> /*tag*/, enode_ref node, children_ref children) -> BuildResult {
+    auto const dis = node.disambiguator();
+    if (dis >= function_info_.size()) [[unlikely]] {
+      throw QueryException{"Planner error, function id not found in store"};
+    }
+    auto const &name = function_info_[dis].name;
+    auto args = std::vector<Expression *>{};
+    args.reserve(children.size());
+    for (auto child : children) {
+      args.push_back(Validate<Expression *>(child));
+    }
+    return static_cast<Expression *>(ast_storage_.Create<Function>(name, args));
+  }
+
   // Binary operator helpers
   template <typename AstOp>
   auto BuildBinaryOp(children_ref children) -> BuildResult {
@@ -512,7 +560,9 @@ struct Builder {
   // NOLINTEND(cppcoreguidelines-macro-usage)
 
   Builder(std::map<storage::ExternalPropertyValue, uint64_t> const &literal_store,
-          std::map<std::string, uint64_t> const &name_store, std::map<int32_t, std::string> const &symbol_name_store) {
+          std::map<std::string, uint64_t> const &name_store, std::map<int32_t, std::string> const &symbol_name_store,
+          std::vector<FunctionInfo> const &function_info)
+      : function_info_(function_info) {
     reverse_literal_store_.reserve(literal_store.size());
     for (auto const &[val, id] : literal_store) {
       reverse_literal_store_.emplace(id, val);
@@ -532,6 +582,7 @@ struct Builder {
   boost::unordered_flat_map<uint64_t, storage::ExternalPropertyValue> reverse_literal_store_;
   boost::unordered_flat_map<uint64_t, std::string> reverse_name_store_;
   boost::unordered_flat_map<int32_t, std::string> reverse_symbol_name_store_;
+  std::vector<FunctionInfo> function_info_;
 
   AstStorage ast_storage_;
   SymbolTable symbol_table_;
@@ -550,7 +601,9 @@ struct Builder {
 struct QueryPlannerContext::Impl {
   planner::core::extract::FrontierMap<CostFrontier> frontier_map;
   std::vector<TopoEntry> topo;
-  std::unique_ptr<CardinalityEstimator> estimator;
+  /// User-provided estimator override.  null -> ConvertToLogicalOperator
+  /// builds a BuiltinEstimator over the current egraph for this call.
+  std::unique_ptr<CardinalityEstimator> estimator_override;
 
   void clear() {
     frontier_map.clear();
@@ -558,17 +611,18 @@ struct QueryPlannerContext::Impl {
   }
 };
 
-QueryPlannerContext::QueryPlannerContext()
-    : impl_(std::make_unique<Impl>(Impl{.estimator = std::make_unique<DefaultEstimator>()})) {}
+QueryPlannerContext::QueryPlannerContext() : impl_(std::make_unique<Impl>()) {}
 
 QueryPlannerContext::QueryPlannerContext(std::unique_ptr<CardinalityEstimator> estimator)
-    : impl_(std::make_unique<Impl>(Impl{.estimator = std::move(estimator)})) {}
+    : impl_(std::make_unique<Impl>(Impl{.estimator_override = std::move(estimator)})) {}
 
 QueryPlannerContext::~QueryPlannerContext() = default;
 QueryPlannerContext::QueryPlannerContext(QueryPlannerContext &&) noexcept = default;
 QueryPlannerContext &QueryPlannerContext::operator=(QueryPlannerContext &&) noexcept = default;
 
-auto QueryPlannerContext::estimator() const -> CardinalityEstimator const & { return *impl_->estimator; }
+auto QueryPlannerContext::estimator_override() const -> CardinalityEstimator const * {
+  return impl_->estimator_override.get();
+}
 
 auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext &planner_context)
     -> std::tuple<std::unique_ptr<LogicalOperator>, double, AstStorage, SymbolTable> {
@@ -586,8 +640,15 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   // Root-satisfiability precondition: ComputeFrontiers must have produced at
   // least one self-contained alternative for the root (required == {}).
   // We compute frontiers eagerly here so we can validate before resolve.
+  // Estimator: user-provided override takes precedence; otherwise build a
+  // BuiltinEstimator over the current egraph for this call.  BuiltinEstimator
+  // is per-call-stateful (binds to one egraph) so it can't be the long-lived
+  // QueryPlannerContext default.
+  auto const builtin = BuiltinEstimator{e};
+  auto const *override_est = planner_context.estimator_override();
+  CardinalityEstimator const &active_estimator = override_est ? *override_est : builtin;
   (void)extract::ComputeFrontiers(
-      impl.egraph_, PlanCostModel{planner_context.estimator()}, true_root, ctx.frontier_map);
+      impl.egraph_, PlanCostModel{active_estimator, impl.egraph_}, true_root, ctx.frontier_map);
 
   auto const root_it = ctx.frontier_map.find(true_root);
   if (root_it == ctx.frontier_map.end() || !root_it->second.has_value()) {
@@ -612,7 +673,8 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   /// STAGE: Build selected (LogicalOperator, Expression *, Symbol, NamedExpression *, etc.)
   auto builder = Builder{impl.storage<symbol::Literal>().store,
                          impl.storage<symbol::NamedOutput>().store,
-                         impl.storage<symbol::Symbol>().store};
+                         impl.storage<symbol::Symbol>().store,
+                         impl.storage<symbol::Function>().info};
 
   // ---------------------------------------------------------------------------
   // build_cache reference-stability contract - DO NOT REGRESS.

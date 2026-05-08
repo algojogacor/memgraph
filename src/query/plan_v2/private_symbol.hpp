@@ -51,6 +51,8 @@ enum struct symbol : std::uint8_t {
   // Unary operators
   UnaryMinus,
   UnaryPlus,
+  // Function call (builtin or UDF); disambiguator is the per-egraph function id.
+  Function,
 };
 
 // ============================================================================
@@ -136,6 +138,9 @@ template<> struct symbol_descriptor<symbol::Not>         { static constexpr Arit
 template<> struct symbol_descriptor<symbol::UnaryMinus>  { static constexpr Arity arity = Arity::Unary;   static constexpr CostClass cost_class = CostClass::Unary;      };
 template<> struct symbol_descriptor<symbol::UnaryPlus>   { static constexpr Arity arity = Arity::Unary;   static constexpr CostClass cost_class = CostClass::Unary;      };
 
+// Function call - variadic children (the arguments); structurally scored by PlanCostModel.
+template<> struct symbol_descriptor<symbol::Function>    { static constexpr Arity arity = Arity::Special; static constexpr CostClass cost_class = CostClass::Structural; };
+
 // clang-format on
 
 // ============================================================================
@@ -195,7 +200,8 @@ using AllSymbolsSeq =
     symbol_sequence<symbol::Once, symbol::Bind, symbol::Symbol, symbol::Literal, symbol::Identifier, symbol::Output,
                     symbol::NamedOutput, symbol::ParamLookup, symbol::Add, symbol::Sub, symbol::Mul, symbol::Div,
                     symbol::Mod, symbol::Exp, symbol::Eq, symbol::Neq, symbol::Lt, symbol::Lte, symbol::Gt, symbol::Gte,
-                    symbol::And, symbol::Or, symbol::Xor, symbol::Not, symbol::UnaryMinus, symbol::UnaryPlus>;
+                    symbol::And, symbol::Or, symbol::Xor, symbol::Not, symbol::UnaryMinus, symbol::UnaryPlus,
+                    symbol::Function>;
 
 // ============================================================================
 // Exhaustiveness check - every enum value MUST have a descriptor.

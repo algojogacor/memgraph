@@ -20,6 +20,7 @@
 #include "query/frontend/semantic/symbol_generator.hpp"
 #include "query/plan/operator.hpp"
 #include "query/plan_v2/ast_converter.hpp"
+#include "query/plan_v2/cardinality_estimator.hpp"
 #include "query/plan_v2/egraph.hpp"
 #include "query/plan_v2/egraph_converter.hpp"
 #include "query/plan_v2/rewrites.hpp"
@@ -72,6 +73,19 @@ std::string DescribeExpression(Expression *expr) {
 
   // Parameter lookup
   if (utils::Downcast<ParameterLookup>(expr)) return "ParameterLookup";
+
+  // Function call: render as name(arg, arg, ...).
+  if (auto *fn = utils::Downcast<Function>(expr)) {
+    std::string out = fn->function_name_ + "(";
+    bool first = true;
+    for (auto *arg : fn->arguments_) {
+      if (!first) out += ", ";
+      first = false;
+      out += DescribeExpression(arg);
+    }
+    out += ")";
+    return out;
+  }
 
   return expr->GetTypeInfo().name;
 }
@@ -782,6 +796,70 @@ INSTANTIATE_TEST_SUITE_P(
             .query = "WITH 1 AS a WITH a AS b RETURN b AS x, 1 AS y;",
             .expected_details = {"Produce {x`0:1, y`1:1}", "Once"},
             .min_rewrites = 1,
+            .should_saturate = true,
+        }
+    ),
+    TestCaseName
+);
+// clang-format on
+
+// Recording mock estimator: records every call and returns a fixed value.
+struct RecordingMockEstimator final : CardinalityEstimator {
+  struct Call {
+    uint64_t function_id;
+    std::size_t arg_count;
+  };
+
+  mutable std::vector<Call> calls;
+  double return_value;
+
+  explicit RecordingMockEstimator(double v) : return_value(v) {}
+
+  auto EstimateFunctionCardinality(uint64_t function_id, std::span<planner::core::EClassId const> arg_eclasses,
+                                   EGraph const & /*eg*/) const -> double override {
+    calls.push_back({.function_id = function_id, .arg_count = arg_eclasses.size()});
+    return return_value;
+  }
+};
+
+TEST_F(PlannerV2PipelineTest, FunctionCostCaseInvokesEstimator) {
+  // Inject a recording mock through QueryPlannerContext; plan a query
+  // containing a function call; verify the cost case reaches the mock with
+  // the expected (function_id, arg_count) shape.
+  auto recorder = std::make_unique<RecordingMockEstimator>(6.0);
+  auto *raw = recorder.get();
+  planner_context_ = QueryPlannerContext{std::move(recorder)};
+
+  auto plan = PlanQuery("RETURN range(0, 5) AS r;");
+  ASSERT_NE(plan, nullptr);
+
+  // Cost-model walks every Function e-node in the e-graph; with no rewrites
+  // there is exactly one (range(0, 5)), so the mock must have been called
+  // at least once with arity 2.  No upper bound: ComputeFrontiers may visit
+  // shared subtrees more than once, which is fine for the contract.
+  ASSERT_GE(raw->calls.size(), 1U);
+  EXPECT_EQ(raw->calls.front().arg_count, 2U);
+}
+
+// clang-format off
+INSTANTIATE_TEST_SUITE_P(
+    FunctionCalls,
+    PlannerV2PipelineTest,
+    ::testing::Values(
+        // The cypher parser uppercases builtin function names; the planner
+        // round-trips that exact name through the e-graph interner.
+        PipelineTestCase{
+            .name = "RangeWithIntLiterals",
+            .query = "RETURN range(0, 5) AS r;",
+            .expected_details = {"Produce {r`0:RANGE(0, 5)}", "Once"},
+            .min_rewrites = 0,
+            .should_saturate = true,
+        },
+        PipelineTestCase{
+            .name = "RangeWithParameter",
+            .query = "RETURN range(0, $n) AS r;",
+            .expected_details = {"Produce {r`0:RANGE(0, ParameterLookup)}", "Once"},
+            .min_rewrites = 0,
             .should_saturate = true,
         }
     ),

@@ -16,6 +16,7 @@
 #include <string_view>
 #include <vector>
 
+#include "query/plan_v2/builtin_functions.hpp"
 #include "query/plan_v2/egraph_ops.hpp"
 #include "storage/v2/property_value.hpp"
 #include "strong_type/strong_type.hpp"
@@ -43,6 +44,13 @@ struct egraph {
   auto MakeIdentifier(eclass sym) -> eclass;
   auto MakeOutputs(eclass input, std::vector<eclass> named_outputs) -> eclass;
   auto MakeNamedOutput(std::string_view name, eclass sym, eclass expr) -> eclass;
+  auto MakeFunction(std::string_view name, std::vector<eclass> args) -> eclass;
+
+  /// Look up the FunctionInfo (name + cached BuiltinKind) for a function id
+  /// previously assigned by MakeFunction.  Used by the cost-model estimator
+  /// and the builder to translate a Function e-node back to its name without
+  /// materialising the whole interner.  Returns nullptr if the id is unknown.
+  auto FunctionInfoById(std::uint64_t id) const -> FunctionInfo const *;
 
   // Binary operators (arithmetic / comparison / boolean) - generated from EGRAPH_BINARY_OPS.
 #define MG_DECL_MAKE_BINARY(Name, ...) auto Make##Name(eclass lhs, eclass rhs) -> eclass;

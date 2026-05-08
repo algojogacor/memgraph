@@ -38,13 +38,11 @@ struct RecordingEstimator final : CardinalityEstimator {
   }
 };
 
-TEST(EstimatorPlumbing, DefaultContextWiresDefaultEstimator) {
+TEST(EstimatorPlumbing, DefaultContextHasNoOverride) {
   QueryPlannerContext ctx;
-  // We can't construct a real EGraph easily here; the contract is that the
-  // accessor returns a live CardinalityEstimator.  Touching the vtable
-  // through dynamic_cast confirms the right concrete type.
-  auto const &est = ctx.estimator();
-  EXPECT_NE(dynamic_cast<DefaultEstimator const *>(&est), nullptr);
+  // No override -> ConvertToLogicalOperator builds a BuiltinEstimator
+  // over the current egraph for the call.
+  EXPECT_EQ(ctx.estimator_override(), nullptr);
 }
 
 TEST(EstimatorPlumbing, InjectedEstimatorIsReachable) {
@@ -53,14 +51,14 @@ TEST(EstimatorPlumbing, InjectedEstimatorIsReachable) {
   QueryPlannerContext ctx{std::move(recorder)};
 
   // The accessor returns the same object we injected.
-  EXPECT_EQ(&ctx.estimator(), raw);
+  EXPECT_EQ(ctx.estimator_override(), raw);
   EXPECT_EQ(raw->call_count, 0);
 
   // Calling through the accessor reaches the mock.  An empty arg span and a
-  // dummy EGraph reference is fine: DefaultEstimator/RecordingEstimator do
-  // not dereference the egraph at this layer.
+  // dummy EGraph reference is fine: RecordingEstimator does not dereference
+  // the egraph at this layer.
   EGraph dummy_eg;
-  auto const result = ctx.estimator().EstimateFunctionCardinality(0, {}, dummy_eg);
+  auto const result = ctx.estimator_override()->EstimateFunctionCardinality(0, {}, dummy_eg);
   EXPECT_DOUBLE_EQ(result, 42.0);
   EXPECT_EQ(raw->call_count, 1);
 }

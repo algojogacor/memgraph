@@ -55,6 +55,17 @@ namespace memgraph::query::plan::v2::bind {
 /// Set of EClassIds - used for "demand" sets (`required`) and "provided"
 /// contexts in the resolver.  flat_set + small_vector keeps small sets
 /// (typical Cypher demand depth ≤ 8) heap-free.
+///
+/// We store EClassIds, but every id in here is the e-class of a Symbol
+/// e-node, and each Symbol e-class corresponds to exactly one variable in
+/// the query.  Two reasons that holds:
+///   1. MakeSymbol(position, name) is hashconsed, so the same variable
+///      always lands in the same e-class, and different variables land
+///      in different ones.
+///   2. No rewrite rule merges two Symbol e-classes together.
+/// So treating an EClassId in this set as "a variable" is safe today.  If
+/// someone later adds a rewrite that merges Symbol e-classes, that breaks
+/// and IsAlive/IsCompatible will silently mix up different variables.
 using SymbolSet = boost::container::flat_set<planner::core::EClassId, std::less<>,
                                              boost::container::small_vector<planner::core::EClassId, 8>>;
 

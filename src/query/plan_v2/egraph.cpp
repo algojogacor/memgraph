@@ -55,6 +55,16 @@ auto egraph::MakeNamedOutput(std::string_view name, eclass sym, eclass expr) -> 
   return pimpl_->Make<symbol::NamedOutput>(name, sym, expr);
 }
 
+auto egraph::MakeFunction(std::string_view name, std::vector<eclass> args) -> eclass {
+  return pimpl_->Make<symbol::Function>(name, std::move(args));
+}
+
+auto egraph::FunctionInfoById(std::uint64_t id) const -> FunctionInfo const * {
+  auto const &info = pimpl_->storage<symbol::Function>().info;
+  if (id >= info.size()) return nullptr;
+  return &info[id];
+}
+
 // Binary / unary public-API definitions - generated from EGRAPH_*_OPS.
 // NOLINTBEGIN(cppcoreguidelines-macro-usage)
 #define MG_DEFN_MAKE_BINARY(Name, ...) \

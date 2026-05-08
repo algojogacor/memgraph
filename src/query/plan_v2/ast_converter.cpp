@@ -272,8 +272,12 @@ struct AstConverterVisitor : HierarchicalTreeVisitor {
     return true;
   }
 
-  bool PreVisit(Function & /*function*/) override {
-    MG_ASSERT(false, "not implemented yet");
+  bool PreVisit(Function &function) override {
+    // Children's PostVisits will push their resolved e-classes onto the
+    // builder stack; PostVisit(Function) below pops `arguments_.size()`
+    // entries off the top in the order they were pushed.  Save the arity
+    // here so PostVisit knows how many to pop without re-walking the AST.
+    function_arities_.push_back(function.arguments_.size());
     return true;
   }
 
@@ -408,7 +412,19 @@ struct AstConverterVisitor : HierarchicalTreeVisitor {
 
   bool PostVisit(Reduce & /*reduce*/) override { return true; }
 
-  bool PostVisit(Function & /*function*/) override { return true; }
+  bool PostVisit(Function &function) override {
+    DMG_ASSERT(!function_arities_.empty(), "Function PostVisit without matching PreVisit");
+    auto const arity = function_arities_.back();
+    function_arities_.pop_back();
+    DMG_ASSERT(builder_stack_.size() >= arity, "Function arguments missing from builder stack");
+    auto args = std::vector<plan::v2::eclass>{};
+    args.reserve(arity);
+    auto const first = builder_stack_.end() - static_cast<std::ptrdiff_t>(arity);
+    args.insert(args.end(), first, builder_stack_.end());
+    builder_stack_.erase(first, builder_stack_.end());
+    builder_stack_.emplace_back(egraph_.MakeFunction(function.function_name_, std::move(args)));
+    return true;
+  }
 
   bool PostVisit(Aggregation & /*aggregation*/) override { return true; }
 
@@ -485,6 +501,10 @@ struct AstConverterVisitor : HierarchicalTreeVisitor {
   SymbolTable const &symbol_table_;
   egraph egraph_;
   std::vector<plan::v2::eclass> builder_stack_;
+  // Stack of function-call arities pushed in PreVisit, popped in PostVisit.
+  // Nested calls (e.g. range(0, foo(1))) pop in the right order because
+  // PostVisits are LIFO with PreVisits.
+  std::vector<std::size_t> function_arities_;
 };
 }  // namespace
 }  // namespace memgraph::query

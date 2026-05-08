@@ -33,9 +33,16 @@ struct CardinalityEstimator;
 /// pass it to ConvertToLogicalOperator.  Pimpl so callers don't see
 /// CostFrontier / Alternative.
 ///
-/// Owns the active CardinalityEstimator.  Default construction wires a
-/// DefaultEstimator (kDefaultRowEstimate everywhere); tests substitute a
-/// mock by passing one to the estimator-taking constructor.
+/// Optionally holds a user-provided CardinalityEstimator override.  Default
+/// construction leaves the override empty: ConvertToLogicalOperator builds
+/// a BuiltinEstimator over the current egraph for that call.  Tests inject
+/// a mock by passing one to the estimator-taking constructor; the override
+/// then takes precedence over the per-call BuiltinEstimator.
+///
+/// The override cannot be the production estimator at construction time
+/// because BuiltinEstimator binds to a specific egraph (it walks e-classes
+/// for literal deduction), and a single QueryPlannerContext is reused
+/// across queries that each have their own egraph.
 class QueryPlannerContext {
  public:
   QueryPlannerContext();
@@ -50,7 +57,10 @@ class QueryPlannerContext {
 
   Impl &impl() { return *impl_; }
 
-  CardinalityEstimator const &estimator() const;
+  /// Returns the user-provided estimator override, or nullptr if none was
+  /// set and ConvertToLogicalOperator should fall back to a per-call
+  /// BuiltinEstimator built over the current egraph.
+  CardinalityEstimator const *estimator_override() const;
 
  private:
   std::unique_ptr<Impl> impl_;

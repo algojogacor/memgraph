@@ -21,6 +21,7 @@
 #include <string_view>
 #include <vector>
 
+#include "query/plan_v2/builtin_functions.hpp"
 #include "query/plan_v2/egraph.hpp"
 #include "query/plan_v2/private_symbol.hpp"
 
@@ -154,6 +155,30 @@ struct symbol_make_traits<symbol::NamedOutput> {
     auto [it, inserted] = s.store.try_emplace(std::string{name}, s.next_id);
     if (inserted) ++s.next_id;
     return {.children = utils::small_vector{sym, expr}, .disambiguator = it->second};
+  }
+};
+
+/// Function: name -> id mapping, with BuiltinKind cached at insertion time
+/// so the cost model and estimator can dispatch on an array lookup instead
+/// of a per-call string compare.  Children are the argument e-classes; the
+/// disambiguator is the function id, namespace-shared between builtins and
+/// UDFs.
+template <>
+struct symbol_make_traits<symbol::Function> {
+  struct storage_type {
+    std::map<std::string, uint64_t> name_to_id;
+    std::vector<FunctionInfo> info;  ///< info[id] = { name, kind }
+  };
+
+  static auto make(storage_type &s, std::string_view name, std::vector<eclass> args) -> lowered_node {
+    auto [it, inserted] = s.name_to_id.try_emplace(std::string{name}, s.info.size());
+    if (inserted) {
+      s.info.push_back(FunctionInfo{.name = std::string{name}, .kind = BuiltinKindFor(name)});
+    }
+    auto children = utils::small_vector<eclass>{};
+    children.reserve(args.size());
+    std::ranges::copy(args, std::back_inserter(children));
+    return {.children = std::move(children), .disambiguator = it->second};
   }
 };
 
