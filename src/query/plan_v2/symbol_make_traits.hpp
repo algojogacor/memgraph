@@ -21,6 +21,8 @@
 #include <string_view>
 #include <vector>
 
+#include <boost/unordered/unordered_flat_map.hpp>
+
 #include "query/plan_v2/builtin_functions.hpp"
 #include "query/plan_v2/egraph.hpp"
 #include "query/plan_v2/private_symbol.hpp"
@@ -169,7 +171,7 @@ struct symbol_make_traits<symbol::Function> {
     /// name -> id, mirroring NamedOutput / Symbol / Literal's `store`
     /// convention so the Builder picks up the same field name across all
     /// interner-backed traits.
-    std::map<std::string, uint64_t> store;
+    boost::unordered::unordered_flat_map<std::string, uint64_t> store;
     /// id -> FunctionInfo (parallel to `store`'s id range).  Read by the
     /// estimator and the Builder to recover the exact name + cached
     /// BuiltinKind without re-classifying.  Kept in lockstep with `store`
@@ -183,7 +185,7 @@ struct symbol_make_traits<symbol::Function> {
     auto intern(std::string_view name) -> uint64_t {
       auto [it, inserted] = store.try_emplace(std::string{name}, info.size());
       if (inserted) {
-        info.push_back(FunctionInfo{.name = std::string{name}, .kind = BuiltinKindFor(name)});
+        info.push_back(FunctionInfo{.name = it->first, .kind = BuiltinKindFor(name)});
       }
       return it->second;
     }
