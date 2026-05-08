@@ -172,19 +172,25 @@ struct symbol_make_traits<symbol::Function> {
     std::map<std::string, uint64_t> store;
     /// id -> FunctionInfo (parallel to `store`'s id range).  Read by the
     /// estimator and the Builder to recover the exact name + cached
-    /// BuiltinKind without re-classifying.
+    /// BuiltinKind without re-classifying.  Kept in lockstep with `store`
+    /// by `intern` - external code must not insert into either directly.
     std::vector<FunctionInfo> info;
+
+    /// Intern a function name, classifying its BuiltinKind on first sight.
+    /// Returns the stable id for that name; identical names always return
+    /// the same id.  This is the only place `store` and `info` are written,
+    /// keeping the parallel-array invariant local to the trait.
+    auto intern(std::string_view name) -> uint64_t {
+      auto [it, inserted] = store.try_emplace(std::string{name}, info.size());
+      if (inserted) {
+        info.push_back(FunctionInfo{.name = std::string{name}, .kind = BuiltinKindFor(name)});
+      }
+      return it->second;
+    }
   };
 
   static auto make(storage_type &s, std::string_view name, std::vector<eclass> args) -> lowered_node {
-    auto [it, inserted] = s.store.try_emplace(std::string{name}, s.info.size());
-    if (inserted) {
-      s.info.push_back(FunctionInfo{.name = std::string{name}, .kind = BuiltinKindFor(name)});
-    }
-    auto children = utils::small_vector<eclass>{};
-    children.reserve(args.size());
-    std::ranges::copy(args, std::back_inserter(children));
-    return {.children = std::move(children), .disambiguator = it->second};
+    return {.children = utils::small_vector<eclass>(args.begin(), args.end()), .disambiguator = s.intern(name)};
   }
 };
 
