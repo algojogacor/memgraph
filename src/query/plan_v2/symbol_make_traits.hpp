@@ -166,12 +166,18 @@ struct symbol_make_traits<symbol::NamedOutput> {
 template <>
 struct symbol_make_traits<symbol::Function> {
   struct storage_type {
-    std::map<std::string, uint64_t> name_to_id;
-    std::vector<FunctionInfo> info;  ///< info[id] = { name, kind }
+    /// name -> id, mirroring NamedOutput / Symbol / Literal's `store`
+    /// convention so the Builder picks up the same field name across all
+    /// interner-backed traits.
+    std::map<std::string, uint64_t> store;
+    /// id -> FunctionInfo (parallel to `store`'s id range).  Read by the
+    /// estimator and the Builder to recover the exact name + cached
+    /// BuiltinKind without re-classifying.
+    std::vector<FunctionInfo> info;
   };
 
   static auto make(storage_type &s, std::string_view name, std::vector<eclass> args) -> lowered_node {
-    auto [it, inserted] = s.name_to_id.try_emplace(std::string{name}, s.info.size());
+    auto [it, inserted] = s.store.try_emplace(std::string{name}, s.info.size());
     if (inserted) {
       s.info.push_back(FunctionInfo{.name = std::string{name}, .kind = BuiltinKindFor(name)});
     }

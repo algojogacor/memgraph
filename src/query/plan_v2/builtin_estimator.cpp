@@ -11,6 +11,8 @@
 
 #include "query/plan_v2/builtin_estimator.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <optional>
 
 #include "query/plan_v2/cardinality.hpp"
@@ -43,6 +45,13 @@ auto TryReadIntLiteral(EGraph const &eg, egraph const &facade, planner::core::EC
     for (auto const &[val, stored_id] : lit_store) {
       if (stored_id != id) continue;
       if (val.IsInt()) return val.ValueInt();
+      // Tolerate doubles that exactly represent an integer (e.g. range(0.0,
+      // 5.0) coming from a parser that promoted ints to doubles).  Reject
+      // non-integral doubles - they're not what range expects anyway.
+      if (val.IsDouble()) {
+        auto const d = val.ValueDouble();
+        if (std::isfinite(d) && std::trunc(d) == d) return static_cast<int64_t>(d);
+      }
       return std::nullopt;
     }
   }
@@ -67,8 +76,7 @@ auto BuiltinEstimator::EstimateFunctionCardinality(uint64_t function_id,
       auto const b = TryReadIntLiteral(eg, facade, arg_eclasses[1]);
       if (!a || !b) return kDefaultRowEstimate;
       // Cypher range(a, b) is inclusive on both ends -> b - a + 1, clamped at 0.
-      auto const span = static_cast<double>(*b) - static_cast<double>(*a) + 1.0;
-      return span < 0.0 ? 0.0 : span;
+      return std::max(0.0, static_cast<double>(*b) - static_cast<double>(*a) + 1.0);
     }
     case BuiltinKind::Unknown:
       return kDefaultRowEstimate;

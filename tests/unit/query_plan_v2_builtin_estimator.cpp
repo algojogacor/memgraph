@@ -29,7 +29,7 @@ using EClassId = planner::core::EClassId;
 auto IntLiteral(egraph &eg, int64_t v) -> eclass { return eg.MakeLiteral(storage::ExternalPropertyValue{v}); }
 
 auto FunctionId(egraph const &eg, std::string_view name) -> uint64_t {
-  auto const &store = internal::get_impl(eg).storage<symbol::Function>().name_to_id;
+  auto const &store = internal::get_impl(eg).storage<symbol::Function>().store;
   auto it = store.find(std::string{name});
   return it->second;
 }

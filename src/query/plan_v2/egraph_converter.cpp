@@ -11,6 +11,8 @@
 
 #include "query/plan_v2/egraph_converter.hpp"
 
+#include <algorithm>
+#include <ranges>
 #include <utility>
 
 #include <boost/container/flat_set.hpp>
@@ -817,17 +819,13 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   auto &result = *ptr;
 
   auto unique_result = result->Clone(&builder.ast_storage_);
-  // Root cost / cardinality: from the cheapest self-contained alt at the
-  // root (the one the resolver would pick under provided={}).
-  auto root_cost = std::numeric_limits<double>::infinity();
-  auto root_cardinality = std::numeric_limits<double>::quiet_NaN();
-  for (auto const &alt : root_frontier.alts()) {
-    if (alt.required.empty() && alt.cost < root_cost) {
-      root_cost = alt.cost;
-      root_cardinality = alt.cardinality;
-    }
-  }
-  ctx.last_root_cardinality = root_cardinality;
-  return {std::move(unique_result), root_cost, std::move(builder.ast_storage_), std::move(builder.symbol_table_)};
+  // Root alt: cheapest self-contained (the one the resolver would pick
+  // under provided={}).  Existence is guaranteed by the root_satisfiable
+  // precondition checked above.
+  auto self_contained =
+      root_frontier.alts() | std::views::filter([](Alternative const &a) { return a.required.empty(); });
+  auto const &best = *std::ranges::min_element(self_contained, std::less<>{}, &Alternative::cost);
+  ctx.last_root_cardinality = best.cardinality;
+  return {std::move(unique_result), best.cost, std::move(builder.ast_storage_), std::move(builder.symbol_table_)};
 }
 }  // namespace memgraph::query::plan::v2
