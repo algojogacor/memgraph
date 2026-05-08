@@ -159,8 +159,8 @@ template<> struct symbol_descriptor<symbol::Subquery>    { static constexpr Arit
 // Classification predicates - derived from descriptors.
 // ============================================================================
 //
-// These are the entry points used by the rest of the planner-v2 code to ask
-// "is this symbol binary?" / "is this symbol unary?".  They derive from
+// These are the entry points used to ask "is this symbol binary?" /
+// "is this symbol unary?".  They derive from
 // symbol_descriptor<S>::arity, so adding a new symbol's descriptor automatically
 // flips the right predicate.
 

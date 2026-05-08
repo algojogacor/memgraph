@@ -1291,8 +1291,8 @@ TEST(Extract_MultiAlt, DAGResolution_FirstVisitorWins) {
   auto const &shared_frontier = *frontier_map.at(shared_class);
   ASSERT_EQ(shared_frontier.alts().size(), 2);
 
-  // Context-aware resolver with re-resolve on incompatible re-visit.
-  // Mimics the fixed ResolvePlanSelection pattern.
+  // Context-aware resolver: when a cached eclass is revisited under a tighter
+  // context than the one originally cached, re-resolve to a compatible alt.
   auto resolved = std::unordered_map<EClassId, std::pair<ENodeId, double>>{};
   auto resolved_required = std::unordered_map<EClassId, std::set<int>>{};
 
@@ -1486,10 +1486,7 @@ TEST(Extract_MultiAlt, DAGResolution_AliveToDeadErasesStaleChildren) {
 }
 
 // Cascade re-resolution must propagate through plain intermediate operators,
-// not just stop one level deep at the first re-resolved node.  This guards
-// against a regression where the resolver re-picks an alt at the cascade root
-// but leaves a transitive grandchild on its original (now-incompatible)
-// selection.
+// not just stop one level deep at the first re-resolved node.
 TEST(Extract_MultiAlt, DAGResolution_CascadeTraversesIntermediate) {
   // 4-level chain feeding a diamond:
   //   Root(B) -> {Left(B,1), Right(B,2)} -> Shared -> Mid -> Leaf
