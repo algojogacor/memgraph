@@ -21,17 +21,13 @@ using memgraph::query::plan::v2::egraph;
 namespace memgraph::query {
 namespace {
 
-/// Surface an unsupported AST node as a QueryException so the client gets a
-/// clean error response and the server keeps running.  Picks up the AST
+/// Surface an unsupported AST node as NotYetImplemented so the client gets
+/// a clean error response and the server keeps running.  Picks up the AST
 /// node's name from its TypeInfo so each unsupported case doesn't have to
 /// hand-spell its own label.
-[[noreturn]] void ThrowNotImplementedYet(Tree const &op) {
-  throw QueryException(fmt::format("plan_v2: {} not implemented yet", op.GetTypeInfo().name));
-}
+[[noreturn]] void ThrowNotImplementedYet(Tree const &op) { throw NotYetImplemented(op.GetTypeInfo().name); }
 
-[[noreturn]] void ThrowNotImplementedYet(std::string_view feature) {
-  throw QueryException(fmt::format("plan_v2: {} not implemented yet", feature));
-}
+[[noreturn]] void ThrowNotImplementedYet(std::string_view feature) { throw NotYetImplemented(feature); }
 
 struct AstConverterVisitor : HierarchicalTreeVisitor {
   using HierarchicalTreeVisitor::PostVisit;
