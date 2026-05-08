@@ -55,6 +55,10 @@ enum struct symbol : std::uint8_t {
   Function,
   // UNWIND clause: 3 children [input, sym, list_expr]; mirrors Bind's shape.
   Unwind,
+  // CALL { ... } subquery: variadic [outer_input, inner_root, exposed_sym_1, ...].
+  // Acts as a scope barrier: inner's introduces are stripped at the boundary;
+  // only the explicit exposed_sym children become visible to the outer scope.
+  Subquery,
 };
 
 // ============================================================================
@@ -146,6 +150,9 @@ template<> struct symbol_descriptor<symbol::Function>    { static constexpr Arit
 // UNWIND - 3 children [input, sym, list_expr]; row-pipe operator scored by PlanCostModel.
 template<> struct symbol_descriptor<symbol::Unwind>      { static constexpr Arity arity = Arity::Special; static constexpr CostClass cost_class = CostClass::Structural; };
 
+// Subquery (CALL block) - variadic [outer_input, inner_root, exposed_syms...]; scope barrier.
+template<> struct symbol_descriptor<symbol::Subquery>    { static constexpr Arity arity = Arity::Special; static constexpr CostClass cost_class = CostClass::Structural; };
+
 // clang-format on
 
 // ============================================================================
@@ -206,7 +213,7 @@ using AllSymbolsSeq =
                     symbol::NamedOutput, symbol::ParamLookup, symbol::Add, symbol::Sub, symbol::Mul, symbol::Div,
                     symbol::Mod, symbol::Exp, symbol::Eq, symbol::Neq, symbol::Lt, symbol::Lte, symbol::Gt, symbol::Gte,
                     symbol::And, symbol::Or, symbol::Xor, symbol::Not, symbol::UnaryMinus, symbol::UnaryPlus,
-                    symbol::Function, symbol::Unwind>;
+                    symbol::Function, symbol::Unwind, symbol::Subquery>;
 
 // ============================================================================
 // Exhaustiveness check - every enum value MUST have a descriptor.

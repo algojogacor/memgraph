@@ -137,8 +137,16 @@ struct AstConverterVisitor : HierarchicalTreeVisitor {
     return true;
   }
 
-  bool PreVisit(CallSubquery & /*call_subquery*/) override {
-    MG_ASSERT(false, "not implemented yet");
+  bool PreVisit(CallSubquery &op) override {
+    // Minimum scope (issue 0004 follow-up): non-importing CALL { ... } RETURN ...
+    MG_ASSERT(!op.has_variable_scope_, "importing CALL with explicit scope clause: TODO");
+    MG_ASSERT(!op.all_variables_scoped_, "CALL with implicit star scope clause: TODO");
+
+    // Save outer state and let the inner cypher_query_'s clauses build a
+    // fresh row pipe.  EnsureInput on an empty stack pushes a fresh Once
+    // for the inner, independent of any outer Bind chain.
+    saved_outer_stacks_.push_back(std::move(builder_stack_));
+    builder_stack_.clear();
     return true;
   }
 
@@ -361,7 +369,41 @@ struct AstConverterVisitor : HierarchicalTreeVisitor {
     return true;
   }
 
-  bool PostVisit(CallSubquery & /*call_subquery*/) override { return true; }
+  bool PostVisit(CallSubquery &op) override {
+    DMG_ASSERT(builder_stack_.size() == 1, "subquery body must produce exactly one root e-class");
+    auto inner_root = builder_stack_.back();
+    builder_stack_.pop_back();
+
+    // Restore outer state and ensure there's an outer row pipe to chain off.
+    DMG_ASSERT(!saved_outer_stacks_.empty(), "subquery PostVisit without matching PreVisit");
+    builder_stack_ = std::move(saved_outer_stacks_.back());
+    saved_outer_stacks_.pop_back();
+    EnsureInput();
+    auto outer_input = PopStack();
+
+    // Exposed syms come from the inner cypher_query_'s last RETURN clause.
+    // Hashconsing makes MakeSymbol(pos, name) return the SAME e-class the
+    // inner visit already created, so the Subquery e-node references the
+    // same Symbol leaves the inner Output's NamedOutputs do.
+    DMG_ASSERT(op.cypher_query_ != nullptr && op.cypher_query_->single_query_ != nullptr,
+               "CALL block missing inner cypher query");
+    std::vector<plan::v2::eclass> exposed_syms;
+    for (auto *clause : op.cypher_query_->single_query_->clauses_) {
+      auto *ret = utils::Downcast<query::Return>(clause);
+      if (ret == nullptr) continue;
+      // Last RETURN wins (Cypher chains can have intermediate WITH but only
+      // one final RETURN inside a CALL block in (b)'s scope).
+      exposed_syms.clear();
+      for (auto *ne : ret->body_.named_expressions) {
+        auto const &sym = symbol_table_.at(*ne);
+        exposed_syms.push_back(egraph_.MakeSymbol(ne->symbol_pos_, sym.name()));
+      }
+    }
+    MG_ASSERT(!exposed_syms.empty(), "CALL block must end in RETURN; unit subqueries are TODO");
+
+    builder_stack_.emplace_back(egraph_.MakeSubquery(outer_input, inner_root, std::move(exposed_syms)));
+    return true;
+  }
 
   bool PostVisit(Exists & /*exists*/) override { return true; }
 
@@ -502,6 +544,10 @@ struct AstConverterVisitor : HierarchicalTreeVisitor {
   SymbolTable const &symbol_table_;
   egraph egraph_;
   std::vector<plan::v2::eclass> builder_stack_;
+  // Stack of outer builder_stack_ snapshots saved across CALL { ... } scope
+  // boundaries.  Push at PreVisit(CallSubquery), pop at PostVisit.  Vector
+  // (not std::stack) so nested subqueries Just Work.
+  std::vector<std::vector<plan::v2::eclass>> saved_outer_stacks_;
 };
 }  // namespace
 }  // namespace memgraph::query

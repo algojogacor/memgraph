@@ -34,13 +34,19 @@ struct Alternative {
   double cardinality = 1.0;
   /// Symbols that MUST be bound by ancestors.
   bind::SymbolSet required;
-  /// Symbols this subtree introduces into its row pipe (alive Bind / Unwind
-  /// add their sym; pipe operators propagate up).  Used by Output's cost
-  /// case to subtract demand satisfied by the input pipe (so a NamedOutput
+  /// Symbols this subtree's row pipe makes AVAILABLE TO OPERATORS THAT PULL
+  /// ROWS FROM IT - the (B) "available downstream" reading, not the
+  /// "set-anywhere-in-the-subtree" reading.  Used by Output's cost case to
+  /// subtract demand satisfied by the input pipe (so a NamedOutput
   /// referencing an Unwind variable sees that demand absorbed) and by the
   /// resolver to demand the same introductions when picking the input
   /// subtree alt.  Empty for per-evaluation operators (binary expressions,
   /// NamedOutput, Function).
+  ///
+  /// Scope barriers strip introductions: see symbol::Subquery's cost case
+  /// for the canonical pattern - inner.introduces is dropped at the
+  /// boundary, only the explicit exposed_syms from the e-node's children
+  /// cross into the outer scope.
   bind::SymbolSet introduces;
   planner::core::ENodeId enode_id;  ///< Which enode achieves this alternative
   // Meaningful only when this alt's enode is a Bind; default false.

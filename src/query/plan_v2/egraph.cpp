@@ -63,6 +63,10 @@ auto egraph::MakeUnwind(eclass input, eclass sym, eclass list_expr) -> eclass {
   return pimpl_->Make<symbol::Unwind>(input, sym, list_expr);
 }
 
+auto egraph::MakeSubquery(eclass outer_input, eclass inner_root, std::vector<eclass> exposed_syms) -> eclass {
+  return pimpl_->Make<symbol::Subquery>(outer_input, inner_root, std::move(exposed_syms));
+}
+
 auto egraph::FunctionInfoById(std::uint64_t id) const -> FunctionInfo const * {
   auto const &info = pimpl_->storage<symbol::Function>().info;
   if (id >= info.size()) return nullptr;

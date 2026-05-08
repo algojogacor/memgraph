@@ -149,6 +149,11 @@ class SimplePlanChecker : public plan::HierarchicalLogicalOperatorVisitor {
                                "}");
     return true;
   }
+
+  bool PreVisit(plan::Apply &) override {
+    operator_details.push_back("Apply");
+    return true;
+  }
 };
 
 // Test case data for parameterized testing
@@ -846,6 +851,31 @@ TEST_F(PlannerV2PipelineTest, FunctionCostCaseInvokesEstimator) {
   ASSERT_GE(raw->calls.size(), 1U);
   EXPECT_EQ(raw->calls.front().arg_count, 2U);
 }
+
+// clang-format off
+INSTANTIATE_TEST_SUITE_P(
+    Subqueries,
+    PlannerV2PipelineTest,
+    ::testing::Values(
+        // Minimal CALL { ... } RETURN ...: the inner block exposes one
+        // projection (`y`) into the outer scope.  The outer RETURN reads it
+        // back via Identifier(y).  Validates the (B) "available downstream"
+        // semantic for `introduces`: the inner's row-pipe introductions are
+        // stripped at the Subquery boundary, only the explicit exposed_syms
+        // cross.  Without the barrier, the outer Identifier(y) would have
+        // been satisfied by inner row-pipe alts directly (incorrect for
+        // queries that have inner-only bindings).
+        PipelineTestCase{
+            .name = "MinimalCallReturn",
+            .query = "CALL { RETURN 1 AS y } RETURN y;",
+            .expected_details = {"Produce {y`1:y}", "Apply", "Once", "Produce {y`0:1}", "Once"},
+            .min_rewrites = 0,
+            .should_saturate = true,
+        }
+    ),
+    TestCaseName
+);
+// clang-format on
 
 // clang-format off
 INSTANTIATE_TEST_SUITE_P(

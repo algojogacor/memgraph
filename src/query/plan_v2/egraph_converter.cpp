@@ -313,6 +313,52 @@ struct PlanCostModel {
         });
       }
 
+      // Subquery (CALL block): scope-barrier row-pipe.  Children layout is
+      // [outer_input, inner_root, exposed_sym_1, ...]; cost is per-row
+      // evaluation of the inner plan; cardinality is the product; introduces
+      // is `outer.introduces ∪ exposed_syms` - the inner's own introduces
+      // are STRIPPED at the boundary, which is the (B) "available downstream"
+      // semantic in action.  required is just the outer pipe's; for
+      // non-importing subqueries the inner's required must be empty (any
+      // alt the inner produces with non-empty required is rejected here).
+      case symbol::Subquery: {
+        auto const &outer_frontier = *children[0];
+        auto const &inner_frontier = *children[1];
+
+        SymbolSet exposed_syms;
+        {
+          auto seq = exposed_syms.extract_sequence();
+          seq.reserve(current.children().size() - 2);
+          for (size_t i = 2; i < current.children().size(); ++i) {
+            seq.push_back(current.children()[i]);
+          }
+          std::ranges::sort(seq);
+          seq.erase(std::ranges::unique(seq).begin(), seq.end());
+          exposed_syms.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
+        }
+
+        return CostFrontier::flat_map(outer_frontier, [&](auto const &outer_alt, auto emit) {
+          for (auto const &inner_alt : inner_frontier.alts()) {
+            // Non-importing subquery: inner must be self-contained.
+            if (!inner_alt.required.empty()) continue;
+
+            // BARRIER: outer.introduces ∪ exposed_syms; inner.introduces is dropped.
+            SymbolSet introduces;
+            auto intro_seq = introduces.extract_sequence();
+            intro_seq.reserve(outer_alt.introduces.size() + exposed_syms.size());
+            std::ranges::set_union(outer_alt.introduces, exposed_syms, std::back_inserter(intro_seq));
+            introduces.adopt_sequence(boost::container::ordered_unique_range, std::move(intro_seq));
+
+            emit({.cost = outer_alt.cost + outer_alt.cardinality * inner_alt.cost,
+                  .cardinality = outer_alt.cardinality * inner_alt.cardinality,
+                  .required = outer_alt.required,
+                  .introduces = std::move(introduces),
+                  .enode_id = enode_id,
+                  .is_alive = true});
+          }
+        });
+      }
+
       // Function call: cartesian product over arg frontiers (cost-sum and
       // required-union via the standard CombineAlts chain), then override
       // cardinality with the estimator's output for this function id.
@@ -446,6 +492,31 @@ void for_each_resolved_child(planner::core::ENode<symbol> const &enode, Resolved
   } else if (is_bind_or_unwind) {
     // Only Bind has a dead branch (Unwind alts are always emitted alive).
     visit(ResolvedKey{children[0], parent_key.provided, parent_key.demanded_introduces});
+  } else if (sym_op == symbol::Subquery && children.size() >= 2) {
+    // Subquery is a scope barrier:
+    //   - outer_input child sees parent.provided and (parent.demand \ exposed)
+    //     because exposed_syms are introduced by the Subquery itself, not by
+    //     the outer input.
+    //   - inner_root child sees a FRESH context (provided={}, demanded={}):
+    //     non-importing means nothing flows in, and the inner's introductions
+    //     don't escape - the picker for the inner just chases the cheapest
+    //     self-contained alt.
+    //   - exposed_sym children are Symbol leaves; provided=parent.provided,
+    //     demanded={}.
+    SymbolSet exposed_syms;
+    {
+      auto seq = exposed_syms.extract_sequence();
+      for (size_t i = 2; i < children.size(); ++i) seq.push_back(children[i]);
+      std::ranges::sort(seq);
+      seq.erase(std::ranges::unique(seq).begin(), seq.end());
+      exposed_syms.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
+    }
+    auto outer_demand = SetDifference(parent_key.demanded_introduces, exposed_syms);
+    visit(ResolvedKey{children[0], parent_key.provided, std::move(outer_demand)});
+    visit(ResolvedKey{children[1], SymbolSet{}, SymbolSet{}});
+    for (size_t i = 2; i < children.size(); ++i) {
+      visit(ResolvedKey{children[i], parent_key.provided, {}});
+    }
   } else if (sym_op == symbol::Output && !children.empty()) {
     // Input pipe must deliver the introductions the chosen Output alt was
     // costed against.  NamedOutputs see those introductions in provided.
@@ -591,6 +662,7 @@ struct Builder {
       X(ParamLookup);
       X(Function);
       X(Unwind);
+      X(Subquery);
 #define MG_DISPATCH_OP(Name, ...) X(Name);
       EGRAPH_BINARY_OPS(MG_DISPATCH_OP)
       EGRAPH_UNARY_OPS(MG_DISPATCH_OP)
@@ -681,6 +753,17 @@ struct Builder {
     auto const &sym = ExtractAndValidate<Symbol, 1>(children);
     auto const &list_expr = ExtractAndValidate<Expression *, 2>(children);
     return std::static_pointer_cast<LogicalOperator>(std::make_shared<query::plan::Unwind>(input, list_expr, sym));
+  }
+
+  auto Build(utils::tag_value<symbol::Subquery> /*tag*/, enode_ref /*node*/, children_ref children) -> BuildResult {
+    auto const &outer_input = ExtractAndValidate<LogicalOperatorPtr, 0>(children);
+    auto const &inner_root = ExtractAndValidate<LogicalOperatorPtr, 1>(children);
+    // exposed_sym children at children[2..] are Symbol values that were
+    // resolved into the build cache; they're structural metadata for the
+    // Subquery e-node (so the cost / resolver can see what crosses the
+    // barrier) but the v1 Apply operator doesn't consume them directly.
+    return std::static_pointer_cast<LogicalOperator>(
+        std::make_shared<query::plan::Apply>(outer_input, inner_root, /*subquery_has_return=*/true));
   }
 
   auto Build(utils::tag_value<symbol::Function> /*tag*/, enode_ref node, children_ref children) -> BuildResult {

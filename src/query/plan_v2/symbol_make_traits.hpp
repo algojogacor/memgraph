@@ -205,6 +205,25 @@ struct symbol_make_traits<symbol::Unwind> {
   }
 };
 
+/// Subquery: no storage; children are [outer_input, inner_root, exposed_syms...].
+/// Variadic to encode the projection set of the inner block as direct e-graph
+/// children, so the cost case and resolver don't have to peek into inner_root's
+/// enode shape to discover what crosses the scope barrier.
+template <>
+struct symbol_make_traits<symbol::Subquery> {
+  struct storage_type {};
+
+  static auto make(storage_type &, eclass outer_input, eclass inner_root, std::vector<eclass> exposed_syms)
+      -> lowered_node {
+    auto children = utils::small_vector<eclass>{};
+    children.reserve(2 + exposed_syms.size());
+    children.push_back(outer_input);
+    children.push_back(inner_root);
+    std::ranges::copy(exposed_syms, std::back_inserter(children));
+    return {.children = std::move(children), .disambiguator = std::nullopt};
+  }
+};
+
 /// Binary operator: no storage, just two children
 template <symbol S>
   requires(is_binary_op_v<S>)

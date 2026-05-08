@@ -21,6 +21,7 @@
 
 #include <gtest/gtest.h>
 
+#include "query/exceptions.hpp"
 #include "query/plan/operator.hpp"
 #include "query/plan_v2/cardinality.hpp"
 #include "query/plan_v2/cardinality_estimator.hpp"
@@ -89,6 +90,51 @@ TEST(UnwindCostShape, ProducesUnwindOperator) {
   // Root cardinality: Output produces input row count.  Unwind multiplied
   // Once (1) by range (6) giving 6; Output preserves that.
   EXPECT_DOUBLE_EQ(ctx.last_root_cardinality(), 6.0);
+}
+
+// (B) "available downstream" barrier semantic for symbol::Subquery.
+// The inner block binds x_inner via Bind, but only y_outer is in
+// exposed_syms.  Outside the Subquery, Identifier(x_inner) must NOT be
+// satisfiable (the picker rejects all root alts), proving the barrier
+// strips inner introductions.  Identifier(y_outer) IS satisfiable.
+TEST(SubqueryBarrier, InnerBindingsStripped) {
+  // Build by hand: the AST converter doesn't expose a way to construct
+  // an Identifier for an out-of-scope variable (semantic analysis would
+  // reject it), so we synthesise the e-graph directly.
+  egraph eg;
+  auto inner_once = eg.MakeOnce();
+  auto x_sym = eg.MakeSymbol(0, "x");
+  auto inner_one = eg.MakeLiteral(storage::ExternalPropertyValue{int64_t{1}});
+  auto inner_bind = eg.MakeBind(inner_once, x_sym, inner_one);  // inner: WITH 1 AS x
+  auto y_sym = eg.MakeSymbol(1, "y");
+  auto inner_id_x = eg.MakeIdentifier(x_sym);
+  auto inner_named = eg.MakeNamedOutput("y", y_sym, inner_id_x);  // RETURN x AS y
+  auto inner_root = eg.MakeOutputs(inner_bind, {inner_named});
+
+  // Outer: CALL { ... } RETURN y - exposes y_sym, x_sym is NOT in exposed.
+  auto outer_once = eg.MakeOnce();
+  auto subq = eg.MakeSubquery(outer_once, inner_root, {y_sym});
+
+  // Outer Output: NamedOutput(_, Identifier(y_sym)) - this resolves
+  // because y_sym is exposed.
+  auto col_y_sym = eg.MakeSymbol(2, "y");
+  auto outer_id_y = eg.MakeIdentifier(y_sym);
+  auto outer_named_ok = eg.MakeNamedOutput("y", col_y_sym, outer_id_y);
+  auto outer_root_ok = eg.MakeOutputs(subq, {outer_named_ok});
+
+  QueryPlannerContext ctx;
+  auto [plan_ok, _cost, _ast, _sym] = ConvertToLogicalOperator(eg, outer_root_ok, ctx);
+  ASSERT_NE(plan_ok, nullptr);
+
+  // Now build a sibling outer Output that references Identifier(x_sym) -
+  // x is BARRIER-stripped, so extraction must fail.
+  auto col_x_sym = eg.MakeSymbol(3, "x");
+  auto outer_id_x = eg.MakeIdentifier(x_sym);
+  auto outer_named_bad = eg.MakeNamedOutput("x", col_x_sym, outer_id_x);
+  auto outer_root_bad = eg.MakeOutputs(subq, {outer_named_bad});
+
+  QueryPlannerContext ctx_bad;
+  EXPECT_THROW((void)ConvertToLogicalOperator(eg, outer_root_bad, ctx_bad), QueryException);
 }
 
 TEST(OutputCardinality, ScalarReturnIsOneRowEvenWhenValueIsList) {
