@@ -38,6 +38,13 @@ struct BuiltinEstimator final : CardinalityEstimator {
 
   explicit BuiltinEstimator(egraph const &f) : facade(f) {}
 
+  // Pinned: the egraph reference makes a moved-from estimator dangerous; the
+  // type is per-query and constructed in-place on QueryPlannerContext.
+  BuiltinEstimator(BuiltinEstimator const &) = delete;
+  BuiltinEstimator(BuiltinEstimator &&) = delete;
+  auto operator=(BuiltinEstimator const &) -> BuiltinEstimator & = delete;
+  auto operator=(BuiltinEstimator &&) -> BuiltinEstimator & = delete;
+
   auto EstimateFunctionCardinality(uint64_t function_id, std::span<planner::core::EClassId const> arg_eclasses,
                                    EGraph const &eg) const -> double override;
 };

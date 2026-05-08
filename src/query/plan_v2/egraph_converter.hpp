@@ -55,8 +55,6 @@ class QueryPlannerContext {
 
   struct Impl;
 
-  Impl &impl() { return *impl_; }
-
   /// Returns the user-provided estimator override, or nullptr if none was
   /// set and ConvertToLogicalOperator should fall back to a per-call
   /// BuiltinEstimator built over the current egraph.
@@ -69,6 +67,11 @@ class QueryPlannerContext {
   double last_root_cardinality() const;
 
  private:
+  Impl &impl() { return *impl_; }
+
+  friend auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext &planner_context)
+      -> std::tuple<std::unique_ptr<LogicalOperator>, double, AstStorage, SymbolTable>;
+
   std::unique_ptr<Impl> impl_;
 };
 

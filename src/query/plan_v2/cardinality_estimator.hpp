@@ -29,10 +29,10 @@ using EGraph = planner::core::EGraph<symbol, analysis>;
 /// argument e-classes; the estimator owns any e-graph traversal needed to
 /// resolve the answer (e.g. reading literal e-nodes for known-constant
 /// arguments).  Concrete implementations layer:
-///   - DefaultEstimator      - returns kDefaultRowEstimate for everything;
-///                             used when no smarter estimator is wired.
 ///   - BuiltinEstimator      - constant deduction for builtins (e.g.
-///                             range(0,5) → 6).  Future slice.
+///                             range(0,5) → 6); falls back to
+///                             kDefaultRowEstimate for unrecognised
+///                             function ids.  Production default.
 ///   - StorageStatsEstimator - storage-stats-backed.  Future layer.
 struct CardinalityEstimator {
   virtual ~CardinalityEstimator() = default;

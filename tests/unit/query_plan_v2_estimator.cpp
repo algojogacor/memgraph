@@ -19,7 +19,6 @@
 
 #include "query/plan_v2/cardinality.hpp"
 #include "query/plan_v2/cardinality_estimator.hpp"
-#include "query/plan_v2/default_estimator.hpp"
 #include "query/plan_v2/egraph_converter.hpp"
 
 namespace memgraph::query::plan::v2 {
@@ -61,12 +60,6 @@ TEST(EstimatorPlumbing, InjectedEstimatorIsReachable) {
   auto const result = ctx.estimator_override()->EstimateFunctionCardinality(0, {}, dummy_eg);
   EXPECT_DOUBLE_EQ(result, 42.0);
   EXPECT_EQ(raw->call_count, 1);
-}
-
-TEST(EstimatorPlumbing, DefaultEstimatorReturnsKDefaultRowEstimate) {
-  DefaultEstimator est;
-  EGraph dummy_eg;
-  EXPECT_DOUBLE_EQ(est.EstimateFunctionCardinality(0, {}, dummy_eg), kDefaultRowEstimate);
 }
 
 }  // namespace
