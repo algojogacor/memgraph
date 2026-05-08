@@ -23,6 +23,7 @@
 #include "query/plan_v2/bind_semantics.hpp"
 #include "query/plan_v2/egraph_internal.hpp"
 #include "query/plan_v2/expression_cost.hpp"
+#include "query/plan_v2/plan_alternative.hpp"
 #include "utils/tag.hpp"
 
 namespace memgraph::query::plan::v2 {
@@ -45,29 +46,8 @@ namespace {
 using bind::SymbolSet;
 
 // --- Alternatives -----------------------------------------------------------
-
-struct Alternative {
-  double cost;
-  SymbolSet required;               // Symbols that MUST be bound by ancestors
-  planner::core::ENodeId enode_id;  // Which enode achieves this alternative
-  // Meaningful only when this alt's enode is a Bind; default false.
-  // Set true when emitted by the Bind alive branch (input demands the bound
-  // symbol), false for the dead branch and all non-Bind enodes.
-  bool is_alive = false;
-};
-
-// is_alive intentionally does not participate in dominance: it is a per-alt
-// build-side annotation, orthogonal to the (cost, required) optimisation
-// problem the Pareto frontier solves.
-struct AlternativeDominance {
-  static auto operator()(Alternative const &a, Alternative const &b) -> std::partial_ordering {
-    namespace x = planner::core::extract;
-    return x::pareto_compare(a,
-                             b,
-                             x::dim<&Alternative::cost>(x::lower_is_better),
-                             x::dim<&Alternative::required>(x::smaller_subset_is_better));
-  }
-};
+// Alternative and AlternativeDominance live in plan_alternative.hpp so the
+// pure-algebra dominance can be unit-tested without the rest of this TU.
 
 /// CostFrontier: ParetoFrontier with resolve/min_cost for the extraction contract.
 /// merge is inherited from ParetoFrontier (union + prune).
@@ -79,7 +59,9 @@ struct CostFrontier : planner::core::extract::CostResultBase<Alternative, Altern
 
 /// Cartesian product of two frontiers with cost summation and required-set
 /// union.  Each (l, r) pair becomes one alternative in the result, re-stamped
-/// with `enode_id` and `extra_cost`.
+/// with `enode_id` and `extra_cost`.  Cardinalities multiply: scalar × scalar
+/// stays scalar (1 × 1 = 1); row-pipe × scalar (e.g. Output combining a
+/// per-row NamedOutput) stays at the row pipe's cardinality.
 auto CombineAlts(CostFrontier const &lhs, CostFrontier const &rhs, double extra_cost, planner::core::ENodeId enode_id)
     -> CostFrontier {
   return CostFrontier::combine(lhs, rhs, [&](Alternative const &l, Alternative const &r) {
@@ -91,7 +73,10 @@ auto CombineAlts(CostFrontier const &lhs, CostFrontier const &rhs, double extra_
     seq.reserve(l.required.size() + r.required.size());
     std::ranges::set_union(l.required, r.required, std::back_inserter(seq));
     required.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
-    return Alternative{.cost = extra_cost + l.cost + r.cost, .required = std::move(required), .enode_id = enode_id};
+    return Alternative{.cost = extra_cost + l.cost + r.cost,
+                       .cardinality = l.cardinality * r.cardinality,
+                       .required = std::move(required),
+                       .enode_id = enode_id};
   });
 }
 
@@ -150,13 +135,17 @@ struct PlanCostModel {
           if (bind::IsAlive(input_alt.required, sym_eclass)) {
             for (auto const &expr_alt : expr_frontier.alts()) {
               auto required = bind::AliveRequired(input_alt.required, sym_eclass, expr_alt.required);
+              // Bind is one-shot, not a row-pipe: passes input's cardinality
+              // through unchanged.  expr is evaluated once at bind-time.
               emit({.cost = bind::AliveCost(input_alt.cost, sym_cost, expr_alt.cost),
+                    .cardinality = input_alt.cardinality,
                     .required = std::move(required),
                     .enode_id = enode_id,
                     .is_alive = true});
             }
           } else {
             emit({.cost = bind::DeadCost(input_alt.cost),
+                  .cardinality = input_alt.cardinality,
                   .required = input_alt.required,
                   .enode_id = enode_id,
                   .is_alive = false});

@@ -191,6 +191,11 @@ add_unit_test(query_plan_v2_bind
     LINK_TARGETS mg-query mg-planner
 )
 
+add_unit_test(query_plan_v2_alternative
+    SOURCES query_plan_v2_alternative.cpp
+    LINK_TARGETS mg-query mg-planner
+)
+
 add_unit_test(query_pretty_print
     SOURCES query_pretty_print.cpp
     LINK_TARGETS mg-query disk_test_utils
