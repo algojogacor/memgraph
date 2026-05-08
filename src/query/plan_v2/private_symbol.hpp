@@ -53,6 +53,8 @@ enum struct symbol : std::uint8_t {
   UnaryPlus,
   // Function call (builtin or UDF); disambiguator is the per-egraph function id.
   Function,
+  // UNWIND clause: 3 children [input, sym, list_expr]; mirrors Bind's shape.
+  Unwind,
 };
 
 // ============================================================================
@@ -141,6 +143,9 @@ template<> struct symbol_descriptor<symbol::UnaryPlus>   { static constexpr Arit
 // Function call - variadic children (the arguments); structurally scored by PlanCostModel.
 template<> struct symbol_descriptor<symbol::Function>    { static constexpr Arity arity = Arity::Special; static constexpr CostClass cost_class = CostClass::Structural; };
 
+// UNWIND - 3 children [input, sym, list_expr]; row-pipe operator scored by PlanCostModel.
+template<> struct symbol_descriptor<symbol::Unwind>      { static constexpr Arity arity = Arity::Special; static constexpr CostClass cost_class = CostClass::Structural; };
+
 // clang-format on
 
 // ============================================================================
@@ -201,7 +206,7 @@ using AllSymbolsSeq =
                     symbol::NamedOutput, symbol::ParamLookup, symbol::Add, symbol::Sub, symbol::Mul, symbol::Div,
                     symbol::Mod, symbol::Exp, symbol::Eq, symbol::Neq, symbol::Lt, symbol::Lte, symbol::Gt, symbol::Gte,
                     symbol::And, symbol::Or, symbol::Xor, symbol::Not, symbol::UnaryMinus, symbol::UnaryPlus,
-                    symbol::Function>;
+                    symbol::Function, symbol::Unwind>;
 
 // ============================================================================
 // Exhaustiveness check - every enum value MUST have a descriptor.

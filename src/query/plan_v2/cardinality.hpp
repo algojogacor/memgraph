@@ -21,4 +21,11 @@ namespace memgraph::query::plan::v2 {
 /// enough that an unknown row pipe out-costs a known scalar.
 inline constexpr double kDefaultRowEstimate = 1000.0;
 
+/// Per-output-row overhead for the UNWIND operator.  Paid once per row the
+/// Unwind produces, on top of the list-expression evaluation cost.
+/// Structural placeholder until measured data justifies a value -
+/// deliberately small (1.0) so it doesn't dominate other per-row terms in
+/// the cost model today.
+inline constexpr double kUnwindPerRowOverhead = 1.0;
+
 }  // namespace memgraph::query::plan::v2

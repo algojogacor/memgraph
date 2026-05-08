@@ -22,6 +22,7 @@
 #include "query/plan/operator.hpp"
 #include "query/plan_v2/bind_semantics.hpp"
 #include "query/plan_v2/builtin_estimator.hpp"
+#include "query/plan_v2/cardinality.hpp"
 #include "query/plan_v2/cardinality_estimator.hpp"
 #include "query/plan_v2/default_estimator.hpp"
 #include "query/plan_v2/egraph_internal.hpp"
@@ -194,13 +195,31 @@ struct PlanCostModel {
         return MapAlts(*children[0], cost, enode_id);
       }
 
-      // Output: re-stamp child[0]'s frontier (no extra cost) so all alternatives
-      // dispatch through this Output enode in the Builder, then fold in each
-      // NamedOutput child via CombineAlts.
+      // Output: row-pipe.  Re-stamp child[0]'s frontier (no extra cost) so
+      // all alternatives dispatch through this Output enode in the Builder,
+      // then fold in each NamedOutput child with its per-eval cost scaled
+      // by the input row pipe's cardinality.  Per-row scaling is what lets
+      // the planner prefer a one-shot Bind over an inlined alternative
+      // when the row pipe is wide (e.g. UNWIND range(0, 100)).
       case symbol::Output: {
         auto result = MapAlts(*children[0], 0.0, enode_id);
         for (size_t i = 1; i < children.size(); ++i) {
-          result = CombineAlts(result, *children[i], 0.0, enode_id);
+          result = CostFrontier::combine(result, *children[i], [enode_id](Alternative const &l, Alternative const &r) {
+            // l: input row pipe.  r: per-evaluation NamedOutput.
+            // cost = l.cost (whole input pipeline) + l.cardinality * r.cost
+            //        (per-output-row evaluation of this NamedOutput).
+            // cardinality = l.cardinality * r.cardinality (NamedOutput is
+            // scalar by construction; product preserves the row-pipe value).
+            SymbolSet required;
+            auto seq = required.extract_sequence();
+            seq.reserve(l.required.size() + r.required.size());
+            std::ranges::set_union(l.required, r.required, std::back_inserter(seq));
+            required.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
+            return Alternative{.cost = l.cost + l.cardinality * r.cost,
+                               .cardinality = l.cardinality * r.cardinality,
+                               .required = std::move(required),
+                               .enode_id = enode_id};
+          });
         }
         return result;
       }
@@ -210,6 +229,39 @@ struct PlanCostModel {
       // sourced from expression_cost.
       case symbol::NamedOutput:
         return CombineAlts(*children[0], *children[1], 1.0, enode_id);
+
+      // Unwind: row-generative.  Output cardinality = input.cardinality *
+      // list_expr.cardinality (e.g. range(0, 100) over a 1-row input emits
+      // 101 rows).  Cost composition mirrors a per-row evaluation of the
+      // list expression, with kUnwindPerRowOverhead structural overhead per
+      // produced row.  Alive/dead variable-introduction matches Bind:
+      // Unwind always introduces sym, so input always sees `provided + sym`
+      // in the resolver - we tag every Unwind alt with is_alive = true so
+      // for_each_resolved_child dispatches like alive Bind.
+      case symbol::Unwind: {
+        auto const &input_frontier = *children[0];
+        auto const &sym_frontier = *children[1];
+        auto const &list_frontier = *children[2];
+        auto sym_eclass = current.children()[1];
+        auto const &[_, sym_cost] = sym_frontier.resolve();
+
+        return CostFrontier::flat_map(input_frontier, [&](auto const &input_alt, auto emit) {
+          for (auto const &list_alt : list_frontier.alts()) {
+            // sym is always introduced by Unwind, so remove it from input's
+            // required and union list_expr's required (its needs become
+            // ours).  Same algebra as bind::AliveRequired.
+            auto required = bind::AliveRequired(input_alt.required, sym_eclass, list_alt.required);
+            auto const cost =
+                input_alt.cost + (list_alt.cost + kUnwindPerRowOverhead) * input_alt.cardinality + sym_cost;
+            auto const cardinality = input_alt.cardinality * list_alt.cardinality;
+            emit({.cost = cost,
+                  .cardinality = cardinality,
+                  .required = std::move(required),
+                  .enode_id = enode_id,
+                  .is_alive = true});
+          }
+        });
+      }
 
       // Function call: cartesian product over arg frontiers (cost-sum and
       // required-union via the standard CombineAlts chain), then override
@@ -279,21 +331,24 @@ struct TopoEntry {
 /// Shared child-key derivation for the resolver and the builder.  Both
 /// stages must agree on what `(eclass, provided)` each child of a chosen
 /// enode resolves to; centralising the rule keeps them in lockstep:
-///   - Alive Bind: input sees `provided + sym`, sym/expr see `provided`.
-///   - Dead Bind:  input only; sym/expr aren't visited.
-///   - Anything else: every child inherits the parent's `provided`.
+///   - Alive Bind / Unwind:  input sees `provided + sym`, sym/list see
+///                            `provided`.  Same shape: `[input, sym, expr]`.
+///   - Dead Bind:            input only; sym/expr aren't visited.
+///   - Anything else:        every child inherits the parent's `provided`.
 template <typename Visit>
 void for_each_resolved_child(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, bool is_alive,
                              Visit visit) {
   auto const &children = enode.children();
-  bool const is_bind = enode.symbol() == symbol::Bind && children.size() == 3;
-  if (is_bind && is_alive) {
+  auto const sym_op = enode.symbol();
+  bool const is_bind_or_unwind = (sym_op == symbol::Bind || sym_op == symbol::Unwind) && children.size() == 3;
+  if (is_bind_or_unwind && is_alive) {
     auto alive_provided = parent_key.provided;
     alive_provided.insert(children[1]);
     visit(ResolvedKey{children[0], std::move(alive_provided)});
     visit(ResolvedKey{children[1], parent_key.provided});
     visit(ResolvedKey{children[2], parent_key.provided});
-  } else if (is_bind) {
+  } else if (is_bind_or_unwind) {
+    // Only Bind has a dead branch (Unwind alts are always emitted alive).
     visit(ResolvedKey{children[0], parent_key.provided});
   } else {
     for (auto child : children) {
@@ -427,6 +482,7 @@ struct Builder {
       X(NamedOutput);
       X(ParamLookup);
       X(Function);
+      X(Unwind);
 #define MG_DISPATCH_OP(Name, ...) X(Name);
       EGRAPH_BINARY_OPS(MG_DISPATCH_OP)
       EGRAPH_UNARY_OPS(MG_DISPATCH_OP)
@@ -510,6 +566,13 @@ struct Builder {
   auto Build(utils::tag_value<symbol::ParamLookup> /*tag*/, enode_ref node, children_ref /*children*/) -> BuildResult {
     auto const dis = node.disambiguator();
     return ast_storage_.Create<ParameterLookup>(dis);
+  }
+
+  auto Build(utils::tag_value<symbol::Unwind> /*tag*/, enode_ref /*node*/, children_ref children) -> BuildResult {
+    auto const &input = ExtractAndValidate<LogicalOperatorPtr, 0>(children);
+    auto const &sym = ExtractAndValidate<Symbol, 1>(children);
+    auto const &list_expr = ExtractAndValidate<Expression *, 2>(children);
+    return std::static_pointer_cast<LogicalOperator>(std::make_shared<query::plan::Unwind>(input, list_expr, sym));
   }
 
   auto Build(utils::tag_value<symbol::Function> /*tag*/, enode_ref node, children_ref children) -> BuildResult {

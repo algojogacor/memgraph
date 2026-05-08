@@ -162,9 +162,21 @@ struct AstConverterVisitor : HierarchicalTreeVisitor {
     return true;
   }
 
-  bool PreVisit(Unwind & /*unwind*/) override {
-    MG_ASSERT(false, "not implemented yet");
-    return true;
+  bool PreVisit(Unwind &op) override {
+    // UNWIND list AS x: bypass the named_expression_'s default visit (which
+    // would PostVisit as a Bind, the wrong operator) and instead visit only
+    // the list expression to push it onto the builder stack, then assemble
+    // the Unwind e-node directly.
+    DMG_ASSERT(op.named_expression_ != nullptr, "Unwind must have a named expression");
+    if (!op.named_expression_->expression_->Accept(*this)) return false;
+    auto list_expr = PopStack();
+    EnsureInput();
+    auto input = PopStack();
+    DMG_ASSERT(op.named_expression_->symbol_pos_ != -1, "AST symbol should have already been mapped into the frame");
+    auto const &sym = symbol_table_.at(*op.named_expression_);
+    auto sym_eclass = egraph_.MakeSymbol(op.named_expression_->symbol_pos_, sym.name());
+    builder_stack_.emplace_back(egraph_.MakeUnwind(input, sym_eclass, list_expr));
+    return false;  // children already visited; don't descend through named_expression_
   }
 
   bool PreVisit(Merge & /*merge*/) override {

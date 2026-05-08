@@ -182,6 +182,17 @@ struct symbol_make_traits<symbol::Function> {
   }
 };
 
+/// Unwind: no storage, mirrors Bind's [input, sym, list_expr] shape so the
+/// resolver's alive-Bind dispatch covers Unwind without a second branch.
+template <>
+struct symbol_make_traits<symbol::Unwind> {
+  struct storage_type {};
+
+  static auto make(storage_type &, eclass input, eclass sym, eclass list_expr) -> lowered_node {
+    return {.children = utils::small_vector{input, sym, list_expr}, .disambiguator = std::nullopt};
+  }
+};
+
 /// Binary operator: no storage, just two children
 template <symbol S>
   requires(is_binary_op_v<S>)

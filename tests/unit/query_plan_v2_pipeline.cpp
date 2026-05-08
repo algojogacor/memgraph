@@ -143,6 +143,12 @@ class SimplePlanChecker : public plan::HierarchicalLogicalOperatorVisitor {
     operator_details.push_back("CreateExpand");
     return true;
   }
+
+  bool PreVisit(plan::Unwind &op) override {
+    operator_details.push_back("Unwind {" + op.output_symbol_.name() + ":" + DescribeExpression(op.input_expression_) +
+                               "}");
+    return true;
+  }
 };
 
 // Test case data for parameterized testing
@@ -840,6 +846,33 @@ TEST_F(PlannerV2PipelineTest, FunctionCostCaseInvokesEstimator) {
   ASSERT_GE(raw->calls.size(), 1U);
   EXPECT_EQ(raw->calls.front().arg_count, 2U);
 }
+
+// clang-format off
+INSTANTIATE_TEST_SUITE_P(
+    UnwindClauses,
+    PlannerV2PipelineTest,
+    ::testing::Values(
+        // Unwind followed by a literal return: the Output's NamedOutputs
+        // don't reference the unwound variable, so the existing required-
+        // set algebra is sufficient (no Output-scope variable plumbing
+        // needed yet).
+        PipelineTestCase{
+            .name = "UnwindRangeReturnLiteral",
+            .query = "UNWIND range(0, 5) AS x RETURN 1 AS r;",
+            .expected_details = {"Produce {r`1:1}", "Unwind {x:RANGE(0, 5)}", "Once"},
+            .min_rewrites = 0,
+            .should_saturate = true,
+        }
+        // TODO: re-enable once Output's NamedOutputs can see symbols
+        // introduced by Unwind/Bind in the input row pipe (the
+        // "WITH/UNWIND/RETURN a"  regression target from issue 0004).  Today
+        // the required-set algebra propagates demand strictly bottom-up,
+        // so Identifier(x) inside a NamedOutput cannot be satisfied by an
+        // Unwind sibling in the parent Output's input subtree.
+    ),
+    TestCaseName
+);
+// clang-format on
 
 // clang-format off
 INSTANTIATE_TEST_SUITE_P(

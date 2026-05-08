@@ -59,6 +59,10 @@ auto egraph::MakeFunction(std::string_view name, std::vector<eclass> args) -> ec
   return pimpl_->Make<symbol::Function>(name, std::move(args));
 }
 
+auto egraph::MakeUnwind(eclass input, eclass sym, eclass list_expr) -> eclass {
+  return pimpl_->Make<symbol::Unwind>(input, sym, list_expr);
+}
+
 auto egraph::FunctionInfoById(std::uint64_t id) const -> FunctionInfo const * {
   auto const &info = pimpl_->storage<symbol::Function>().info;
   if (id >= info.size()) return nullptr;

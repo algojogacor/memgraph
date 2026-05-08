@@ -45,6 +45,7 @@ struct egraph {
   auto MakeOutputs(eclass input, std::vector<eclass> named_outputs) -> eclass;
   auto MakeNamedOutput(std::string_view name, eclass sym, eclass expr) -> eclass;
   auto MakeFunction(std::string_view name, std::vector<eclass> args) -> eclass;
+  auto MakeUnwind(eclass input, eclass sym, eclass list_expr) -> eclass;
 
   /// Look up the FunctionInfo (name + cached BuiltinKind) for a function id
   /// previously assigned by MakeFunction.  Used by the cost-model estimator
