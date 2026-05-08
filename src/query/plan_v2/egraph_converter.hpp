@@ -23,6 +23,8 @@ class LogicalOperator;
 
 namespace memgraph::query::plan::v2 {
 
+struct CardinalityEstimator;
+
 /// Per-session planner state.  Today this owns the ExtractionContext buffers
 /// (frontier map, selection, in-degree, topo order) so their allocated
 /// capacity is reused across queries instead of being freed and re-grown each
@@ -30,9 +32,14 @@ namespace memgraph::query::plan::v2 {
 /// scratch arenas) as the planner v2 stabilises.  Hold one per Interpreter and
 /// pass it to ConvertToLogicalOperator.  Pimpl so callers don't see
 /// CostFrontier / Alternative.
+///
+/// Owns the active CardinalityEstimator.  Default construction wires a
+/// DefaultEstimator (kDefaultRowEstimate everywhere); tests substitute a
+/// mock by passing one to the estimator-taking constructor.
 class QueryPlannerContext {
  public:
   QueryPlannerContext();
+  explicit QueryPlannerContext(std::unique_ptr<CardinalityEstimator> estimator);
   ~QueryPlannerContext();
   QueryPlannerContext(QueryPlannerContext &&) noexcept;
   QueryPlannerContext &operator=(QueryPlannerContext &&) noexcept;
@@ -42,6 +49,8 @@ class QueryPlannerContext {
   struct Impl;
 
   Impl &impl() { return *impl_; }
+
+  CardinalityEstimator const &estimator() const;
 
  private:
   std::unique_ptr<Impl> impl_;

@@ -21,6 +21,8 @@
 #include "planner/extract/extractor.hpp"
 #include "query/plan/operator.hpp"
 #include "query/plan_v2/bind_semantics.hpp"
+#include "query/plan_v2/cardinality_estimator.hpp"
+#include "query/plan_v2/default_estimator.hpp"
 #include "query/plan_v2/egraph_internal.hpp"
 #include "query/plan_v2/expression_cost.hpp"
 #include "query/plan_v2/plan_alternative.hpp"
@@ -100,6 +102,9 @@ auto MapAlts(CostFrontier input, double extra_cost, planner::core::ENodeId enode
 
 struct PlanCostModel {
   using CostResult = CostFrontier;
+
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
+  CardinalityEstimator const &estimator;
 
   auto operator()(planner::core::ENode<symbol> const &current, planner::core::ENodeId enode_id,
                   std::span<CostResult const *const> children) const -> CostResult {
@@ -545,6 +550,7 @@ struct Builder {
 struct QueryPlannerContext::Impl {
   planner::core::extract::FrontierMap<CostFrontier> frontier_map;
   std::vector<TopoEntry> topo;
+  std::unique_ptr<CardinalityEstimator> estimator;
 
   void clear() {
     frontier_map.clear();
@@ -552,11 +558,17 @@ struct QueryPlannerContext::Impl {
   }
 };
 
-QueryPlannerContext::QueryPlannerContext() : impl_(std::make_unique<Impl>()) {}
+QueryPlannerContext::QueryPlannerContext()
+    : impl_(std::make_unique<Impl>(Impl{.estimator = std::make_unique<DefaultEstimator>()})) {}
+
+QueryPlannerContext::QueryPlannerContext(std::unique_ptr<CardinalityEstimator> estimator)
+    : impl_(std::make_unique<Impl>(Impl{.estimator = std::move(estimator)})) {}
 
 QueryPlannerContext::~QueryPlannerContext() = default;
 QueryPlannerContext::QueryPlannerContext(QueryPlannerContext &&) noexcept = default;
 QueryPlannerContext &QueryPlannerContext::operator=(QueryPlannerContext &&) noexcept = default;
+
+auto QueryPlannerContext::estimator() const -> CardinalityEstimator const & { return *impl_->estimator; }
 
 auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext &planner_context)
     -> std::tuple<std::unique_ptr<LogicalOperator>, double, AstStorage, SymbolTable> {
@@ -574,7 +586,8 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   // Root-satisfiability precondition: ComputeFrontiers must have produced at
   // least one self-contained alternative for the root (required == {}).
   // We compute frontiers eagerly here so we can validate before resolve.
-  (void)extract::ComputeFrontiers(impl.egraph_, PlanCostModel{}, true_root, ctx.frontier_map);
+  (void)extract::ComputeFrontiers(
+      impl.egraph_, PlanCostModel{planner_context.estimator()}, true_root, ctx.frontier_map);
 
   auto const root_it = ctx.frontier_map.find(true_root);
   if (root_it == ctx.frontier_map.end() || !root_it->second.has_value()) {
