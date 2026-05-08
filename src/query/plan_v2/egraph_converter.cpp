@@ -398,26 +398,38 @@ inline auto SetDifference(SymbolSet const &a, SymbolSet const &b) -> SymbolSet {
   return out;
 }
 
-/// Shared child-key derivation for the resolver and the builder.  Both
-/// stages must agree on what `(eclass, provided, demanded_introduces)` each
-/// child of a chosen enode resolves to; centralising the rule keeps them
-/// in lockstep.
+/// Child semantic roles in plan-v2's e-graph.  Every child of every
+/// existing operator falls into one of four roles, and the resolver's
+/// scope/demand propagation is determined entirely by the role - not by
+/// the parent enode's type.
 ///
-/// Per-enode rules:
-///   - Output(input, named...):  input sees `provided` and demand =
-///                                chosen_alt.introduces (the row-pipe
-///                                introductions the Output alt was costed
-///                                against).  NamedOutput children see
-///                                `provided + chosen_alt.introduces` and no
-///                                demand (they're consumers, not producers).
-///   - Alive Bind / Unwind:      input sees `provided + sym` and
-///                                `demand \ {sym}` (this binder covers sym;
-///                                anything else cascades).  sym / expr see
-///                                `provided` and no demand.
-///   - Dead Bind:                input only; sym / expr aren't visited.
-///   - Anything else:            every child inherits parent.provided and
-///                                no demand (non-row-pipe enodes never
-///                                receive non-empty demand in practice).
+///   - PipeInput:     The row-pipe operator this enode pulls rows from.
+///                    `introduces` flows UP from this child to the parent;
+///                    `demanded_introduces` flows DOWN through it (minus
+///                    whatever the parent itself binds, for alive Bind /
+///                    Unwind).  Children[0] of every row-pipe enode.
+///
+///   - SymbolMarker:  A `Symbol` leaf eclass that names a variable.  Only
+///                    Bind / Unwind alive and NamedOutput "set" it; pure
+///                    expression operators never produce one.  Inherits
+///                    `provided` from the parent and demands nothing.
+///
+///   - Expression:    A scalar value evaluated in the parent's scope.
+///                    Surfaces a `required` set upward (symbols this expr
+///                    reads) and inherits `provided` unchanged.  Never
+///                    introduces row variables, so demanded = {}.
+///
+///   - PipeScopedExpression: A NamedOutput child of Output - an expression
+///                    evaluated INSIDE the input pipe's row scope.
+///                    Inherits `provided + input_pipe.introduces` so an
+///                    Identifier(sym) inside it can be satisfied by an
+///                    Unwind / alive Bind in the same pipe.  Demanded = {}.
+///
+/// for_each_resolved_child below is a single switch over enode shape
+/// (Bind / Unwind / Output / everything else) that materialises these
+/// roles into ResolvedKeys.  Adding a new operator means picking the
+/// roles for each of its children; existing roles already cover every
+/// shape in the current symbol set.
 template <typename Visit>
 void for_each_resolved_child(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, bool is_alive,
                              SymbolSet const &chosen_introduces, Visit visit) {
