@@ -62,6 +62,12 @@ class QueryPlannerContext {
   /// BuiltinEstimator built over the current egraph.
   CardinalityEstimator const *estimator_override() const;
 
+  /// Cardinality of the root alt the most recent ConvertToLogicalOperator
+  /// call selected (NaN if no plan has been extracted yet).  Surfaces the
+  /// per-query result so tests can pin cardinality semantics directly,
+  /// without round-tripping through cost arithmetic.
+  double last_root_cardinality() const;
+
  private:
   std::unique_ptr<Impl> impl_;
 };

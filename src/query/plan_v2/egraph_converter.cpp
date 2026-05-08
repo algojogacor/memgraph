@@ -63,9 +63,15 @@ struct CostFrontier : planner::core::extract::CostResultBase<Alternative, Altern
 
 /// Cartesian product of two frontiers with cost summation and required-set
 /// union.  Each (l, r) pair becomes one alternative in the result, re-stamped
-/// with `enode_id` and `extra_cost`.  Cardinalities multiply: scalar × scalar
-/// stays scalar (1 × 1 = 1); row-pipe × scalar (e.g. Output combining a
-/// per-row NamedOutput) stays at the row pipe's cardinality.
+/// with `enode_id` and `extra_cost`.
+///
+/// Cardinality is set to the scalar default (1.0): every current caller is a
+/// per-evaluation operator (binary expressions, NamedOutput) whose result is
+/// one value per call.  Multiplying child cardinalities would be wrong here -
+/// e.g. NamedOutput(sym, range(0,5)) packages ONE named pair per call even
+/// though the value is a 6-element list, so its cardinality is 1, not 6.
+/// Callers that need a non-scalar result (Function, Output) override
+/// cardinality after combining or use a bespoke combine lambda.
 auto CombineAlts(CostFrontier const &lhs, CostFrontier const &rhs, double extra_cost, planner::core::ENodeId enode_id)
     -> CostFrontier {
   return CostFrontier::combine(lhs, rhs, [&](Alternative const &l, Alternative const &r) {
@@ -77,10 +83,7 @@ auto CombineAlts(CostFrontier const &lhs, CostFrontier const &rhs, double extra_
     seq.reserve(l.required.size() + r.required.size());
     std::ranges::set_union(l.required, r.required, std::back_inserter(seq));
     required.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
-    return Alternative{.cost = extra_cost + l.cost + r.cost,
-                       .cardinality = l.cardinality * r.cardinality,
-                       .required = std::move(required),
-                       .enode_id = enode_id};
+    return Alternative{.cost = extra_cost + l.cost + r.cost, .required = std::move(required), .enode_id = enode_id};
   });
 }
 
@@ -205,18 +208,20 @@ struct PlanCostModel {
         auto result = MapAlts(*children[0], 0.0, enode_id);
         for (size_t i = 1; i < children.size(); ++i) {
           result = CostFrontier::combine(result, *children[i], [enode_id](Alternative const &l, Alternative const &r) {
-            // l: input row pipe.  r: per-evaluation NamedOutput.
+            // l: input row pipe.  r: per-evaluation NamedOutput (scalar, 1
+            // pair per call).
             // cost = l.cost (whole input pipeline) + l.cardinality * r.cost
             //        (per-output-row evaluation of this NamedOutput).
-            // cardinality = l.cardinality * r.cardinality (NamedOutput is
-            // scalar by construction; product preserves the row-pipe value).
+            // cardinality = l.cardinality.  Output produces exactly the
+            // input row count regardless of what value-shape each
+            // NamedOutput packages per row.
             SymbolSet required;
             auto seq = required.extract_sequence();
             seq.reserve(l.required.size() + r.required.size());
             std::ranges::set_union(l.required, r.required, std::back_inserter(seq));
             required.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
             return Alternative{.cost = l.cost + l.cardinality * r.cost,
-                               .cardinality = l.cardinality * r.cardinality,
+                               .cardinality = l.cardinality,
                                .required = std::move(required),
                                .enode_id = enode_id};
           });
@@ -667,6 +672,9 @@ struct QueryPlannerContext::Impl {
   /// User-provided estimator override.  null -> ConvertToLogicalOperator
   /// builds a BuiltinEstimator over the current egraph for this call.
   std::unique_ptr<CardinalityEstimator> estimator_override;
+  /// Cardinality of the root alt picked by the most recent
+  /// ConvertToLogicalOperator call.  NaN before the first call.
+  double last_root_cardinality = std::numeric_limits<double>::quiet_NaN();
 
   void clear() {
     frontier_map.clear();
@@ -686,6 +694,8 @@ QueryPlannerContext &QueryPlannerContext::operator=(QueryPlannerContext &&) noex
 auto QueryPlannerContext::estimator_override() const -> CardinalityEstimator const * {
   return impl_->estimator_override.get();
 }
+
+auto QueryPlannerContext::last_root_cardinality() const -> double { return impl_->last_root_cardinality; }
 
 auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext &planner_context)
     -> std::tuple<std::unique_ptr<LogicalOperator>, double, AstStorage, SymbolTable> {
@@ -807,14 +817,17 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   auto &result = *ptr;
 
   auto unique_result = result->Clone(&builder.ast_storage_);
-  // Root cost: the cheapest self-contained alt at the root (the one the
-  // resolver would pick under provided={}).
+  // Root cost / cardinality: from the cheapest self-contained alt at the
+  // root (the one the resolver would pick under provided={}).
   auto root_cost = std::numeric_limits<double>::infinity();
+  auto root_cardinality = std::numeric_limits<double>::quiet_NaN();
   for (auto const &alt : root_frontier.alts()) {
     if (alt.required.empty() && alt.cost < root_cost) {
       root_cost = alt.cost;
+      root_cardinality = alt.cardinality;
     }
   }
+  ctx.last_root_cardinality = root_cardinality;
   return {std::move(unique_result), root_cost, std::move(builder.ast_storage_), std::move(builder.symbol_table_)};
 }
 }  // namespace memgraph::query::plan::v2

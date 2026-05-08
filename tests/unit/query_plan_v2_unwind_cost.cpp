@@ -85,6 +85,33 @@ TEST(UnwindCostShape, ProducesUnwindOperator) {
   // brittle coupling, just verify the cost is finite and positive.
   EXPECT_GT(root_cost, 0.0);
   EXPECT_LT(root_cost, 1e9);
+
+  // Root cardinality: Output produces input row count.  Unwind multiplied
+  // Once (1) by range (6) giving 6; Output preserves that.
+  EXPECT_DOUBLE_EQ(ctx.last_root_cardinality(), 6.0);
+}
+
+TEST(OutputCardinality, ScalarReturnIsOneRowEvenWhenValueIsList) {
+  // RETURN range(0, 5) AS r produces ONE row containing a 6-element list,
+  // not six rows.  Pins the contract that NamedOutput is per-evaluation
+  // (always cardinality = 1) and Output's cardinality is the input row
+  // pipe's, not input × NamedOutput.  A naive product would give 6 here
+  // and silently mis-cost any plan that puts a list-valued NamedOutput
+  // above a row pipe.
+  egraph eg;
+  auto once = eg.MakeOnce();
+  auto a = eg.MakeLiteral(storage::ExternalPropertyValue{int64_t{0}});
+  auto b = eg.MakeLiteral(storage::ExternalPropertyValue{int64_t{5}});
+  auto range = eg.MakeFunction("range", {a, b});
+  auto r_sym = eg.MakeSymbol(0, "r");
+  auto named_output = eg.MakeNamedOutput("r", r_sym, range);
+  auto root = eg.MakeOutputs(once, {named_output});
+
+  auto ctx = QueryPlannerContext{std::make_unique<FixedEstimator>(6.0)};
+  auto [plan, cost, ast, sym_table] = ConvertToLogicalOperator(eg, root, ctx);
+
+  ASSERT_NE(plan, nullptr);
+  EXPECT_DOUBLE_EQ(ctx.last_root_cardinality(), 1.0);
 }
 
 }  // namespace
