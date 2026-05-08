@@ -102,6 +102,16 @@ inline constexpr auto smaller_subset_is_better = []<std::ranges::input_range R>(
   return std::partial_ordering::unordered;
 };
 
+/// "Larger-by-inclusion is better" - the dual of smaller_subset_is_better.
+/// Use for "introduces" / "provides" axes where having more is helpful
+/// (e.g. an alt that introduces more downstream-visible symbols dominates
+/// one with a strict subset, all else equal).  Implemented by swapping the
+/// arguments to smaller_subset_is_better so the inclusion direction flips.
+inline constexpr auto larger_subset_is_better = []<std::ranges::input_range R>(R const &a,
+                                                                               R const &b) -> std::partial_ordering {
+  return smaller_subset_is_better(b, a);
+};
+
 /// Lift a member-pointer + per-value comparator into a per-Alt dim function.
 /// Usage: `dim<&Alt::cost>(lower_is_better)` yields a callable
 /// `(Alt const&, Alt const&) -> std::partial_ordering`.

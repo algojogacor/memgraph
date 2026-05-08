@@ -852,23 +852,39 @@ INSTANTIATE_TEST_SUITE_P(
     UnwindClauses,
     PlannerV2PipelineTest,
     ::testing::Values(
-        // Unwind followed by a literal return: the Output's NamedOutputs
-        // don't reference the unwound variable, so the existing required-
-        // set algebra is sufficient (no Output-scope variable plumbing
-        // needed yet).
         PipelineTestCase{
             .name = "UnwindRangeReturnLiteral",
             .query = "UNWIND range(0, 5) AS x RETURN 1 AS r;",
             .expected_details = {"Produce {r`1:1}", "Unwind {x:RANGE(0, 5)}", "Once"},
             .min_rewrites = 0,
             .should_saturate = true,
+        },
+        // The introduces-axis lets Output's NamedOutput see symbols the
+        // input row pipe binds.  RETURN x resolves to a per-row Identifier
+        // reference, which is what we want when x is the row-pipe variable.
+        PipelineTestCase{
+            .name = "UnwindRangeReturnSymbol",
+            .query = "UNWIND range(0, 5) AS x RETURN x;",
+            .expected_details = {"Produce {x`1:x}", "Unwind {x:RANGE(0, 5)}", "Once"},
+            .min_rewrites = 0,
+            .should_saturate = true,
+        },
+        // Regression target for the WITH/inline cardinality decision.
+        // The Bind for `a` is ALIVE because its sym is referenced by the
+        // NamedOutput Identifier(a) downstream, even though no node in
+        // Bind's input subtree demands it.  With per-row Output cost
+        // scaling, evaluating Identifier(a) per output row beats inlining
+        // the addition tree 101 times.
+        PipelineTestCase{
+            .name = "WithUnwindPrefersNonInlined",
+            .query = "WITH 1+1+1+1+1+1 AS a UNWIND range(0, 100) AS X RETURN a;",
+            .expected_details = {"Produce {a`2:a}",
+                                 "Unwind {X:RANGE(0, 100)}",
+                                 "Produce {a`0:(((((1 + 1) + 1) + 1) + 1) + 1)}",
+                                 "Once"},
+            .min_rewrites = 0,
+            .should_saturate = true,
         }
-        // TODO: re-enable once Output's NamedOutputs can see symbols
-        // introduced by Unwind/Bind in the input row pipe (the
-        // "WITH/UNWIND/RETURN a"  regression target from issue 0004).  Today
-        // the required-set algebra propagates demand strictly bottom-up,
-        // so Identifier(x) inside a NamedOutput cannot be satisfied by an
-        // Unwind sibling in the parent Output's input subtree.
     ),
     TestCaseName
 );

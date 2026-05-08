@@ -114,6 +114,14 @@ struct PlanCostModel {
   CardinalityEstimator const &estimator;
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   EGraph const &egraph;  // passed to estimator for e-class walks (e.g. constant deduction)
+  /// Set of Symbol e-classes referenced by *some* Identifier e-node anywhere
+  /// in the e-graph.  Used as a cheap global filter: if sym is not in this
+  /// set, no Output ever demands it across a sibling boundary, so a Bind
+  /// for sym only needs to emit its dead alt.  Without this filter we'd
+  /// emit alive on every Bind to handle the cross-boundary case, blowing
+  /// the frontier to 2^N for an N-Bind chain with no Identifiers.
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
+  SymbolSet const &referenced_syms;
 
   auto operator()(planner::core::ENode<symbol> const &current, planner::core::ENodeId enode_id,
                   std::span<CostResult const *const> children) const -> CostResult {
@@ -146,21 +154,38 @@ struct PlanCostModel {
         auto const &[_, sym_cost] = sym_frontier.resolve();
 
         return CostFrontier::flat_map(input_frontier, [&](auto const &input_alt, auto emit) {
-          if (bind::IsAlive(input_alt.required, sym_eclass)) {
+          // Emit alive when there's a chance someone will demand sym:
+          //   - Input subtree directly demands it (classic case), or
+          //   - Some Identifier(sym) lives elsewhere in the e-graph and
+          //     might cross a sibling boundary at an enclosing Output.
+          // If neither holds, sym has no consumer and the alive alt would
+          // bloat the frontier unbounded - up to 2^N for an N-Bind chain.
+          bool const input_demands_sym = bind::IsAlive(input_alt.required, sym_eclass);
+          bool const should_emit_alive = input_demands_sym || referenced_syms.contains(sym_eclass);
+          if (should_emit_alive) {
             for (auto const &expr_alt : expr_frontier.alts()) {
               auto required = bind::AliveRequired(input_alt.required, sym_eclass, expr_alt.required);
+              auto introduces = input_alt.introduces;
+              introduces.insert(sym_eclass);
               // Bind is one-shot, not a row-pipe: passes input's cardinality
               // through unchanged.  expr is evaluated once at bind-time.
               emit({.cost = bind::AliveCost(input_alt.cost, sym_cost, expr_alt.cost),
                     .cardinality = input_alt.cardinality,
                     .required = std::move(required),
+                    .introduces = std::move(introduces),
                     .enode_id = enode_id,
                     .is_alive = true});
             }
-          } else {
+          }
+          // Emit dead only when input doesn't already demand sym.  When it
+          // does, the alive alt strictly subsumes dead (smaller required,
+          // larger introduces) and Pareto would still keep dead because of
+          // the cost trade-off - bloating the frontier with no semantic win.
+          if (!input_demands_sym) {
             emit({.cost = bind::DeadCost(input_alt.cost),
                   .cardinality = input_alt.cardinality,
                   .required = input_alt.required,
+                  .introduces = input_alt.introduces,
                   .enode_id = enode_id,
                   .is_alive = false});
           }
@@ -217,14 +242,29 @@ struct PlanCostModel {
             // cardinality = l.cardinality.  Output produces exactly the
             // input row count regardless of what value-shape each
             // NamedOutput packages per row.
+            //
+            // required = l.required ∪ (r.required \ l.introduces).  The
+            // NamedOutput is evaluated INSIDE the input pipe's row scope,
+            // so any sym the input pipe binds (alive Bind / Unwind) covers
+            // matching demands in r without needing an ancestor to provide
+            // them.  This is what lets `WITH x AS y UNWIND ... RETURN y`
+            // satisfy y's demand from the Bind / Unwind below the Output.
+            SymbolSet remaining;
+            {
+              auto rem_seq = remaining.extract_sequence();
+              rem_seq.reserve(r.required.size());
+              std::ranges::set_difference(r.required, l.introduces, std::back_inserter(rem_seq));
+              remaining.adopt_sequence(boost::container::ordered_unique_range, std::move(rem_seq));
+            }
             SymbolSet required;
             auto seq = required.extract_sequence();
-            seq.reserve(l.required.size() + r.required.size());
-            std::ranges::set_union(l.required, r.required, std::back_inserter(seq));
+            seq.reserve(l.required.size() + remaining.size());
+            std::ranges::set_union(l.required, remaining, std::back_inserter(seq));
             required.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
             return Alternative{.cost = l.cost + l.cardinality * r.cost,
                                .cardinality = l.cardinality,
                                .required = std::move(required),
+                               .introduces = l.introduces,
                                .enode_id = enode_id};
           });
         }
@@ -258,12 +298,15 @@ struct PlanCostModel {
             // required and union list_expr's required (its needs become
             // ours).  Same algebra as bind::AliveRequired.
             auto required = bind::AliveRequired(input_alt.required, sym_eclass, list_alt.required);
+            auto introduces = input_alt.introduces;
+            introduces.insert(sym_eclass);
             auto const cost =
                 input_alt.cost + (list_alt.cost + kUnwindPerRowOverhead) * input_alt.cardinality + sym_cost;
             auto const cardinality = input_alt.cardinality * list_alt.cardinality;
             emit({.cost = cost,
                   .cardinality = cardinality,
                   .required = std::move(required),
+                  .introduces = std::move(introduces),
                   .enode_id = enode_id,
                   .is_alive = true});
           }
@@ -312,6 +355,11 @@ struct PlanCostModel {
 struct ResolvedKey {
   planner::core::EClassId eclass;
   SymbolSet provided;
+  /// Symbols this subtree's chosen alt must introduce.  Set non-empty by
+  /// Output (when its NamedOutputs reference symbols the input row pipe
+  /// must bind) and propagated down through Bind/Unwind.  Empty means "no
+  /// additional demand from above" - the picker chooses on cost alone.
+  SymbolSet demanded_introduces;
 
   bool operator==(ResolvedKey const &) const = default;
 };
@@ -319,47 +367,85 @@ struct ResolvedKey {
 struct ResolvedKeyHash {
   std::size_t operator()(ResolvedKey const &k) const noexcept {
     auto h = boost::hash<planner::core::EClassId>{}(k.eclass);
-    for (auto const &id : k.provided) {
-      boost::hash_combine(h, boost::hash<planner::core::EClassId>{}(id));
-    }
+    auto hash_set = [&](SymbolSet const &s) {
+      for (auto const &id : s) boost::hash_combine(h, boost::hash<planner::core::EClassId>{}(id));
+    };
+    hash_set(k.provided);
+    hash_set(k.demanded_introduces);
     return h;
   }
 };
 
-/// One entry in the resolver's topological output: this (eclass, provided)
-/// resolved to `enode_id`.  `is_alive` is meaningful only for Bind enodes;
-/// the builder reads it to decide whether sym/expr children participate.
+/// One entry in the resolver's topological output: this key resolved to
+/// `enode_id`.  `is_alive` is meaningful only for Bind enodes; the builder
+/// reads it to decide whether sym/expr children participate.  `introduces`
+/// is carried so the builder can compute the same per-child keys the
+/// resolver did when the chosen alt was picked.
 struct TopoEntry {
   ResolvedKey key;
   planner::core::ENodeId enode_id;
   bool is_alive = false;
+  SymbolSet introduces;
 };
 
+/// Helper: SymbolSet difference (`a \ b`) building into a new flat_set.
+inline auto SetDifference(SymbolSet const &a, SymbolSet const &b) -> SymbolSet {
+  SymbolSet out;
+  auto seq = out.extract_sequence();
+  seq.reserve(a.size());
+  std::ranges::set_difference(a, b, std::back_inserter(seq));
+  out.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
+  return out;
+}
+
 /// Shared child-key derivation for the resolver and the builder.  Both
-/// stages must agree on what `(eclass, provided)` each child of a chosen
-/// enode resolves to; centralising the rule keeps them in lockstep:
-///   - Alive Bind / Unwind:  input sees `provided + sym`, sym/list see
-///                            `provided`.  Same shape: `[input, sym, expr]`.
-///   - Dead Bind:            input only; sym/expr aren't visited.
-///   - Anything else:        every child inherits the parent's `provided`.
+/// stages must agree on what `(eclass, provided, demanded_introduces)` each
+/// child of a chosen enode resolves to; centralising the rule keeps them
+/// in lockstep.
+///
+/// Per-enode rules:
+///   - Output(input, named...):  input sees `provided` and demand =
+///                                chosen_alt.introduces (the row-pipe
+///                                introductions the Output alt was costed
+///                                against).  NamedOutput children see
+///                                `provided + chosen_alt.introduces` and no
+///                                demand (they're consumers, not producers).
+///   - Alive Bind / Unwind:      input sees `provided + sym` and
+///                                `demand \ {sym}` (this binder covers sym;
+///                                anything else cascades).  sym / expr see
+///                                `provided` and no demand.
+///   - Dead Bind:                input only; sym / expr aren't visited.
+///   - Anything else:            every child inherits parent.provided and
+///                                no demand (non-row-pipe enodes never
+///                                receive non-empty demand in practice).
 template <typename Visit>
 void for_each_resolved_child(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, bool is_alive,
-                             Visit visit) {
+                             SymbolSet const &chosen_introduces, Visit visit) {
   auto const &children = enode.children();
   auto const sym_op = enode.symbol();
   bool const is_bind_or_unwind = (sym_op == symbol::Bind || sym_op == symbol::Unwind) && children.size() == 3;
   if (is_bind_or_unwind && is_alive) {
     auto alive_provided = parent_key.provided;
     alive_provided.insert(children[1]);
-    visit(ResolvedKey{children[0], std::move(alive_provided)});
-    visit(ResolvedKey{children[1], parent_key.provided});
-    visit(ResolvedKey{children[2], parent_key.provided});
+    auto downstream_demand = SetDifference(parent_key.demanded_introduces, SymbolSet{children[1]});
+    visit(ResolvedKey{children[0], std::move(alive_provided), std::move(downstream_demand)});
+    visit(ResolvedKey{children[1], parent_key.provided, {}});
+    visit(ResolvedKey{children[2], parent_key.provided, {}});
   } else if (is_bind_or_unwind) {
     // Only Bind has a dead branch (Unwind alts are always emitted alive).
-    visit(ResolvedKey{children[0], parent_key.provided});
+    visit(ResolvedKey{children[0], parent_key.provided, parent_key.demanded_introduces});
+  } else if (sym_op == symbol::Output && !children.empty()) {
+    // Input pipe must deliver the introductions the chosen Output alt was
+    // costed against.  NamedOutputs see those introductions in provided.
+    visit(ResolvedKey{children[0], parent_key.provided, chosen_introduces});
+    auto enriched_provided = parent_key.provided;
+    for (auto sym : chosen_introduces) enriched_provided.insert(sym);
+    for (size_t i = 1; i < children.size(); ++i) {
+      visit(ResolvedKey{children[i], enriched_provided, {}});
+    }
   } else {
     for (auto child : children) {
-      visit(ResolvedKey{child, parent_key.provided});
+      visit(ResolvedKey{child, parent_key.provided, {}});
     }
   }
 }
@@ -385,7 +471,7 @@ struct PlanResolver {
   void operator()(EGraph const &egraph, FrontierMap const &frontier_map, EClassId root, TopoOrder &out_order) const {
     assert(out_order.empty() && "Resolver precondition: out must be empty on entry");
     Impl impl{egraph, frontier_map, {}, out_order};
-    impl.resolve_and_emit(root, SymbolSet{});
+    impl.resolve_and_emit(ResolvedKey{root, SymbolSet{}, SymbolSet{}});
   }
 
  private:
@@ -398,48 +484,51 @@ struct PlanResolver {
     // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
     TopoOrder &out_order;
 
-    /// At this point in the plan, `provided` is the set of variables that
-    /// have already been introduced by Binds higher up.  Each candidate
-    /// `alt` knows what variables it still needs (`alt.required`).  Pick
-    /// the cheapest candidate whose needs are all already in scope.
-    auto pick_compatible(CostFrontier const &frontier, SymbolSet const &provided) -> Alternative const & {
+    /// `provided` is the set of variables already introduced by ancestors.
+    /// `demanded` is the set the chosen alt must itself introduce (driven
+    /// down from an enclosing Output whose NamedOutputs reference symbols
+    /// this row pipe must bind).  Pick the cheapest alt with required ⊆
+    /// provided AND introduces ⊇ demanded.
+    auto pick_compatible(CostFrontier const &frontier, SymbolSet const &provided, SymbolSet const &demanded)
+        -> Alternative const & {
       Alternative const *best = nullptr;
       for (auto const &alt : frontier.alts()) {
-        if (bind::IsCompatible(alt.required, provided)) {
-          if (!best || alt.cost < best->cost) {
-            best = &alt;
-          }
-        }
+        if (!bind::IsCompatible(alt.required, provided)) continue;
+        if (!std::ranges::includes(alt.introduces, demanded)) continue;
+        if (!best || alt.cost < best->cost) best = &alt;
       }
       if (!best) {
-        // Nothing fits: this part of the plan uses a variable that no Bind
-        // above us introduces.  Usually means a rewrite that should have
-        // inlined an Identifier didn't fire.
+        // Nothing fits: either a symbol is demanded that no ancestor can
+        // provide, or a downstream consumer needs an introduction the
+        // input subtree can't deliver.  Usually means a rewrite that
+        // should have inlined an Identifier didn't fire, or this slice's
+        // cost-model invariants are not what we think.
         throw QueryException{
             "Plan extraction failed: no compatible alternative at this node - "
-            "a symbol is demanded that no ancestor can provide. "
-            "This usually means an Identifier node was not inlined by the rewrite pass."};
+            "a symbol is demanded that no ancestor can provide, or the input "
+            "row pipe cannot introduce a symbol the output references."};
       }
       return *best;
     }
 
-    /// Resolve this (eclass, provided) once, recursively resolve children
-    /// with their own provided contexts (Bind alive/dead decides what each
-    /// child sees), then emit this entry.  Post-order push gives a
-    /// children-before-parents topological order.
-    void resolve_and_emit(EClassId eclass_id, SymbolSet provided) {
-      auto key = ResolvedKey{eclass_id, std::move(provided)};
+    /// Resolve this key once, recursively resolve children with the keys
+    /// the chosen alt's enode dictates, then emit this entry in post-order
+    /// (children-before-parents) so the builder can walk forward.
+    void resolve_and_emit(ResolvedKey key) {
       if (!seen.insert(key).second) return;
 
-      auto fr_it = frontier_map.find(eclass_id);
+      auto fr_it = frontier_map.find(key.eclass);
       assert(fr_it != frontier_map.end() && fr_it->second.has_value());
-      auto const &chosen = pick_compatible(*fr_it->second, key.provided);
+      auto const &chosen = pick_compatible(*fr_it->second, key.provided, key.demanded_introduces);
 
       auto const &enode = egraph.get_enode(chosen.enode_id);
-      for_each_resolved_child(enode, key, chosen.is_alive, [this](ResolvedKey child_key) {
-        resolve_and_emit(child_key.eclass, std::move(child_key.provided));
+      for_each_resolved_child(enode, key, chosen.is_alive, chosen.introduces, [this](ResolvedKey child_key) {
+        resolve_and_emit(std::move(child_key));
       });
-      out_order.push_back(TopoEntry{std::move(key), chosen.enode_id, chosen.is_alive});
+      out_order.push_back(TopoEntry{.key = std::move(key),
+                                    .enode_id = chosen.enode_id,
+                                    .is_alive = chosen.is_alive,
+                                    .introduces = chosen.introduces});
     }
   };
 };
@@ -722,8 +811,30 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   auto const builtin = BuiltinEstimator{e};
   auto const *override_est = planner_context.estimator_override();
   CardinalityEstimator const &active_estimator = override_est ? *override_est : builtin;
+
+  // Pre-pass: collect the set of Symbol e-classes referenced by some
+  // Identifier e-node anywhere in the e-graph.  This is the demand signal
+  // Bind's cost case uses to decide whether to emit an alive alt (see
+  // PlanCostModel::referenced_syms).  O(num_enodes) one-time scan.
+  bind::SymbolSet referenced_syms;
+  {
+    auto seq = referenced_syms.extract_sequence();
+    for (auto eclass_id : impl.egraph_.canonical_eclass_ids()) {
+      auto const &cls = impl.egraph_.eclass(eclass_id);
+      for (auto enode_id : cls.nodes()) {
+        auto const &enode = impl.egraph_.get_enode(enode_id);
+        if (enode.symbol() == symbol::Identifier && !enode.children().empty()) {
+          seq.push_back(enode.children()[0]);
+        }
+      }
+    }
+    std::ranges::sort(seq);
+    seq.erase(std::ranges::unique(seq).begin(), seq.end());
+    referenced_syms.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
+  }
+
   (void)extract::ComputeFrontiers(
-      impl.egraph_, PlanCostModel{active_estimator, impl.egraph_}, true_root, ctx.frontier_map);
+      impl.egraph_, PlanCostModel{active_estimator, impl.egraph_, referenced_syms}, true_root, ctx.frontier_map);
 
   auto const root_it = ctx.frontier_map.find(true_root);
   if (root_it == ctx.frontier_map.end() || !root_it->second.has_value()) {
@@ -792,10 +903,11 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
     bool const is_bind = enode.symbol() == symbol::Bind && children.size() == 3;
 
     // Dead Bind: pass through input.  sym/expr were never resolved for
-    // this (eclass, provided) pair, so they're absent from build_cache.
+    // this key, so they're absent from build_cache.  The dead branch
+    // forwards demanded_introduces unchanged (see for_each_resolved_child).
     if (is_bind && !entry.is_alive) {
       // See contract (1) above: read first, then assign.
-      auto input_result = build_cache.at(ResolvedKey{children[0], entry.key.provided});
+      auto input_result = build_cache.at(ResolvedKey{children[0], entry.key.provided, entry.key.demanded_introduces});
       build_cache[entry.key] = std::move(input_result);
       continue;
     }
@@ -804,7 +916,7 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
     children_refs.reserve(children.size());
     // Resolve children using the same rule the resolver used (see
     // for_each_resolved_child).
-    for_each_resolved_child(enode, entry.key, entry.is_alive, [&](ResolvedKey child_key) {
+    for_each_resolved_child(enode, entry.key, entry.is_alive, entry.introduces, [&](ResolvedKey child_key) {
       children_refs.push_back(cache_lookup(child_key));
     });
     // See contract (2) above: materialise Build's result before the LHS [] runs.
@@ -813,7 +925,7 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   }
 
   // STAGE: Get the built root as std::unique_ptr<LogicalOperator>.
-  auto root_key = ResolvedKey{true_root, SymbolSet{}};
+  auto root_key = ResolvedKey{true_root, SymbolSet{}, SymbolSet{}};
   auto *ptr = std::get_if<LogicalOperatorPtr>(&build_cache[root_key]);
   if (!ptr) throw QueryException{"Root should be LogicalOperator"};
   auto &result = *ptr;
