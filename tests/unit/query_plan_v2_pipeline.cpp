@@ -946,5 +946,83 @@ INSTANTIATE_TEST_SUITE_P(
 );
 // clang-format on
 
+// --- Alive Bind chain tests ---
+//
+// These exercise alive Bind propagation in chains where at least one Bind
+// cannot be inlined away, so the demand-set algebra (AliveRequired) runs with
+// non-empty required sets at the pipeline level.
+//
+// True T2 (same eclass picking different alternatives under different `provided`
+// sets) and T3 (AliveRequired overlap when expr_required intersects
+// input_required\{sym}) at the full pipeline level require scan operators
+// (MATCH (n)) to produce non-empty row-pipe `provided` sets.  Until scan
+// operators land, this suite uses UNWIND as the row-pipe source and covers the
+// alive Bind demand-propagation paths that are reachable today.
+
+// clang-format off
+INSTANTIATE_TEST_SUITE_P(
+    AliveBindChains,
+    PlannerV2PipelineTest,
+    ::testing::Values(
+        // Bind for y uses the Unwind row-pipe variable x.  Because x is not a
+        // literal, InlineRule leaves Identifier(x) in place; the cost model
+        // then elects to inline y (dead Bind) since adding a Bind node for y
+        // would cost more than evaluating (x+1) directly in the output.
+        // Tests that dead-bind elimination works correctly when the expression
+        // references a row-pipe symbol: the Identifier(x) reference in the
+        // output must remain valid after the Bind for y is dropped.
+        PipelineTestCase{
+            .name = "BindExprUsesUnwindVar",
+            .query = "UNWIND range(0, 5) AS x WITH x + 1 AS y RETURN y;",
+            .expected_details = {"Produce {y`1:(x + 1)}", "Unwind {x:RANGE(0, 5)}", "Once"},
+            .min_rewrites = 0,
+            .should_saturate = true,
+        },
+        // Dead Bind (z = x+1, never used in RETURN) alongside an inlined alive
+        // Bind (y = x, used in RETURN).  Tests that z's Bind is stripped while
+        // the Identifier(x) in the output correctly references the Unwind variable.
+        // Note: `WITH x AS y, x+1 AS z` is the correct Cypher form to pass x
+        // through into the new scope; `WITH 999 AS unused RETURN x` would be a
+        // Cypher scope error because x falls out of scope after WITH.
+        PipelineTestCase{
+            .name = "DeadBindDroppedAliveBindInlined",
+            .query = "UNWIND range(0, 5) AS x WITH x AS y, x + 1 AS z RETURN y;",
+            .expected_details = {"Produce {y`1:x}", "Unwind {x:RANGE(0, 5)}", "Once"},
+            .min_rewrites = 0,
+            .should_saturate = true,
+        },
+        // Two output columns both referencing the same Unwind symbol.  Tests
+        // that the row-pipe symbol is shared across two NamedOutput consumers
+        // without duplication or premature elimination.
+        PipelineTestCase{
+            .name = "TwoOutputsFromUnwindVar",
+            .query = "UNWIND range(0, 5) AS x RETURN x AS a, x + 1 AS b;",
+            .expected_details = {"Produce {a`1:x, b`3:(x + 1)}", "Unwind {x:RANGE(0, 5)}", "Once"},
+            .min_rewrites = 0,
+            .should_saturate = true,
+        },
+        // Scalar alive Bind for `a` (evaluated once before Unwind) combined
+        // with a per-row output `y = a + x` that is inlined into the RETURN.
+        // - `a` stays alive as a scalar Produce because 101 rows × inline cost
+        //   exceeds the one-time Bind cost (same reasoning as WithUnwindPrefersNonInlined).
+        // - `y = a + x` is inlined (dead Bind): adding a Bind for y per-row
+        //   costs more than evaluating (a+x) directly in the output.
+        // The RETURN Produce references `a` by Identifier (the scalar pre-Unwind
+        // value) and `x` by Identifier (the per-row Unwind value).
+        // AliveRequired at y's Bind level: expr_required={a,x} is added to
+        // (input_required\{y}), exercising the set-union branch in demand propagation.
+        PipelineTestCase{
+            .name = "ScalarAliveBindUnwindInlinedPerRowExpr",
+            .query = "WITH 1+1+1+1+1+1 AS a UNWIND range(0, 100) AS x WITH a + x AS y RETURN y;",
+            .expected_details = {"Produce {y`2:(a + x)}", "Unwind {x:RANGE(0, 100)}",
+                                 "Produce {a`0:(((((1 + 1) + 1) + 1) + 1) + 1)}", "Once"},
+            .min_rewrites = 0,
+            .should_saturate = true,
+        }
+    ),
+    TestCaseName
+);
+// clang-format on
+
 }  // namespace
 }  // namespace memgraph::query::plan::v2
