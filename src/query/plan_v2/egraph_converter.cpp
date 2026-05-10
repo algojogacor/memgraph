@@ -585,8 +585,8 @@ struct PlanResolver {
     /// down from an enclosing Output whose NamedOutputs reference symbols
     /// this row pipe must bind).  Pick the cheapest alt with required ⊆
     /// provided AND introduces ⊇ demanded.
-    auto pick_compatible(CostFrontier const &frontier, SymbolSet const &provided, SymbolSet const &demanded)
-        -> Alternative const & {
+    [[nodiscard]] auto pick_compatible(CostFrontier const &frontier, SymbolSet const &provided,
+                                       SymbolSet const &demanded) -> Alternative const & {
       Alternative const *best = nullptr;
       for (auto const &alt : frontier.alts()) {
         if (!bind::IsCompatible(alt.required, provided)) continue;
@@ -641,7 +641,7 @@ using children_ref = std::span<child_ref const>;
 
 namespace {
 template <typename T, std::size_t idx>
-auto ExtractAndValidate(children_ref children) -> const T & {
+[[nodiscard]] auto ExtractAndValidate(children_ref children) -> const T & {
   if (children.size() <= idx) throw QueryException{"Planner error, missing child node"};
   const auto *ptr = std::get_if<T>(&children[idx].get());
   if (!ptr) throw QueryException{"Planner error, child node is incorrect type"};
@@ -649,7 +649,7 @@ auto ExtractAndValidate(children_ref children) -> const T & {
 }
 
 template <typename T>
-auto Validate(child_ref child) -> const T & {
+[[nodiscard]] auto Validate(child_ref child) -> const T & {
   const auto *ptr = std::get_if<T>(&child.get());
   if (!ptr) throw QueryException{"Planner error, child node is incorrect type"};
   return *ptr;
@@ -866,7 +866,7 @@ struct Builder {
 /// undefined behaviour.
 struct QueryPlannerContext::Impl {
   planner::core::extract::FrontierMap<CostFrontier> frontier_map;
-  std::vector<TopoEntry> topo;
+  std::vector<TopoEntry> build_order;
   planner::core::extract::FrontierBufferPool<CostFrontier> frontier_buffer_pool;
   /// User-provided estimator override.  null -> ConvertToLogicalOperator
   /// builds a BuiltinEstimator over the current egraph for this call.
@@ -877,7 +877,7 @@ struct QueryPlannerContext::Impl {
 
   void clear() {
     frontier_map.clear();
-    topo.clear();
+    build_order.clear();
     frontier_buffer_pool.clear();
   }
 };
@@ -942,6 +942,20 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
     referenced_syms.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
   }
 
+#ifndef NDEBUG
+  // Invariant: Symbol e-classes are never merged with each other (see bind_semantics.hpp).
+  // Each e-class containing a Symbol e-node must be a singleton - mixing two
+  // Symbol e-nodes in one e-class would alias distinct variables and corrupt
+  // demand tracking.
+  for (auto eclass_id : impl.egraph_.canonical_eclass_ids()) {
+    auto const &cls = impl.egraph_.eclass(eclass_id);
+    bool const has_symbol = std::ranges::any_of(
+        cls.nodes(), [&](auto enode_id) { return impl.egraph_.get_enode(enode_id).symbol() == symbol::Symbol; });
+    DMG_ASSERT(!has_symbol || cls.nodes().size() == 1,
+               "planner bug: Symbol e-class merged with another e-node - bind semantics invariant violated");
+  }
+#endif
+
   (void)extract::ComputeFrontiers(impl.egraph_,
                                   PlanCostModel{active_estimator, impl.egraph_, referenced_syms},
                                   true_root,
@@ -966,7 +980,7 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   // (eclass, provided) pairs - one entry per distinct path-context the
   // resolver visited, so each path can pick the alt that's optimal under
   // its own scope.
-  PlanResolver{}(impl.egraph_, ctx.frontier_map, true_root, ctx.topo);
+  PlanResolver{}(impl.egraph_, ctx.frontier_map, true_root, ctx.build_order);
 
   /// STAGE: Build selected (LogicalOperator, Expression *, Symbol, NamedExpression *, etc.)
   auto builder = Builder{impl.storage<symbol::Literal>().store,
@@ -996,20 +1010,20 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   //       span of refs into build_cache; we materialise its return into a
   //       local BEFORE the LHS [] runs.
   //
-  // Belt-and-braces: reserve(topo.size()) up-front so the loop's []
+  // Belt-and-braces: reserve(build_order.size()) up-front so the loop's []
   // inserts can never rehash.
   auto build_cache = boost::unordered_flat_map<ResolvedKey, BuildResult, ResolvedKeyHash>{};
-  build_cache.reserve(ctx.topo.size());
+  build_cache.reserve(ctx.build_order.size());
 
   auto const cache_lookup = [&](ResolvedKey const &child_key) {
     auto const it = build_cache.find(child_key);
     DMG_ASSERT(it != build_cache.end(), "Building bottom up we should be able to find our child");
     return std::cref(it->second);
   };
-  // topo is already in children-before-parents order from the resolver;
-  // walk it forward.
+  // build_order is children-before-parents (post-order from the resolver);
+  // walk it forward so every child is in build_cache before its parent.
   auto children_refs = std::vector<child_ref>{};
-  for (auto const &entry : ctx.topo) {
+  for (auto const &entry : ctx.build_order) {
     auto const &enode = impl.egraph_.get_enode(entry.enode_id);
     auto const &children = enode.children();
     bool const is_bind = enode.symbol() == symbol::Bind && children.size() == 3;
