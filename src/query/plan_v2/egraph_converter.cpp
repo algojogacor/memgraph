@@ -355,8 +355,7 @@ struct PlanCostModel {
           throw NotYetImplemented{"importing CALL subqueries"};
         }
 
-        auto const exposed_syms =
-            ExposedSymsFromChildren({current.children().data() + 2, current.children().size() - 2});
+        auto const exposed_syms = ExposedSymsFromChildren(current.children().subspan(2));
 
         return CostFrontier::flat_map(outer_frontier, [&](auto const &outer_alt, auto emit) {
           for (auto const &inner_alt : inner_frontier.alts()) {
@@ -524,7 +523,7 @@ void for_each_resolved_child(planner::core::ENode<symbol> const &enode, Resolved
     //     self-contained alt.
     //   - exposed_sym children are Symbol leaves; provided=parent.provided,
     //     demanded={}.
-    auto const exposed_syms = ExposedSymsFromChildren({children.data() + 2, children.size() - 2});
+    auto const exposed_syms = ExposedSymsFromChildren(children.subspan(2));
     auto outer_demand = SetDifference(parent_key.demanded_introduces, exposed_syms);
     visit(ResolvedKey{children[0], parent_key.provided, std::move(outer_demand)});
     visit(ResolvedKey{children[1], SymbolSet{}, SymbolSet{}});
@@ -597,12 +596,12 @@ struct PlanResolver {
       if (!best) {
         // Nothing fits: either a symbol is demanded that no ancestor can
         // provide, or a downstream consumer needs an introduction the
-        // input subtree can't deliver.  This is a planner bug, not a user error.
-        DMG_ASSERT(false,
-                   "planner bug: no compatible alternative - a symbol is demanded that "
-                   "no ancestor can provide, or the input row pipe cannot introduce a "
-                   "symbol the output references");
-        std::unreachable();
+        // input subtree can't deliver.  Planner bug, but throw for production
+        // safety rather than UB.
+        throw QueryException{
+            "Plan extraction failed: no compatible alternative at this node - "
+            "a symbol is demanded that no ancestor can provide, or the input "
+            "row pipe cannot introduce a symbol the output references."};
       }
       return *best;
     }

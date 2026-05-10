@@ -506,6 +506,21 @@ struct small_vector : private Alloc {  // EBO: empty Alloc adds 0 bytes
 
   [[nodiscard]] auto empty() const -> bool { return size_ == 0; }
 
+  /// Return a span over [offset, offset+count) elements.  count == dynamic_extent means "to end".
+  [[nodiscard]] auto subspan(size_t offset, size_t count = std::dynamic_extent) const -> std::span<T const> {
+    assert(offset <= size_);
+    auto const n = (count == std::dynamic_extent) ? size_ - offset : count;
+    assert(offset + n <= size_);
+    return {data() + offset, n};
+  }
+
+  [[nodiscard]] auto subspan(size_t offset, size_t count = std::dynamic_extent) -> std::span<T> {
+    assert(offset <= size_);
+    auto const n = (count == std::dynamic_extent) ? size_ - offset : count;
+    assert(offset + n <= size_);
+    return {data() + offset, n};
+  }
+
   void clear() {
     std::destroy(begin(), end());
     size_ = 0;
