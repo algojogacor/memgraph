@@ -65,9 +65,6 @@ concept DominanceRelation =
 /// partial_ordering on return.
 inline constexpr auto lower_is_better = [](auto const &a, auto const &b) -> std::partial_ordering { return b <=> a; };
 
-/// "Higher is better" - direct `<=>`, no swap.
-inline constexpr auto higher_is_better = [](auto const &a, auto const &b) -> std::partial_ordering { return a <=> b; };
-
 /// "Smaller-by-inclusion is better" comparator for two sorted ranges.
 /// Single forward merge over both ranges to determine the subset relations,
 /// with mid-pass early-exit once both subset flags are false (incomparable).
@@ -169,8 +166,9 @@ concept Combiner = std::invocable<Fn const &, Alt const &, Alt const &> &&
 ///
 /// Example:
 ///   struct MyDominance {
-///     static auto operator()(MyAlt const &a, MyAlt const &b) -> bool {
-///       return b.cost <= a.cost && b.req.contains_all_of(a.req);
+///     static auto operator()(MyAlt const &a, MyAlt const &b) -> std::partial_ordering {
+///       return pareto_compare(a, b, dim<&MyAlt::cost>(lower_is_better),
+///                                   dim<&MyAlt::req>(smaller_subset_is_better));
 ///     }
 ///   };
 ///   using Frontier = ParetoFrontier<MyAlt, MyDominance>;
@@ -226,7 +224,7 @@ struct ParetoFrontier {
   void merge_in_place(ParetoFrontier &&other) {
     auto const pruned_prefix = alts_.size();
     alts_.reserve(pruned_prefix + other.alts_.size());
-    alts_.insert(alts_.end(), std::make_move_iterator(other.alts_.begin()), std::make_move_iterator(other.alts_.end()));
+    std::ranges::move(other.alts_, std::back_inserter(alts_));
     prune_with_pruned_prefix(pruned_prefix);
   }
 

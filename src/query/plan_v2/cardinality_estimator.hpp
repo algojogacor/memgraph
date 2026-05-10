@@ -33,7 +33,6 @@ using EGraph = planner::core::EGraph<symbol, analysis>;
 ///                             range(0,5) → 6); falls back to
 ///                             kDefaultRowEstimate for unrecognised
 ///                             function ids.  Production default.
-///   - StorageStatsEstimator - storage-stats-backed.  Future layer.
 struct CardinalityEstimator {
   virtual ~CardinalityEstimator() = default;
 

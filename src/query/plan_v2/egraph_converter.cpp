@@ -55,6 +55,21 @@ namespace {
 
 using bind::SymbolSet;
 
+/// Build the SymbolSet of exposed symbols from Subquery children[2..].
+/// Children at positions >= 2 are Symbol e-classes that the subquery exposes
+/// to the outer scope. Sort and dedup is required because e-graph children are
+/// not guaranteed unique.
+auto ExposedSymsFromChildren(std::span<planner::core::EClassId const> children_from_2) -> SymbolSet {
+  SymbolSet exposed;
+  auto seq = exposed.extract_sequence();
+  seq.reserve(children_from_2.size());
+  for (auto child : children_from_2) seq.push_back(child);
+  std::ranges::sort(seq);
+  seq.erase(std::ranges::unique(seq).begin(), seq.end());
+  exposed.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
+  return exposed;
+}
+
 // --- Alternatives -----------------------------------------------------------
 // Alternative and AlternativeDominance live in plan_alternative.hpp so the
 // pure-algebra dominance can be unit-tested without the rest of this TU.
@@ -340,17 +355,8 @@ struct PlanCostModel {
           throw NotYetImplemented{"importing CALL subqueries"};
         }
 
-        SymbolSet exposed_syms;
-        {
-          auto seq = exposed_syms.extract_sequence();
-          seq.reserve(current.children().size() - 2);
-          for (size_t i = 2; i < current.children().size(); ++i) {
-            seq.push_back(current.children()[i]);
-          }
-          std::ranges::sort(seq);
-          seq.erase(std::ranges::unique(seq).begin(), seq.end());
-          exposed_syms.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
-        }
+        auto const exposed_syms =
+            ExposedSymsFromChildren({current.children().data() + 2, current.children().size() - 2});
 
         return CostFrontier::flat_map(outer_frontier, [&](auto const &outer_alt, auto emit) {
           for (auto const &inner_alt : inner_frontier.alts()) {
@@ -518,14 +524,7 @@ void for_each_resolved_child(planner::core::ENode<symbol> const &enode, Resolved
     //     self-contained alt.
     //   - exposed_sym children are Symbol leaves; provided=parent.provided,
     //     demanded={}.
-    SymbolSet exposed_syms;
-    {
-      auto seq = exposed_syms.extract_sequence();
-      for (size_t i = 2; i < children.size(); ++i) seq.push_back(children[i]);
-      std::ranges::sort(seq);
-      seq.erase(std::ranges::unique(seq).begin(), seq.end());
-      exposed_syms.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
-    }
+    auto const exposed_syms = ExposedSymsFromChildren({children.data() + 2, children.size() - 2});
     auto outer_demand = SetDifference(parent_key.demanded_introduces, exposed_syms);
     visit(ResolvedKey{children[0], parent_key.provided, std::move(outer_demand)});
     visit(ResolvedKey{children[1], SymbolSet{}, SymbolSet{}});
@@ -598,13 +597,12 @@ struct PlanResolver {
       if (!best) {
         // Nothing fits: either a symbol is demanded that no ancestor can
         // provide, or a downstream consumer needs an introduction the
-        // input subtree can't deliver.  Usually means a rewrite that
-        // should have inlined an Identifier didn't fire, or this slice's
-        // cost-model invariants are not what we think.
-        throw QueryException{
-            "Plan extraction failed: no compatible alternative at this node - "
-            "a symbol is demanded that no ancestor can provide, or the input "
-            "row pipe cannot introduce a symbol the output references."};
+        // input subtree can't deliver.  This is a planner bug, not a user error.
+        DMG_ASSERT(false,
+                   "planner bug: no compatible alternative - a symbol is demanded that "
+                   "no ancestor can provide, or the input row pipe cannot introduce a "
+                   "symbol the output references");
+        std::unreachable();
       }
       return *best;
     }
@@ -870,6 +868,7 @@ struct Builder {
 struct QueryPlannerContext::Impl {
   planner::core::extract::FrontierMap<CostFrontier> frontier_map;
   std::vector<TopoEntry> topo;
+  planner::core::extract::FrontierBufferPool<CostFrontier> frontier_buffer_pool;
   /// User-provided estimator override.  null -> ConvertToLogicalOperator
   /// builds a BuiltinEstimator over the current egraph for this call.
   std::unique_ptr<CardinalityEstimator> estimator_override;
@@ -880,6 +879,7 @@ struct QueryPlannerContext::Impl {
   void clear() {
     frontier_map.clear();
     topo.clear();
+    frontier_buffer_pool.clear();
   }
 };
 
@@ -943,8 +943,11 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
     referenced_syms.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
   }
 
-  (void)extract::ComputeFrontiers(
-      impl.egraph_, PlanCostModel{active_estimator, impl.egraph_, referenced_syms}, true_root, ctx.frontier_map);
+  (void)extract::ComputeFrontiers(impl.egraph_,
+                                  PlanCostModel{active_estimator, impl.egraph_, referenced_syms},
+                                  true_root,
+                                  ctx.frontier_map,
+                                  ctx.frontier_buffer_pool);
 
   auto const root_it = ctx.frontier_map.find(true_root);
   if (root_it == ctx.frontier_map.end() || !root_it->second.has_value()) {

@@ -145,7 +145,7 @@ struct FrontierBufferPool {
 
   /// RAII guard: acquires on construction, releases on destruction.  Safe for
   /// early returns.
-  struct Acquired {
+  struct [[nodiscard]] Acquired {
     FrontierBufferPool *owner;
     std::vector<CostResult const *> *buf;
 
@@ -277,7 +277,7 @@ struct TraversalScratch {
   std::vector<EClassId> worklist;
   boost::unordered_flat_set<EClassId> visited;
 
-  void clear() {
+  void clear() noexcept {
     worklist.clear();
     visited.clear();
   }
@@ -380,7 +380,7 @@ struct ExtractionContext {
   std::deque<EClassId> ready;
   FrontierBufferPool<CostResult> frontier_buffers;
 
-  void clear() {
+  void clear() noexcept {
     frontier_map.clear();
     selection.clear();
     in_degree.clear();
@@ -401,6 +401,9 @@ struct ExtractView {
 
 /// Primary entry point.  Caller owns `ctx`; the returned view points into
 /// ctx-owned storage and is valid until the next Extract() call on `ctx`.
+///
+/// This entry point is intended for tests and benchmarks. Production code calls
+/// ComputeFrontiers and the resolver directly via QueryPlannerContext.
 template <typename Symbol, typename Analysis, typename CostModel, typename ResolverFn>
   requires CostResultType<typename CostModel::CostResult> &&
            Resolver<ResolverFn, Symbol, Analysis, typename CostModel::CostResult>

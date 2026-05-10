@@ -121,10 +121,9 @@ inline constexpr double kSymbolCost = 1.0;
 /// alive-Bind dispatch where the bound symbol is subtracted from the
 /// downstream demand.  Cheaper than `SetDifference(a, SymbolSet{x})`
 /// because no temporary single-element set is constructed.
-[[nodiscard]] inline auto SetDifferenceOne(SymbolSet const &a, planner::core::EClassId x) -> SymbolSet {
-  SymbolSet out = a;
-  out.erase(x);
-  return out;
+[[nodiscard]] inline auto SetDifferenceOne(SymbolSet a, planner::core::EClassId x) -> SymbolSet {
+  a.erase(x);
+  return a;
 }
 
 }  // namespace memgraph::query::plan::v2::bind
