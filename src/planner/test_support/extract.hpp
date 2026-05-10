@@ -20,6 +20,24 @@
 
 namespace memgraph::planner::test_support {
 
+/// Minimal CostResultType for tests that only need a scalar cost.
+/// Production cost models use ParetoFrontier-based CostResultBase; use this
+/// when a simple ordered cost is sufficient.
+template <std::totally_ordered T>
+struct DefaultCostResult {
+  using cost_t = T;
+  T cost;
+  core::ENodeId enode_id;
+
+  void merge_in_place(DefaultCostResult &&other) {
+    if (other.cost < cost) *this = other;
+  }
+
+  [[nodiscard]] auto resolve() const -> std::pair<core::ENodeId, cost_t const &> { return {enode_id, cost}; }
+};
+
+static_assert(core::extract::CostResultType<DefaultCostResult<double>>);
+
 /// Generic Resolver for tests and benchmarks: selects each eclass via
 /// CostResult::resolve and walks every child of the chosen enode.  Safe
 /// for any cost model whose children are unconditionally part of the

@@ -80,37 +80,33 @@ void VerifyBytecode(std::span<Instruction const> code, std::span<Symbol const> s
 // ============================================================================
 
 /// Reporter that delegates to gtest EXPECT_* macros.
-/// Messages are formatted lazily; fmt::format runs only on the failure path.
+/// Messages are formatted lazily — fmt::format is only called on failure
+/// because gtest short-circuits the << stream when the assertion passes.
 /// assert_* methods return false on failure so validators can early-return.
 class GTestReporter {
  public:
   template <typename... Args>
   void expect_true(bool cond, fmt::format_string<Args...> fmt, Args &&...args) {
-    if (cond) return;
     EXPECT_TRUE(cond) << fmt::format(fmt, std::forward<Args>(args)...);
   }
 
   template <typename A, typename B, typename... Args>
   void expect_eq(A const &a, B const &b, fmt::format_string<Args...> fmt, Args &&...args) {
-    if (a == b) return;
     EXPECT_EQ(a, b) << fmt::format(fmt, std::forward<Args>(args)...);
   }
 
   template <typename A, typename B, typename... Args>
   void expect_lt(A const &a, B const &b, fmt::format_string<Args...> fmt, Args &&...args) {
-    if (a < b) return;
     EXPECT_LT(a, b) << fmt::format(fmt, std::forward<Args>(args)...);
   }
 
   template <typename A, typename B, typename... Args>
   void expect_ne(A const &a, B const &b, fmt::format_string<Args...> fmt, Args &&...args) {
-    if (a != b) return;
     EXPECT_NE(a, b) << fmt::format(fmt, std::forward<Args>(args)...);
   }
 
   template <typename A, typename B, typename... Args>
   void expect_gt(A const &a, B const &b, fmt::format_string<Args...> fmt, Args &&...args) {
-    if (a > b) return;
     EXPECT_GT(a, b) << fmt::format(fmt, std::forward<Args>(args)...);
   }
 
@@ -121,30 +117,26 @@ class GTestReporter {
 
   template <typename... Args>
   auto assert_true(bool cond, fmt::format_string<Args...> fmt, Args &&...args) -> bool {
-    if (cond) return true;
     EXPECT_TRUE(cond) << fmt::format(fmt, std::forward<Args>(args)...);
-    return false;
+    return cond;
   }
 
   template <typename A, typename B, typename... Args>
   auto assert_lt(A const &a, B const &b, fmt::format_string<Args...> fmt, Args &&...args) -> bool {
-    if (a < b) return true;
     EXPECT_LT(a, b) << fmt::format(fmt, std::forward<Args>(args)...);
-    return false;
+    return a < b;
   }
 
   template <typename A, typename B, typename... Args>
   auto assert_gt(A const &a, B const &b, fmt::format_string<Args...> fmt, Args &&...args) -> bool {
-    if (a > b) return true;
     EXPECT_GT(a, b) << fmt::format(fmt, std::forward<Args>(args)...);
-    return false;
+    return a > b;
   }
 
   template <typename A, typename B, typename... Args>
   auto assert_eq(A const &a, B const &b, fmt::format_string<Args...> fmt, Args &&...args) -> bool {
-    if (a == b) return true;
     EXPECT_EQ(a, b) << fmt::format(fmt, std::forward<Args>(args)...);
-    return false;
+    return a == b;
   }
 };
 
