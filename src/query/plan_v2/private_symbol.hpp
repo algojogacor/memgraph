@@ -278,6 +278,7 @@ constexpr auto CostClassOfImpl(symbol s, symbol_sequence<Ss...>) -> CostClass {
   // default-initialised CostClass; the static_assert above wouldn't fire (it
   // checks descriptors, not sequence membership).  Belt-and-braces:
   assert(found && "CostClassOf: symbol missing from AllSymbolsSeq - see private_symbol.hpp");
+  if (!found) std::unreachable();
   return result;
 }
 
@@ -288,7 +289,6 @@ constexpr auto CostClassOf(symbol s) -> CostClass { return detail::CostClassOfIm
 }  // namespace memgraph::query::plan::v2
 
 namespace std {
-using std::hash;
 
 template <>
 struct hash<memgraph::query::plan::v2::symbol> {

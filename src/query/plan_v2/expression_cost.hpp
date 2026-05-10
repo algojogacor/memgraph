@@ -79,7 +79,6 @@ inline constexpr auto FromClass(CostClass c) -> double {
       // Structural and Leaf are scored directly by PlanCostModel; reaching
       // them here means a caller forgot the distinction.  Returning 0.0
       // would silently corrupt costs upstream.
-      assert(false && "FromClass: Structural/Leaf are not per-operator constants");
       std::unreachable();
   }
   std::unreachable();

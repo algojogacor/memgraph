@@ -49,9 +49,9 @@ struct Alternative {
   /// cross into the outer scope.
   bind::SymbolSet introduces;
   planner::core::ENodeId enode_id;  ///< Which enode achieves this alternative
-  // Meaningful only when this alt's enode is a Bind; default false.
+  // Meaningful only when this alt's enode is a Bind or Unwind; default false.
   // Set true when emitted by the Bind alive branch (input demands the bound
-  // symbol), false for the dead branch and all non-Bind enodes.
+  // symbol) or any Unwind alt; false for the dead Bind branch and all other enodes.
   bool is_alive = false;
 };
 
