@@ -844,9 +844,8 @@ struct Builder {
 /// If the invariant is violated, the function throws QueryException rather than invoking
 /// undefined behaviour.
 struct QueryPlannerContext::Impl {
-  planner::core::extract::FrontierMap<CostFrontier> frontier_map;
+  planner::core::extract::FrontierContext<CostFrontier> frontier_context;
   std::vector<TopoEntry> build_order;
-  planner::core::extract::FrontierBufferPool<CostFrontier> frontier_buffer_pool;
   /// User-provided estimator override.  null -> ConvertToLogicalOperator
   /// builds a BuiltinEstimator over the current egraph for this call.
   std::unique_ptr<CardinalityEstimator> estimator_override;
@@ -855,9 +854,8 @@ struct QueryPlannerContext::Impl {
   double last_root_cardinality = std::numeric_limits<double>::quiet_NaN();
 
   void clear() {
-    frontier_map.clear();
+    frontier_context.clear();
     build_order.clear();
-    frontier_buffer_pool.clear();
   }
 };
 
@@ -934,14 +932,11 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   }
 #endif
 
-  (void)extract::ComputeFrontiers(impl.egraph_,
-                                  PlanCostModel{active_estimator, impl.egraph_, referenced_syms},
-                                  true_root,
-                                  ctx.frontier_map,
-                                  ctx.frontier_buffer_pool);
+  (void)extract::ComputeFrontiers(
+      impl.egraph_, PlanCostModel{active_estimator, impl.egraph_, referenced_syms}, true_root, ctx.frontier_context);
 
-  auto const root_it = ctx.frontier_map.find(true_root);
-  if (root_it == ctx.frontier_map.end() || !root_it->second.has_value()) {
+  auto const root_it = ctx.frontier_context.frontier_map.find(true_root);
+  if (root_it == ctx.frontier_context.frontier_map.end() || !root_it->second.has_value()) {
     throw QueryException{"Plan extraction failed: root eclass has no frontier"};
   }
   auto const &root_frontier = *root_it->second;
@@ -958,7 +953,7 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   // (eclass, provided) pairs - one entry per distinct path-context the
   // resolver visited, so each path can pick the alt that's optimal under
   // its own scope.
-  PlanResolver{}(impl.egraph_, ctx.frontier_map, true_root, ctx.build_order);
+  PlanResolver{}(impl.egraph_, ctx.frontier_context.frontier_map, true_root, ctx.build_order);
 
   /// STAGE: Build selected (LogicalOperator, Expression *, Symbol, NamedExpression *, etc.)
   auto builder = Builder{impl.storage<symbol::Literal>().store,

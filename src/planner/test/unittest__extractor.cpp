@@ -70,15 +70,15 @@ template <typename CostModel>
 auto TestExtract(EGraph<symbol, analysis> const &egraph, CostModel cost_model, EClassId root)
     -> std::vector<std::pair<EClassId, ENodeId>> {
   using CostResult = CostModel::CostResult;
-  auto frontier_map = FrontierMap<CostResult>{};
-  (void)extract::ComputeFrontiers(egraph, cost_model, root, frontier_map);
+  auto frontier_ctx = extract::FrontierContext<CostResult>{};
+  (void)extract::ComputeFrontiers(egraph, cost_model, root, frontier_ctx);
   auto resolved = SelectionMap<typename CostResult::cost_t>{};
-  DefaultResolver{}(egraph, frontier_map, root, resolved);
+  DefaultResolver{}(egraph, frontier_ctx.frontier_map, root, resolved);
   auto in_degree = extract::InDegreeMap{};
   auto deps = extract::TraversalScratch{};
   extract::CollectDependencies(egraph, resolved, root, deps, in_degree);
   auto out = std::vector<std::pair<EClassId, ENodeId>>{};
-  auto ready = std::deque<EClassId>{};
+  FifoQueue ready;
   extract::TopologicalSort(egraph, resolved, in_degree, ready, out);
   return out;
 }
@@ -125,7 +125,7 @@ struct SimpleCostModel {
 
 // Convenience alias: FrontierMap keyed by CostModel rather than CostResult.
 template <typename CostModel>
-using TestFrontierMap = FrontierMap<typename CostModel::CostResult>;
+using TestFrontierContext = extract::FrontierContext<typename CostModel::CostResult>;
 
 template <typename CostResult>
 auto FrontierCost(FrontierMap<CostResult> const &m, EClassId id) {
@@ -144,14 +144,14 @@ TEST(Extract_Cost, SingleLeafNode) {
   auto egraph = EGraph<symbol, analysis>{};
   auto [leaf_class, leaf_node, leaf_new] = egraph.emplace(symbol::A);
 
-  TestFrontierMap<CostModel> frontiers;
+  TestFrontierContext<CostModel> frontiers;
   auto cost = extract::ComputeFrontiers(egraph, cost_model, leaf_class, frontiers);
 
   ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 5.0);
-  ASSERT_EQ(frontiers.size(), 1);
-  ASSERT_EQ(FrontierEnode(frontiers, leaf_class), leaf_node);
-  ASSERT_EQ(FrontierCost(frontiers, leaf_class), 5.0);
+  ASSERT_EQ(frontiers.frontier_map.size(), 1);
+  ASSERT_EQ(FrontierEnode(frontiers.frontier_map, leaf_class), leaf_node);
+  ASSERT_EQ(FrontierCost(frontiers.frontier_map, leaf_class), 5.0);
 }
 
 TEST(Extract_Cost, SimpleTree) {
@@ -163,13 +163,13 @@ TEST(Extract_Cost, SimpleTree) {
   auto [right_class, right_node, right_new] = egraph.emplace(symbol::B);
   auto [root_class, root_node, root_new] = egraph.emplace(symbol::A, {left_class, right_class});
 
-  TestFrontierMap<CostModel> frontiers;
+  TestFrontierContext<CostModel> frontiers;
   auto cost = extract::ComputeFrontiers(egraph, cost_model, root_class, frontiers);
 
   // Cost should be: 1 (root) + 1 (left) + 1 (right) = 3
   ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 3.0);
-  ASSERT_EQ(frontiers.size(), 3);
+  ASSERT_EQ(frontiers.frontier_map.size(), 3);
 }
 
 TEST(Extract_Cost, DeepTree) {
@@ -181,13 +181,13 @@ TEST(Extract_Cost, DeepTree) {
   auto [mid_class, mid_node, mid_new] = egraph.emplace(symbol::B, {leaf_class});
   auto [root_class, root_node, root_new] = egraph.emplace(symbol::A, {mid_class});
 
-  TestFrontierMap<CostModel> frontiers;
+  TestFrontierContext<CostModel> frontiers;
   auto cost = extract::ComputeFrontiers(egraph, cost_model, root_class, frontiers);
 
   // Cost should be: 1 (root) + 1 (mid) + 1 (leaf) = 3
   ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 3.0);
-  ASSERT_EQ(frontiers.size(), 3);
+  ASSERT_EQ(frontiers.frontier_map.size(), 3);
 }
 
 TEST(Extract_Cost, DiamondDAGSharedNode) {
@@ -200,18 +200,18 @@ TEST(Extract_Cost, DiamondDAGSharedNode) {
   auto [right_class, right_node, right_new] = egraph.emplace(symbol::B, {shared_class}, 2);  // disambiguator = 2
   auto [root_class, root_node, root_new] = egraph.emplace(symbol::A, {left_class, right_class});
 
-  TestFrontierMap<CostModel> frontiers;
+  TestFrontierContext<CostModel> frontiers;
   auto cost = extract::ComputeFrontiers(egraph, cost_model, root_class, frontiers);
 
   // Shared node should only be computed once via memoization
   // Cost: root=1 + (left=1+shared=1) + (right=1+shared=1) = 1+2+2 = 5
   ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 5.0);
-  ASSERT_EQ(frontiers.size(), 4);
-  ASSERT_EQ(FrontierCost(frontiers, shared_class), 1);
-  ASSERT_EQ(FrontierCost(frontiers, left_class), 2);
-  ASSERT_EQ(FrontierCost(frontiers, right_class), 2);
-  ASSERT_EQ(FrontierCost(frontiers, root_class), 5);
+  ASSERT_EQ(frontiers.frontier_map.size(), 4);
+  ASSERT_EQ(FrontierCost(frontiers.frontier_map, shared_class), 1);
+  ASSERT_EQ(FrontierCost(frontiers.frontier_map, left_class), 2);
+  ASSERT_EQ(FrontierCost(frontiers.frontier_map, right_class), 2);
+  ASSERT_EQ(FrontierCost(frontiers.frontier_map, root_class), 5);
 }
 
 TEST(Extract_Cost, VariableCostBySymbol) {
@@ -222,7 +222,7 @@ TEST(Extract_Cost, VariableCostBySymbol) {
   auto [aclass, anode, a_new] = egraph.emplace(symbol::A);
   auto [bclass, bnode, b_new] = egraph.emplace(symbol::B);
 
-  TestFrontierMap<CostModel> frontiers;
+  TestFrontierContext<CostModel> frontiers;
 
   auto cost_a = extract::ComputeFrontiers(egraph, cost_model, aclass, frontiers);
   auto cost_b = extract::ComputeFrontiers(egraph, cost_model, bclass, frontiers);
@@ -244,14 +244,14 @@ TEST(Extract_Cost, SelectsCheapestAmongEquivalents) {
   auto ctx = ProcessingContext<symbol>{};
   egraph.rebuild(ctx);
 
-  TestFrontierMap<CostModel> frontiers;
+  TestFrontierContext<CostModel> frontiers;
 
   auto cost = extract::ComputeFrontiers(egraph, cost_model, root, frontiers);
 
   ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 1.0);
-  ASSERT_EQ(FrontierEnode(frontiers, root), anode);
-  ASSERT_EQ(FrontierCost(frontiers, root), 1.0);
+  ASSERT_EQ(FrontierEnode(frontiers.frontier_map, root), anode);
+  ASSERT_EQ(FrontierCost(frontiers.frontier_map, root), 1.0);
 }
 
 TEST(Extract_Cost, CostAccumulationWithVariableCosts) {
@@ -263,7 +263,7 @@ TEST(Extract_Cost, CostAccumulationWithVariableCosts) {
   auto [leaf2_class, leaf2_node, leaf2_new] = egraph.emplace(symbol::B);
   auto [root_class, root_node, root_new] = egraph.emplace(symbol::A, {leaf1_class, leaf2_class});
 
-  TestFrontierMap<CostModel> frontiers;
+  TestFrontierContext<CostModel> frontiers;
 
   auto cost = extract::ComputeFrontiers(egraph, cost_model, root_class, frontiers);
 
@@ -299,7 +299,7 @@ TEST(Extract_Cost, CyclicEGraphInfiniteCost) {
   auto ctx = ProcessingContext<symbol>{};
   egraph.rebuild(ctx);
 
-  TestFrontierMap<CostModel> frontiers;
+  TestFrontierContext<CostModel> frontiers;
 
   // Process the cyclic e-class
   auto cost = extract::ComputeFrontiers(egraph, cost_model, cyclic_class, frontiers);
@@ -308,8 +308,8 @@ TEST(Extract_Cost, CyclicEGraphInfiniteCost) {
   // The non-cyclic LITERAL node should be selected with cost 1
   ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 1.0);
-  ASSERT_EQ(FrontierEnode(frontiers, cyclic_class), x_node);
-  ASSERT_EQ(FrontierCost(frontiers, cyclic_class), 1.0);
+  ASSERT_EQ(FrontierEnode(frontiers.frontier_map, cyclic_class), x_node);
+  ASSERT_EQ(FrontierCost(frontiers.frontier_map, cyclic_class), 1.0);
 }
 
 TEST(Extract_Cost, CyclicEGraphInfiniteCostComplex) {
@@ -341,7 +341,7 @@ TEST(Extract_Cost, CyclicEGraphInfiniteCostComplex) {
   auto ctx = ProcessingContext<symbol>{};
   egraph.rebuild(ctx);
 
-  TestFrontierMap<CostModel> frontiers;
+  TestFrontierContext<CostModel> frontiers;
 
   // Process the cyclic e-class
   auto cost = extract::ComputeFrontiers(egraph, cost_model, merged_class, frontiers);
@@ -350,13 +350,13 @@ TEST(Extract_Cost, CyclicEGraphInfiniteCostComplex) {
   // The non-cyclic LITERAL node should be selected with cost 1
   ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 1.0);
-  ASSERT_EQ(frontiers.size(), 2);
-  ASSERT_TRUE(frontiers.contains(merged_class));
-  ASSERT_EQ(FrontierCost(frontiers, merged_class), 1.0);
-  ASSERT_EQ(FrontierEnode(frontiers, merged_class), x_node);
-  ASSERT_TRUE(frontiers.contains(zero_class));
-  ASSERT_EQ(FrontierCost(frontiers, zero_class), 1.0);
-  ASSERT_EQ(FrontierEnode(frontiers, zero_class), zero_node);
+  ASSERT_EQ(frontiers.frontier_map.size(), 2);
+  ASSERT_TRUE(frontiers.frontier_map.contains(merged_class));
+  ASSERT_EQ(FrontierCost(frontiers.frontier_map, merged_class), 1.0);
+  ASSERT_EQ(FrontierEnode(frontiers.frontier_map, merged_class), x_node);
+  ASSERT_TRUE(frontiers.frontier_map.contains(zero_class));
+  ASSERT_EQ(FrontierCost(frontiers.frontier_map, zero_class), 1.0);
+  ASSERT_EQ(FrontierEnode(frontiers.frontier_map, zero_class), zero_node);
 }
 
 TEST(Extract_Cost, FullyCyclicEClassInfiniteCost) {
@@ -389,7 +389,7 @@ TEST(Extract_Cost, FullyCyclicEClassInfiniteCost) {
   auto ctx = ProcessingContext<symbol>{};
   egraph.rebuild(ctx);
 
-  TestFrontierMap<CostModel> frontiers;
+  TestFrontierContext<CostModel> frontiers;
 
   // This should either:
   // 1. Return infinity/max double if all nodes are cyclic
@@ -400,7 +400,7 @@ TEST(Extract_Cost, FullyCyclicEClassInfiniteCost) {
   // It has cost 1 (no children), while the 'ADD' nodes have infinite cost
   ASSERT_TRUE(cost != nullptr);
   ASSERT_EQ(cost->cost, 1.0);
-  ASSERT_EQ(FrontierEnode(frontiers, fully_cyclic), x_node);
+  ASSERT_EQ(FrontierEnode(frontiers.frontier_map, fully_cyclic), x_node);
 }
 
 // ========================================
@@ -527,7 +527,7 @@ TEST(Extract_Dependencies, DeadBindChildrenSkipped) {
   // default-inserted entries for dead sym/expr children.
   auto in_degree_copy = in_degree;
   std::vector<std::pair<EClassId, ENodeId>> topo;
-  std::deque<EClassId> ready_scratch;
+  FifoQueue ready_scratch;
   extract::TopologicalSort(egraph, selection, in_degree_copy, ready_scratch, topo);
   ASSERT_EQ(topo.size(), 2);
   ASSERT_EQ(topo[0].first, bind_class);
@@ -553,7 +553,7 @@ TEST(Extract_TopologicalSort, SingleNode) {
   extract::TraversalScratch deps_scratch;
   extract::CollectDependencies(egraph, cheapest_enode, leaf_class, deps_scratch, in_degree);
   std::vector<std::pair<EClassId, ENodeId>> result;
-  std::deque<EClassId> ready_scratch;
+  FifoQueue ready_scratch;
   extract::TopologicalSort(egraph, cheapest_enode, in_degree, ready_scratch, result);
 
   ASSERT_EQ(result.size(), 1);
@@ -575,7 +575,7 @@ TEST(Extract_TopologicalSort, LinearChainOrdering) {
   extract::TraversalScratch deps_scratch;
   extract::CollectDependencies(egraph, cheapest_enode, root_class, deps_scratch, in_degree);
   std::vector<std::pair<EClassId, ENodeId>> result;
-  std::deque<EClassId> ready_scratch;
+  FifoQueue ready_scratch;
   extract::TopologicalSort(egraph, cheapest_enode, in_degree, ready_scratch, result);
 
   ASSERT_EQ(result.size(), 3);
@@ -599,7 +599,7 @@ TEST(Extract_TopologicalSort, SimpleTreeOrdering) {
   extract::TraversalScratch deps_scratch;
   extract::CollectDependencies(egraph, cheapest_enode, root_class, deps_scratch, in_degree);
   std::vector<std::pair<EClassId, ENodeId>> result;
-  std::deque<EClassId> ready_scratch;
+  FifoQueue ready_scratch;
   extract::TopologicalSort(egraph, cheapest_enode, in_degree, ready_scratch, result);
 
   ASSERT_EQ(result.size(), 3);
@@ -624,7 +624,7 @@ TEST(Extract_TopologicalSort, DiamondTopology) {
   extract::TraversalScratch deps_scratch;
   extract::CollectDependencies(egraph, cheapest_enode, root_class, deps_scratch, in_degree);
   std::vector<std::pair<EClassId, ENodeId>> result;
-  std::deque<EClassId> ready_scratch;
+  FifoQueue ready_scratch;
   extract::TopologicalSort(egraph, cheapest_enode, in_degree, ready_scratch, result);
 
   ASSERT_EQ(result.size(), 4);
@@ -658,14 +658,14 @@ TEST(Extract_TopologicalSort, CycleDetection_IncompleteResult) {
   // silently returns an incomplete result - the test verifies the truncation instead.
 #ifdef NDEBUG
   std::vector<std::pair<EClassId, ENodeId>> result;
-  std::deque<EClassId> ready_scratch;
+  FifoQueue ready_scratch;
   extract::TopologicalSort(egraph, selection, in_degree, ready_scratch, result);
   // Without the assertion, the cycle causes silent truncation: no nodes emitted
   EXPECT_EQ(result.size(), 0);
 #else
   ASSERT_DEATH(([&] {
                  std::vector<std::pair<EClassId, ENodeId>> result;
-                 std::deque<EClassId> ready_scratch;
+                 FifoQueue ready_scratch;
                  extract::TopologicalSort(egraph, selection, in_degree, ready_scratch, result);
                }()),
                "cycle detected");
@@ -765,7 +765,7 @@ TEST(Extract_Safety, ComputeFrontiers_FullyCyclicReturnsNullopt) {
   auto ctx = ProcessingContext<symbol>{};
   egraph.rebuild(ctx);
 
-  TestFrontierMap<UniformCostModel> frontiers;
+  TestFrontierContext<UniformCostModel> frontiers;
   auto cost = extract::ComputeFrontiers(egraph, UniformCostModel{}, merged_class, frontiers);
 
   // merged_class has LITERAL(1) as a leaf escape - should succeed
@@ -774,14 +774,14 @@ TEST(Extract_Safety, ComputeFrontiers_FullyCyclicReturnsNullopt) {
 
   // y_class is fully cyclic (its only enode A(merged_class) is a cycle)
   // ComputeFrontiers should have erased its sentinel - NOT present in frontier_map
-  EXPECT_FALSE(frontiers.contains(y_class)) << "Fully cyclic y_class should not be in frontier_map";
+  EXPECT_FALSE(frontiers.frontier_map.contains(y_class)) << "Fully cyclic y_class should not be in frontier_map";
 
   // merged_class and zero_class should be present
-  EXPECT_TRUE(frontiers.contains(merged_class));
-  EXPECT_TRUE(frontiers.contains(zero_class));
+  EXPECT_TRUE(frontiers.frontier_map.contains(merged_class));
+  EXPECT_TRUE(frontiers.frontier_map.contains(zero_class));
 
   // The selected enode for merged_class should be the leaf (x_node), not the cyclic ADD
-  EXPECT_EQ(FrontierEnode(frontiers, merged_class), x_node);
+  EXPECT_EQ(FrontierEnode(frontiers.frontier_map, merged_class), x_node);
 }
 
 TEST(Extract_Safety, ComputeFrontiers_CyclicChildCostsCached) {
@@ -821,7 +821,7 @@ TEST(Extract_Safety, ComputeFrontiers_CyclicChildCostsCached) {
   auto ctx = ProcessingContext<symbol>{};
   egraph.rebuild(ctx);
 
-  TestFrontierMap<UniformCostModel> frontiers;
+  TestFrontierContext<UniformCostModel> frontiers;
   auto cost = extract::ComputeFrontiers(egraph, UniformCostModel{}, merged, frontiers);
 
   // merged has A(leaf_d) as non-cyclic escape
@@ -831,16 +831,17 @@ TEST(Extract_Safety, ComputeFrontiers_CyclicChildCostsCached) {
   // Key: leaf_c should be cached even though it was encountered while processing
   // the cyclic ADD enode. The "continue processing remaining children" logic
   // ensures non-cyclic siblings are still computed.
-  EXPECT_TRUE(frontiers.contains(leaf_c_class)) << "Non-cyclic sibling leaf_c should be cached in frontier_map";
-  EXPECT_EQ(FrontierCost(frontiers, leaf_c_class), 1.0);
+  EXPECT_TRUE(frontiers.frontier_map.contains(leaf_c_class))
+      << "Non-cyclic sibling leaf_c should be cached in frontier_map";
+  EXPECT_EQ(FrontierCost(frontiers.frontier_map, leaf_c_class), 1.0);
 
   // leaf_d should also be cached (child of the non-cyclic A enode)
-  EXPECT_TRUE(frontiers.contains(leaf_d_class));
-  EXPECT_EQ(FrontierCost(frontiers, leaf_d_class), 1.0);
+  EXPECT_TRUE(frontiers.frontier_map.contains(leaf_d_class));
+  EXPECT_EQ(FrontierCost(frontiers.frontier_map, leaf_d_class), 1.0);
 
   // merged should be present with the A enode selected (not the cyclic ADD)
-  EXPECT_TRUE(frontiers.contains(merged));
-  EXPECT_EQ(FrontierEnode(frontiers, merged), b_node);
+  EXPECT_TRUE(frontiers.frontier_map.contains(merged));
+  EXPECT_EQ(FrontierEnode(frontiers.frontier_map, merged), b_node);
 }
 
 TEST(Extract_Safety, ComputeFrontiers_CyclicExprChildOfBind) {
@@ -862,7 +863,7 @@ TEST(Extract_Safety, ComputeFrontiers_CyclicExprChildOfBind) {
   // Bind-like: symbol A with 3 children [input, sym, cyclic_expr]
   auto [bind_class, bind_node, bind_new] = egraph.emplace(symbol::A, {input_class, sym_class, cyclic_expr});
 
-  TestFrontierMap<UniformCostModel> frontiers;
+  TestFrontierContext<UniformCostModel> frontiers;
   auto cost = extract::ComputeFrontiers(egraph, UniformCostModel{}, bind_class, frontiers);
 
   // cyclic_expr has LITERAL(99) as an escape - it resolves, so the Bind enode is NOT
@@ -871,9 +872,9 @@ TEST(Extract_Safety, ComputeFrontiers_CyclicExprChildOfBind) {
   ASSERT_EQ(cost->cost, 4.0);
 
   // All children must be cached
-  EXPECT_TRUE(frontiers.contains(input_class));
-  EXPECT_TRUE(frontiers.contains(sym_class));
-  EXPECT_TRUE(frontiers.contains(cyclic_expr)) << "cyclic_expr has a LITERAL escape path - must be cached";
+  EXPECT_TRUE(frontiers.frontier_map.contains(input_class));
+  EXPECT_TRUE(frontiers.frontier_map.contains(sym_class));
+  EXPECT_TRUE(frontiers.frontier_map.contains(cyclic_expr)) << "cyclic_expr has a LITERAL escape path - must be cached";
 }
 
 // ========================================
@@ -1139,11 +1140,11 @@ TEST(Extract_MultiAlt, DominatedPruning) {
 
   // The frontier should have: from a1: {1,{1}},{2,{}} and from a2: {1,{1}},{2,{}}
   // After Pareto pruning, effectively 2 unique alternatives
-  FrontierMap<DemandAwareMultiAltCostModel::CostResult> frontier_map;
-  (void)extract::ComputeFrontiers(egraph, DemandAwareMultiAltCostModel{}, merged, frontier_map);
+  FrontierContext<DemandAwareMultiAltCostModel::CostResult> frontier_ctx;
+  (void)extract::ComputeFrontiers(egraph, DemandAwareMultiAltCostModel{}, merged, frontier_ctx);
 
-  auto it = frontier_map.find(merged);
-  ASSERT_NE(it, frontier_map.end());
+  auto it = frontier_ctx.frontier_map.find(merged);
+  ASSERT_NE(it, frontier_ctx.frontier_map.end());
   ASSERT_TRUE(it->second.has_value());
   auto const &frontier = *it->second;
   // After pruning, exactly 2 non-dominated alternatives should survive:
@@ -1219,11 +1220,11 @@ TEST(Extract_MultiAlt, ThreeNonDominatedAlternatives) {
   auto [a_class, a_node, a_new] = egraph.emplace(symbol::A);
 
   // Directly compute frontiers to inspect the Pareto set
-  FrontierMap<ThreeAltCostModel::CostResult> frontier_map;
-  (void)extract::ComputeFrontiers(egraph, ThreeAltCostModel{}, a_class, frontier_map);
+  FrontierContext<ThreeAltCostModel::CostResult> frontier_ctx;
+  (void)extract::ComputeFrontiers(egraph, ThreeAltCostModel{}, a_class, frontier_ctx);
 
-  auto it = frontier_map.find(a_class);
-  ASSERT_NE(it, frontier_map.end());
+  auto it = frontier_ctx.frontier_map.find(a_class);
+  ASSERT_NE(it, frontier_ctx.frontier_map.end());
   ASSERT_TRUE(it->second.has_value());
   auto const &frontier = *it->second;
 
@@ -1267,11 +1268,11 @@ TEST(Extract_MultiAlt, DAGResolution_FirstVisitorWins) {
 
   // Compute frontiers bottom-up
   using CM = DemandAwareMultiAltCostModel;
-  FrontierMap<CM::CostResult> frontier_map;
-  (void)extract::ComputeFrontiers(egraph, CM{}, root_class, frontier_map);
+  FrontierContext<CM::CostResult> frontier_ctx;
+  (void)extract::ComputeFrontiers(egraph, CM{}, root_class, frontier_ctx);
 
   // Verify shared eclass has both non-dominated alternatives
-  auto const &shared_frontier = *frontier_map.at(shared_class);
+  auto const &shared_frontier = *frontier_ctx.frontier_map.at(shared_class);
   ASSERT_EQ(shared_frontier.alts().size(), 2);
 
   // Context-aware resolver: when a cached eclass is revisited under a tighter
@@ -1287,14 +1288,14 @@ TEST(Extract_MultiAlt, DAGResolution_FirstVisitorWins) {
       // DAG re-visit: check if cached selection is compatible with this context
       if (std::ranges::includes(provided, resolved_required[id])) return;  // still feasible
       // Incompatible: re-resolve with more restrictive provided
-      auto const &frontier = *frontier_map.at(id);
+      auto const &frontier = *frontier_ctx.frontier_map.at(id);
       auto const *chosen = PickBestCompatible(frontier, provided);
       ASSERT_NE(chosen, nullptr);
       existing->second = {chosen->enode_id, chosen->cost};
       resolved_required[id] = chosen->required;
       return;
     }
-    auto const &frontier = *frontier_map.at(id);
+    auto const &frontier = *frontier_ctx.frontier_map.at(id);
     auto const *chosen = PickBestCompatible(frontier, provided);
     ASSERT_NE(chosen, nullptr);
     resolved[id] = {chosen->enode_id, chosen->cost};
@@ -1340,11 +1341,11 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
   auto [root_class, root_node, root_new] = egraph.emplace(symbol::B, {left_class, right_class});
 
   using CM = DemandAwareMultiAltCostModel;
-  FrontierMap<CM::CostResult> frontier_map;
-  (void)extract::ComputeFrontiers(egraph, CM{}, root_class, frontier_map);
+  FrontierContext<CM::CostResult> frontier_ctx;
+  (void)extract::ComputeFrontiers(egraph, CM{}, root_class, frontier_ctx);
 
-  ASSERT_EQ(frontier_map.at(shared_class)->alts().size(), 2);
-  ASSERT_EQ(frontier_map.at(leaf_class)->alts().size(), 2);
+  ASSERT_EQ(frontier_ctx.frontier_map.at(shared_class)->alts().size(), 2);
+  ASSERT_EQ(frontier_ctx.frontier_map.at(leaf_class)->alts().size(), 2);
 
   auto resolved = SelectionMap<double>{};
   auto resolved_required = std::unordered_map<EClassId, std::set<int>>{};
@@ -1352,7 +1353,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
   auto resolve = [&](this auto const &self, EClassId id, std::set<int> const &provided) -> void {
     if (auto existing = resolved.find(id); existing != resolved.end()) {
       if (std::ranges::includes(provided, resolved_required[id])) return;
-      auto const &frontier = *frontier_map.at(id);
+      auto const &frontier = *frontier_ctx.frontier_map.at(id);
       auto const *chosen = PickBestCompatible(frontier, provided);
       ASSERT_NE(chosen, nullptr);
       existing->second = Selection{chosen->enode_id, chosen->cost};
@@ -1363,7 +1364,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
       }
       return;
     }
-    auto const &frontier = *frontier_map.at(id);
+    auto const &frontier = *frontier_ctx.frontier_map.at(id);
     auto const *chosen = PickBestCompatible(frontier, provided);
     ASSERT_NE(chosen, nullptr);
     resolved[id] = Selection{chosen->enode_id, chosen->cost};
@@ -1411,8 +1412,8 @@ TEST(Extract_MultiAlt, DAGResolution_AliveToDeadErasesStaleChildren) {
   auto [root_class, root_node, root_new] = egraph.emplace(symbol::B, {left_class, right_class});
 
   using CM = DemandAwareMultiAltCostModel;
-  FrontierMap<CM::CostResult> frontier_map;
-  (void)extract::ComputeFrontiers(egraph, CM{}, root_class, frontier_map);
+  FrontierContext<CM::CostResult> frontier_ctx;
+  (void)extract::ComputeFrontiers(egraph, CM{}, root_class, frontier_ctx);
 
   auto resolved = SelectionMap<double>{};
   auto resolved_required = std::unordered_map<EClassId, std::set<int>>{};
@@ -1420,7 +1421,7 @@ TEST(Extract_MultiAlt, DAGResolution_AliveToDeadErasesStaleChildren) {
   auto resolve = [&](this auto const &self, EClassId id, std::set<int> const &provided) -> void {
     if (auto existing = resolved.find(id); existing != resolved.end()) {
       if (std::ranges::includes(provided, resolved_required[id])) return;
-      auto const &frontier = *frontier_map.at(id);
+      auto const &frontier = *frontier_ctx.frontier_map.at(id);
       auto const *chosen = PickBestCompatible(frontier, provided);
       ASSERT_NE(chosen, nullptr);
       existing->second = Selection{chosen->enode_id, chosen->cost};
@@ -1441,7 +1442,7 @@ TEST(Extract_MultiAlt, DAGResolution_AliveToDeadErasesStaleChildren) {
       }
       return;
     }
-    auto const &frontier = *frontier_map.at(id);
+    auto const &frontier = *frontier_ctx.frontier_map.at(id);
     auto const *chosen = PickBestCompatible(frontier, provided);
     ASSERT_NE(chosen, nullptr);
     resolved[id] = Selection{chosen->enode_id, chosen->cost};
@@ -1487,12 +1488,12 @@ TEST(Extract_MultiAlt, DAGResolution_CascadeTraversesIntermediate) {
   auto [root_class, root_node, root_new] = egraph.emplace(symbol::B, {left_class, right_class});
 
   using CM = DemandAwareMultiAltCostModel;
-  FrontierMap<CM::CostResult> frontier_map;
-  (void)extract::ComputeFrontiers(egraph, CM{}, root_class, frontier_map);
+  FrontierContext<CM::CostResult> frontier_ctx;
+  (void)extract::ComputeFrontiers(egraph, CM{}, root_class, frontier_ctx);
 
-  ASSERT_EQ(frontier_map.at(shared_class)->alts().size(), 2);
-  ASSERT_EQ(frontier_map.at(mid_class)->alts().size(), 2);
-  ASSERT_EQ(frontier_map.at(leaf_class)->alts().size(), 2);
+  ASSERT_EQ(frontier_ctx.frontier_map.at(shared_class)->alts().size(), 2);
+  ASSERT_EQ(frontier_ctx.frontier_map.at(mid_class)->alts().size(), 2);
+  ASSERT_EQ(frontier_ctx.frontier_map.at(leaf_class)->alts().size(), 2);
 
   auto resolved = SelectionMap<double>{};
   auto resolved_required = std::unordered_map<EClassId, std::set<int>>{};
@@ -1500,7 +1501,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadeTraversesIntermediate) {
   auto resolve = [&](this auto const &self, EClassId id, std::set<int> const &provided) -> void {
     if (auto existing = resolved.find(id); existing != resolved.end()) {
       if (std::ranges::includes(provided, resolved_required[id])) return;
-      auto const &frontier = *frontier_map.at(id);
+      auto const &frontier = *frontier_ctx.frontier_map.at(id);
       auto const *chosen = PickBestCompatible(frontier, provided);
       ASSERT_NE(chosen, nullptr);
       existing->second = Selection{chosen->enode_id, chosen->cost};
@@ -1511,7 +1512,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadeTraversesIntermediate) {
       }
       return;
     }
-    auto const &frontier = *frontier_map.at(id);
+    auto const &frontier = *frontier_ctx.frontier_map.at(id);
     auto const *chosen = PickBestCompatible(frontier, provided);
     ASSERT_NE(chosen, nullptr);
     resolved[id] = Selection{chosen->enode_id, chosen->cost};

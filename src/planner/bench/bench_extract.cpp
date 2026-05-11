@@ -44,7 +44,7 @@ using memgraph::planner::core::EClassId;
 using memgraph::planner::core::ENodeId;
 using memgraph::planner::core::ProcessingContext;
 using memgraph::planner::core::extract::CostResultBase;
-using memgraph::planner::core::extract::FrontierMap;
+using memgraph::planner::core::extract::FrontierContext;
 
 using DemandSet = boost::container::flat_set<EClassId, std::less<>, boost::container::small_vector<EClassId, 8>>;
 
@@ -120,12 +120,12 @@ static void BM_Extract_DeepChain(benchmark::State &state) {
   auto [egraph, root] = BuildDeepChain(state.range(0));
   // Out-of-loop map mirrors production (ExtractionContext owns frontier_map across
   // calls); clear() each iter retains bucket capacity.
-  FrontierMap<DemandFrontier> frontier_map;
-  frontier_map.reserve(egraph.num_classes());
+  FrontierContext<DemandFrontier> frontier_ctx;
+  frontier_ctx.frontier_map.reserve(egraph.num_classes());
   for (auto _ : state) {
-    frontier_map.clear();
+    frontier_ctx.clear();
     benchmark::DoNotOptimize(
-        memgraph::planner::core::extract::ComputeFrontiers(egraph, CostModel{}, root, frontier_map));
+        memgraph::planner::core::extract::ComputeFrontiers(egraph, CostModel{}, root, frontier_ctx));
   }
   state.SetItemsProcessed(state.iterations() * state.range(0));
 }
@@ -159,12 +159,12 @@ static auto BuildWideMerge(int64_t fanout) -> std::pair<TestEGraph, EClassId> {
 
 static void BM_Extract_WideMerge(benchmark::State &state) {
   auto [egraph, root] = BuildWideMerge(state.range(0));
-  FrontierMap<DemandFrontier> frontier_map;
-  frontier_map.reserve(egraph.num_classes());
+  FrontierContext<DemandFrontier> frontier_ctx;
+  frontier_ctx.frontier_map.reserve(egraph.num_classes());
   for (auto _ : state) {
-    frontier_map.clear();
+    frontier_ctx.clear();
     benchmark::DoNotOptimize(
-        memgraph::planner::core::extract::ComputeFrontiers(egraph, CostModel{}, root, frontier_map));
+        memgraph::planner::core::extract::ComputeFrontiers(egraph, CostModel{}, root, frontier_ctx));
   }
   state.SetItemsProcessed(state.iterations() * state.range(0));
 }
