@@ -56,8 +56,10 @@ TEST(AltDominance, LowerCostHigherCardinalityIsUnordered) {
 }
 
 TEST(AltDominance, IsAliveDoesNotParticipate) {
-  Alternative a{.cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{0}, .is_alive = true};
-  Alternative b{.cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{1}, .is_alive = false};
+  Alternative a{
+      .cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{0}, .is_alive = AliveTag::Alive};
+  Alternative b{
+      .cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{1}, .is_alive = AliveTag::Dead};
   EXPECT_EQ(Cmp(a, b), std::partial_ordering::equivalent);
 }
 

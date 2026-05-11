@@ -371,8 +371,12 @@ void TopologicalSort(EGraph<Symbol, Analysis> const &egraph, SelectionMap<CostRe
 }
 
 // ============================================================================
-// Extract - single deep entry point
+// Extract - test/bench entry point
 // ============================================================================
+//
+// Everything below (ExtractionContext, ExtractView, Extract) is intended for
+// tests and benchmarks only.  Production code calls ComputeFrontiers and the
+// resolver directly via QueryPlannerContext / ConvertToLogicalOperator.
 //
 // The pipeline (frontier-build → resolve → collect-deps → topo-sort) lives
 // here as one function so the order, the invariants, and the contract between

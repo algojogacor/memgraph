@@ -22,6 +22,12 @@ namespace memgraph::query::plan::v2 {
 
 /// One candidate plan reachable at an e-class.
 ///
+/// Liveness tag for Bind/Unwind alternatives.
+/// - Alive:          alive Bind branch or any Unwind alt (sym is introduced).
+/// - Dead:           dead Bind branch (sym is not introduced).
+/// - NotApplicable:  all other enodes (field is meaningless; do not read).
+enum class AliveTag : uint8_t { Alive, Dead, NotApplicable };
+
 /// `cardinality` is the number of values flowing through this point in the
 /// plan: 1 for scalar expressions, list length for list-producing
 /// expressions, output rows for row-pipe operators (Output, future Unwind /
@@ -49,10 +55,7 @@ struct Alternative {
   /// cross into the outer scope.
   bind::SymbolSet introduces;
   planner::core::ENodeId enode_id;  ///< Which enode achieves this alternative
-  // Meaningful only when this alt's enode is a Bind or Unwind; default false.
-  // Set true when emitted by the Bind alive branch (input demands the bound
-  // symbol) or any Unwind alt; false for the dead Bind branch and all other enodes.
-  bool is_alive = false;
+  AliveTag is_alive = AliveTag::NotApplicable;
 };
 
 /// Pareto dominance with four axes:

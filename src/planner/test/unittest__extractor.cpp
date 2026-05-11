@@ -67,20 +67,11 @@ struct SymbolCostModel {
 
 // Test helper: runs the full extraction pipeline.
 template <typename CostModel>
-auto TestExtract(EGraph<symbol, analysis> const &egraph, CostModel cost_model, EClassId root)
+auto TestExtract(EGraph<symbol, analysis> const &egraph, CostModel const &cost_model, EClassId root)
     -> std::vector<std::pair<EClassId, ENodeId>> {
-  using CostResult = CostModel::CostResult;
-  auto frontier_ctx = extract::FrontierContext<CostResult>{};
-  (void)extract::ComputeFrontiers(egraph, cost_model, root, frontier_ctx);
-  auto resolved = SelectionMap<typename CostResult::cost_t>{};
-  DefaultResolver{}(egraph, frontier_ctx.frontier_map, root, resolved);
-  auto in_degree = extract::InDegreeMap{};
-  auto deps = extract::TraversalScratch{};
-  extract::CollectDependencies(egraph, resolved, root, deps, in_degree);
-  auto out = std::vector<std::pair<EClassId, ENodeId>>{};
-  FifoQueue ready;
-  extract::TopologicalSort(egraph, resolved, in_degree, ready, out);
-  return out;
+  extract::ExtractionContext<typename CostModel::CostResult> ctx;
+  auto view = extract::Extract(egraph, root, cost_model, DefaultResolver{}, ctx);
+  return {view.order.begin(), view.order.end()};
 }
 
 TEST(Extract_Basic, BasicLeafExtraction) {
@@ -1053,6 +1044,43 @@ TEST(ParetoFrontier_Prune, TransitiveDominance_AllPermutations) {
     ASSERT_EQ(frontier.alts().size(), 1) << "permutation " << perm[0] << perm[1] << perm[2];
     ASSERT_EQ(frontier.alts()[0].enode_id, ENodeId{0}) << "Only A (cost=1, req={}) should survive";
   }
+}
+
+// ========================================
+// ParetoFrontier::merge_in_place Tests
+// ========================================
+
+TEST(ParetoFrontier_MergeInPlace, CrossDominatedElementsRemoved) {
+  // PF_A has one cheap self-contained alt.  PF_B has two alts, both dominated
+  // by PF_A's alt.  After merge into PF_A, only PF_A's original alt survives.
+  auto pf_a = TestFrontier{{{.cost = 1.0, .required = {}, .enode_id = ENodeId{0}}}};
+  auto pf_b = TestFrontier{{
+      {.cost = 3.0, .required = {}, .enode_id = ENodeId{1}},   // dominated: req same, cost worse
+      {.cost = 2.0, .required = {1}, .enode_id = ENodeId{2}},  // dominated: req bigger, cost worse
+  }};
+  pf_a.merge_in_place(std::move(pf_b));
+  ASSERT_EQ(pf_a.alts().size(), 1);
+  EXPECT_EQ(pf_a.alts()[0].enode_id, ENodeId{0});
+}
+
+TEST(ParetoFrontier_MergeInPlace, IncomparableSurviveBothSides) {
+  // PF_A has a cheap alt with req={1}.  PF_B has a costlier self-contained alt.
+  // Neither dominates the other: PF_A's alt is cheaper but has a larger required
+  // set; PF_B's alt has smaller required set but is costlier.  Both survive.
+  auto pf_a = TestFrontier{{{.cost = 1.0, .required = {1}, .enode_id = ENodeId{0}}}};
+  auto pf_b = TestFrontier{{{.cost = 2.0, .required = {}, .enode_id = ENodeId{1}}}};
+  pf_a.merge_in_place(std::move(pf_b));
+  ASSERT_EQ(pf_a.alts().size(), 2);
+}
+
+TEST(ParetoFrontier_MergeInPlace, OtherDominatesPrefix) {
+  // PF_B has a better alt than PF_A's.  PF_A's original alt is cross-dominated
+  // and must be evicted after the merge.
+  auto pf_a = TestFrontier{{{.cost = 5.0, .required = {1}, .enode_id = ENodeId{0}}}};
+  auto pf_b = TestFrontier{{{.cost = 1.0, .required = {}, .enode_id = ENodeId{1}}}};
+  pf_a.merge_in_place(std::move(pf_b));
+  ASSERT_EQ(pf_a.alts().size(), 1);
+  EXPECT_EQ(pf_a.alts()[0].enode_id, ENodeId{1});
 }
 
 TEST(Extract_MultiAlt, SingleAlternative_BehavesLikeSingleBest) {

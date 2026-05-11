@@ -100,12 +100,12 @@ auto CombineAlts(CostFrontier const &lhs, CostFrontier const &rhs, double extra_
 /// ordering, `required` is untouched, and dominance does not read enode_id or
 /// is_alive.  This lets us mutate in place without re-pruning or copying the
 /// per-alt SymbolSet.  Callers used only for non-Bind enodes, so is_alive is
-/// reset to false (it is meaningful only when the alt's enode is a Bind).
+/// reset to NotApplicable (it is meaningful only when the alt's enode is a Bind or Unwind).
 auto MapAlts(CostFrontier input, double extra_cost, planner::core::ENodeId enode_id) -> CostFrontier {
   input.mutate_pruning_invariant_preserving([&](Alternative &alt) {
     alt.cost += extra_cost;
     alt.enode_id = enode_id;
-    alt.is_alive = false;
+    alt.is_alive = AliveTag::NotApplicable;
   });
   return input;
 }
@@ -179,7 +179,7 @@ struct PlanCostModel {
                     .required = std::move(required),
                     .introduces = std::move(introduces),
                     .enode_id = enode_id,
-                    .is_alive = true});
+                    .is_alive = AliveTag::Alive});
             }
           }
           // Emit dead only when input doesn't already demand sym.
@@ -196,7 +196,7 @@ struct PlanCostModel {
                   .required = input_alt.required,
                   .introduces = input_alt.introduces,
                   .enode_id = enode_id,
-                  .is_alive = false});
+                  .is_alive = AliveTag::Dead});
           }
         });
       }
@@ -306,7 +306,7 @@ struct PlanCostModel {
                   .required = std::move(required),
                   .introduces = std::move(introduces),
                   .enode_id = enode_id,
-                  .is_alive = true});
+                  .is_alive = AliveTag::Alive});
           }
         });
       }
@@ -347,7 +347,7 @@ struct PlanCostModel {
                   .required = outer_alt.required,
                   .introduces = bind::SetUnion(outer_alt.introduces, exposed_syms),
                   .enode_id = enode_id,
-                  .is_alive = true});
+                  .is_alive = AliveTag::Alive});
           }
         });
       }
@@ -376,7 +376,7 @@ struct PlanCostModel {
           alt.cost += 1.0;
           alt.cardinality = cardinality;
           alt.enode_id = enode_id;
-          alt.is_alive = false;
+          alt.is_alive = AliveTag::NotApplicable;
         });
         return result;
       }
@@ -422,7 +422,7 @@ struct ResolvedKeyHash {
 struct TopoEntry {
   ResolvedKey key;
   planner::core::ENodeId enode_id;
-  bool is_alive = false;
+  AliveTag is_alive = AliveTag::NotApplicable;
   SymbolSet introduces;
 };
 
@@ -459,17 +459,18 @@ struct TopoEntry {
 /// roles for each of its children; existing roles already cover every
 /// shape in the current symbol set.
 template <typename Visit>
-void for_each_resolved_child(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, bool is_alive,
-                             SymbolSet const &chosen_introduces, Visit visit) {
+void for_each_resolved_child(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key,
+                             AliveTag is_alive, SymbolSet const &chosen_introduces, Visit visit) {
   auto const &children = enode.children();
   auto const sym_op = enode.symbol();
   bool const is_bind_or_unwind = (sym_op == symbol::Bind || sym_op == symbol::Unwind) && children.size() == 3;
-  if (is_bind_or_unwind && is_alive) {
+  if (is_bind_or_unwind && is_alive == AliveTag::Alive) {
+    auto const sym_eclass = children[1];
     auto alive_provided = parent_key.provided;
-    alive_provided.insert(children[1]);
-    auto downstream_demand = bind::SetDifferenceOne(parent_key.demanded_introduces, children[1]);
+    alive_provided.insert(sym_eclass);
+    auto downstream_demand = bind::SetDifferenceOne(parent_key.demanded_introduces, sym_eclass);
     visit(ResolvedKey{children[0], std::move(alive_provided), std::move(downstream_demand)});
-    visit(ResolvedKey{children[1], parent_key.provided, {}});
+    visit(ResolvedKey{sym_eclass, parent_key.provided, {}});
     visit(ResolvedKey{children[2], parent_key.provided, {}});
   } else if (is_bind_or_unwind) {
     // Only Bind has a dead branch (Unwind alts are always emitted alive).
@@ -543,9 +544,10 @@ struct PlanResolver {
   using EGraph = planner::core::EGraph<symbol, analysis>;
   using TopoOrder = std::vector<TopoEntry>;
 
-  void operator()(EGraph const &egraph, FrontierMap const &frontier_map, EClassId root, TopoOrder &out_order) const {
+  void operator()(EGraph const &egraph, FrontierMap const &frontier_map, EClassId root, TopoOrder &out_order,
+                  boost::unordered_flat_set<ResolvedKey, ResolvedKeyHash> &seen) const {
     assert(out_order.empty() && "Resolver precondition: out must be empty on entry");
-    Impl impl{egraph, frontier_map, {}, out_order};
+    Impl impl{egraph, frontier_map, seen, out_order};
     impl.resolve_and_emit(ResolvedKey{root, SymbolSet{}, SymbolSet{}});
   }
 
@@ -555,7 +557,8 @@ struct PlanResolver {
     EGraph const &egraph;
     // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
     FrontierMap const &frontier_map;
-    boost::unordered_flat_set<ResolvedKey, ResolvedKeyHash> seen;
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
+    boost::unordered_flat_set<ResolvedKey, ResolvedKeyHash> &seen;
     // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
     TopoOrder &out_order;
 
@@ -846,6 +849,7 @@ struct Builder {
 struct QueryPlannerContext::Impl {
   planner::core::extract::FrontierContext<CostFrontier> frontier_context;
   std::vector<TopoEntry> build_order;
+  boost::unordered_flat_set<ResolvedKey, ResolvedKeyHash> resolver_seen;
   /// User-provided estimator override.  null -> ConvertToLogicalOperator
   /// builds a BuiltinEstimator over the current egraph for this call.
   std::unique_ptr<CardinalityEstimator> estimator_override;
@@ -856,6 +860,7 @@ struct QueryPlannerContext::Impl {
   void clear() {
     frontier_context.clear();
     build_order.clear();
+    resolver_seen.clear();
   }
 };
 
@@ -867,10 +872,6 @@ QueryPlannerContext::QueryPlannerContext(std::unique_ptr<CardinalityEstimator> e
 QueryPlannerContext::~QueryPlannerContext() = default;
 QueryPlannerContext::QueryPlannerContext(QueryPlannerContext &&) noexcept = default;
 QueryPlannerContext &QueryPlannerContext::operator=(QueryPlannerContext &&) noexcept = default;
-
-auto QueryPlannerContext::estimator_override() const -> CardinalityEstimator const * {
-  return impl_->estimator_override.get();
-}
 
 auto QueryPlannerContext::last_root_cardinality() const -> double { return impl_->last_root_cardinality; }
 
@@ -894,7 +895,7 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   // is per-call-stateful (binds to one egraph) so it can't be the long-lived
   // QueryPlannerContext default.
   auto const builtin = BuiltinEstimator{e};
-  auto const *override_est = planner_context.estimator_override();
+  auto const *override_est = ctx.estimator_override.get();
   CardinalityEstimator const &active_estimator = override_est ? *override_est : builtin;
 
   // Pre-pass: collect the set of Symbol e-classes referenced by some
@@ -909,6 +910,8 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
       for (auto enode_id : cls.nodes()) {
         auto const &enode = impl.egraph_.get_enode(enode_id);
         if (enode.symbol() == symbol::Identifier && !enode.children().empty()) {
+          // children()[0] is canonical: EGraph::emplace canonicalizes children
+          // at insert time and rebuild() re-canonicalizes via canonicalize_in_place().
           seq.push_back(enode.children()[0]);
         }
       }
@@ -953,7 +956,7 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   // (eclass, provided) pairs - one entry per distinct path-context the
   // resolver visited, so each path can pick the alt that's optimal under
   // its own scope.
-  PlanResolver{}(impl.egraph_, ctx.frontier_context.frontier_map, true_root, ctx.build_order);
+  PlanResolver{}(impl.egraph_, ctx.frontier_context.frontier_map, true_root, ctx.build_order, ctx.resolver_seen);
 
   /// STAGE: Build selected (LogicalOperator, Expression *, Symbol, NamedExpression *, etc.)
   auto builder = Builder{impl.storage<symbol::Literal>().store,
@@ -1004,7 +1007,7 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
     // Dead Bind: pass through input.  sym/expr were never resolved for
     // this key, so they're absent from build_cache.  The dead branch
     // forwards demanded_introduces unchanged (see for_each_resolved_child).
-    if (is_bind && !entry.is_alive) {
+    if (is_bind && entry.is_alive != AliveTag::Alive) {
       // See contract (1) above: read first, then assign.
       auto input_result = build_cache.at(ResolvedKey{children[0], entry.key.provided, entry.key.demanded_introduces});
       build_cache[entry.key] = std::move(input_result);

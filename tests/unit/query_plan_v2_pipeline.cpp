@@ -866,6 +866,34 @@ TEST_F(PlannerV2PipelineTest, FunctionCostCaseInvokesEstimator) {
   EXPECT_EQ(raw->calls.front().arg_count, 2U);
 }
 
+TEST_F(PlannerV2PipelineTest, PickCompatibleDemandedIntroducesFiltersDeadBind) {
+  // demanded_introduces as the sole discriminator in pick_compatible:
+  // build a minimal egraph directly (no rewrites) so both the alive and dead
+  // Bind alternatives are present.  The Output can only pick the alive path
+  // because the dead Output alt has required={sym_a} which is incompatible
+  // with root provided={}.  Once the Output selects the alive alt,
+  // demanded_introduces={sym_a} flows down and filters the dead Bind alt
+  // (introduces={}) in the subsequent pick_compatible call, leaving only the
+  // costlier alive alt (introduces={sym_a}) as compatible.
+  //
+  // Observable: the plan has an inner Produce that binds a=1 (alive Bind)
+  // and an outer Produce that reads a via Identifier (not the inlined literal).
+  egraph eg;
+  auto sym_a = eg.MakeSymbol(0, "a");
+  auto sym_r = eg.MakeSymbol(1, "r");
+  auto lit1 = eg.MakeLiteral(storage::ExternalPropertyValue{int64_t{1}});
+  auto bind = eg.MakeBind(eg.MakeOnce(), sym_a, lit1);
+  auto named_out = eg.MakeNamedOutput("r", sym_r, eg.MakeIdentifier(sym_a));
+  auto root = eg.MakeOutputs(bind, {named_out});
+
+  auto [plan, cost, ast_storage, symbol_table] = ConvertToLogicalOperator(eg, root, planner_context_);
+  ASSERT_NE(plan, nullptr);
+
+  auto details = GetOperatorDetails(plan.get());
+  // Alive Bind chosen: inner Produce binds a=1, outer Produce reads a via Identifier.
+  ASSERT_EQ(details, (std::vector<std::string>{"Produce {r`1:a}", "Produce {a`0:1}", "Once"}));
+}
+
 // clang-format off
 INSTANTIATE_TEST_SUITE_P(
     Subqueries,

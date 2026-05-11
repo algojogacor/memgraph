@@ -196,10 +196,6 @@ add_unit_test(query_plan_v2_alternative
     LINK_TARGETS mg-query mg-planner mg::query::plan_v2::test_support
 )
 
-add_unit_test(query_plan_v2_estimator
-    SOURCES query_plan_v2_estimator.cpp
-    LINK_TARGETS mg-query mg-planner
-)
 
 add_unit_test(query_plan_v2_builtin_estimator
     SOURCES query_plan_v2_builtin_estimator.cpp

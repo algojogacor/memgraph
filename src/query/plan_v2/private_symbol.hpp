@@ -23,6 +23,10 @@ namespace memgraph::query::plan::v2 {
 enum struct symbol : std::uint8_t {
   Once,
   Bind,
+  // Invariant: no rewrite rule may merge two Symbol e-classes.  Each Symbol
+  // eclass must remain a singleton.  Violating this aliases distinct variables
+  // and corrupts demand tracking.  See bind_semantics.hpp and the debug check
+  // in ConvertToLogicalOperator.
   Symbol,
   Literal,
   Identifier,

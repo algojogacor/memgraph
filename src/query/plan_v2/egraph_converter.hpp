@@ -64,11 +64,6 @@ class QueryPlannerContext {
 
   struct Impl;
 
-  /// Returns the user-provided estimator override, or nullptr if none was
-  /// set and ConvertToLogicalOperator should fall back to a per-call
-  /// BuiltinEstimator built over the current egraph.
-  CardinalityEstimator const *estimator_override() const;
-
   /// Cardinality of the root alt the most recent ConvertToLogicalOperator
   /// call selected (NaN if no plan has been extracted yet).  Surfaces the
   /// per-query result so tests can pin cardinality semantics directly,
