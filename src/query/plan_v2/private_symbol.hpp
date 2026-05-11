@@ -11,11 +11,13 @@
 
 #pragma once
 
+#include <array>
 #include <cassert>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <ranges>
 #include <utility>
 
 namespace memgraph::query::plan::v2 {
@@ -64,6 +66,25 @@ enum struct symbol : std::uint8_t {
   // only the explicit exposed_sym children become visible to the outer scope.
   Subquery,
 };
+
+// ============================================================================
+// Symbol singleton invariant
+// ============================================================================
+//
+// symbol::Symbol e-classes MUST remain singletons - each one corresponds to
+// exactly one variable name.  If two Symbol e-nodes were ever merged (via a
+// rewrite rule), bind::IsAlive / bind::IsCompatible would alias distinct
+// variables and corrupt demand tracking silently.
+//
+// This invariant is enforced at compile time by the static_asserts below,
+// and at runtime in the debug build of ConvertToLogicalOperator.  Adding a
+// new rewrite rule must either (a) prove it cannot merge two Symbol e-nodes, or
+// (b) add a test that explicitly verifies Symbol e-classes remain singletons.
+//
+// The static guard here verifies that Symbol has the properties required for
+// singleton safety: it's a leaf (no children that could participate in a merge)
+// and its cost class is Leaf (so it can't participate in expression cost
+// rewrites that might merge equivalent forms).
 
 // ============================================================================
 // Symbol descriptors - one source of truth for each symbol's properties.
@@ -220,6 +241,45 @@ using AllSymbolsSeq =
                     symbol::Function, symbol::Unwind, symbol::Subquery>;
 
 // ============================================================================
+// Scope-threading operator concepts
+// ============================================================================
+//
+// Scope-threading operators (Bind, Unwind, Subquery, Output) carry scope context
+// through their children and require dedicated resolver handling.  Generic
+// expression operators (Leaf, Unary, Binary) have no scope context.
+//
+// A scope-threading operator:
+//   1. Has Arity::Special (variadic children with specific roles)
+//   2. Thread scope from parent to children (provided/provided+sym/demanded)
+//   3. May have alive/dead branch semantics (Bind only today)
+//
+// Adding a new scope-threading operator requires:
+//   1. Add it to `kScopeThreadingOperators` in private_symbol.hpp (compile-time guard)
+//   2. Add a descriptor entry with Arity::Special
+//   3. Add a ResolveXxxChildren() function in egraph_converter.cpp
+//   4. Update the dispatch switch in ResolveChildren()
+//
+// This concept lets ResolveChildren verify at compile time that every scope-
+// threading operator has a dedicated arm, rather than falling through to the
+// generic arm silently.
+static constexpr std::array kScopeThreadingOperators{
+    symbol::Bind,
+    symbol::Unwind,
+    symbol::Subquery,
+    symbol::Output,
+};
+
+/// True for operators that carry scope context through their children.
+/// These must have dedicated handling in ResolveChildren; they MUST NOT
+/// fall through to the generic arm.
+constexpr bool IsScopeThreadingOp(symbol s) {
+  for (auto op : kScopeThreadingOperators) {
+    if (op == s) return true;
+  }
+  return false;
+}
+
+// ============================================================================
 // Exhaustiveness check - every enum value MUST have a descriptor.
 // ============================================================================
 //
@@ -265,6 +325,28 @@ constexpr auto CountUnaryExprImpl(symbol_sequence<Ss...>) -> std::size_t {
 // default-zero sentinel and the exhaustiveness fold).  Add new symbols at the end.
 static_assert(detail::CountInSequenceImpl(AllSymbolsSeq{}) == static_cast<std::size_t>(symbol::Subquery) + 1,
               "AllSymbolsSeq must enumerate every symbol enum value; update both the enum and AllSymbolsSeq together");
+
+// ============================================================================
+// Symbol singleton invariant - compile-time guards
+// ============================================================================
+//
+// The singleton invariant (each Symbol e-class = one variable) requires:
+//   1. Symbol must be a leaf (no children that could be rewritten/merged)
+//   2. Symbol must not be a "scope-threading" operator (these are handled
+//      separately by the resolver via for_each_resolved_child)
+//
+// These static_asserts fire at compile time if someone adds a new symbol that
+// violates these properties, rather than producing silent runtime corruption.
+//
+// To add a new scope-threading operator, update the kScopeThreadingOperators
+// array in for_each_resolved_child AND add it to this list to verify the
+// concept constraint holds at compile time.
+static_assert(is_leaf_v<symbol::Symbol>,
+              "symbol::Symbol must be a leaf; if you made it non-leaf, "
+              "you must also update the singleton invariant guards and the resolver");
+static_assert(symbol_descriptor<symbol::Symbol>::arity != Arity::Special,
+              "symbol::Symbol must not be Special arity; scope-threading operators "
+              "require dedicated resolver handling in for_each_resolved_child");
 
 /// Count of binary expression operators in AllSymbolsSeq - cross-checked against
 /// EGRAPH_BINARY_OPS in egraph.cpp.

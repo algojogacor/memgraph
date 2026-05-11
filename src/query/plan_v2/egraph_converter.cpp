@@ -282,7 +282,7 @@ struct PlanCostModel {
       // produced row.  Alive/dead variable-introduction matches Bind:
       // Unwind always introduces sym, so input always sees `provided + sym`
       // in the resolver - we tag every Unwind alt with is_alive = true so
-      // for_each_resolved_child dispatches like alive Bind.
+      // ResolveChildren dispatches like alive Bind.
       case symbol::Unwind: {
         auto const &input_frontier = *children[0];
         auto const &sym_frontier = *children[1];
@@ -426,103 +426,102 @@ struct TopoEntry {
   SymbolSet introduces;
 };
 
-/// Child semantic roles in plan-v2's e-graph.  Every child of every
-/// existing operator falls into one of four roles, and the resolver's
-/// scope/demand propagation is determined entirely by the role - not by
-/// the parent enode's type.
-///
-///   - PipeInput:     The row-pipe operator this enode pulls rows from.
-///                    `introduces` flows UP from this child to the parent;
-///                    `demanded_introduces` flows DOWN through it (minus
-///                    whatever the parent itself binds, for alive Bind /
-///                    Unwind).  Children[0] of every row-pipe enode.
-///
-///   - SymbolMarker:  A `Symbol` leaf eclass that names a variable.  Only
-///                    Bind / Unwind alive and NamedOutput "set" it; pure
-///                    expression operators never produce one.  Inherits
-///                    `provided` from the parent and demands nothing.
-///
-///   - Expression:    A scalar value evaluated in the parent's scope.
-///                    Surfaces a `required` set upward (symbols this expr
-///                    reads) and inherits `provided` unchanged.  Never
-///                    introduces row variables, so demanded = {}.
-///
-///   - PipeScopedExpression: A NamedOutput child of Output - an expression
-///                    evaluated INSIDE the input pipe's row scope.
-///                    Inherits `provided + input_pipe.introduces` so an
-///                    Identifier(sym) inside it can be satisfied by an
-///                    Unwind / alive Bind in the same pipe.  Demanded = {}.
-///
-/// for_each_resolved_child below is a single switch over enode shape
-/// (Bind / Unwind / Output / everything else) that materialises these
-/// roles into ResolvedKeys.  Adding a new operator means picking the
-/// roles for each of its children; existing roles already cover every
-/// shape in the current symbol set.
+// ============================================================================
+// Scope-threading operator resolution
+// ============================================================================
+//
+// Symbols with scope-threading semantics (Bind, Unwind, Subquery, Output) are
+// handled by dedicated functions below.  Each function documents its child
+// roles and scope propagation semantics.
+//
+// Adding a new scope-threading operator requires:
+//   1. Add the operator to `kScopeThreadingOperators` in the generic arm below
+//      (compile-time enforcement that it was not forgotten here)
+//   2. Add a new ResolveXxxChild() function following the pattern of existing ones
+//   3. Call the new function from ResolveChildren()
+//
+// Generic expression operators (Leaf, Unary, Binary) fall through to the generic
+// arm - they carry no scope context and their children all get provided=unchanged,
+// demanded={}.
+
 template <typename Visit>
-void for_each_resolved_child(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key,
-                             AliveTag is_alive, SymbolSet const &chosen_introduces, Visit visit) {
+void ResolveBindUnwindAlive(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, Visit visit) {
   auto const &children = enode.children();
+  auto const sym_eclass = children[1];
+  auto alive_provided = parent_key.provided;
+  alive_provided.insert(sym_eclass);
+  auto downstream_demand = bind::SetDifferenceOne(parent_key.demanded_introduces, sym_eclass);
+  visit(ResolvedKey{children[0], std::move(alive_provided), std::move(downstream_demand)});
+  visit(ResolvedKey{sym_eclass, parent_key.provided, {}});
+  visit(ResolvedKey{children[2], parent_key.provided, {}});
+}
+
+template <typename Visit>
+void ResolveBindDead(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, Visit visit) {
+  visit(ResolvedKey{enode.children()[0], parent_key.provided, parent_key.demanded_introduces});
+}
+
+template <typename Visit>
+void ResolveSubqueryChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key,
+                             SymbolSet const &exposed_syms, Visit visit) {
+  auto const &children = enode.children();
+  auto outer_demand = bind::SetDifference(parent_key.demanded_introduces, exposed_syms);
+  visit(ResolvedKey{children[0], parent_key.provided, std::move(outer_demand)});
+  visit(ResolvedKey{children[1], SymbolSet{}, SymbolSet{}});
+  for (auto sym_child : children.subspan(2)) {
+    visit(ResolvedKey{sym_child, parent_key.provided, {}});
+  }
+}
+
+template <typename Visit>
+void ResolveOutputChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key,
+                           SymbolSet const &chosen_introduces, Visit visit) {
+  auto const &children = enode.children();
+  visit(ResolvedKey{children[0], parent_key.provided, chosen_introduces});
+  auto enriched_provided = parent_key.provided;
+  for (auto sym : chosen_introduces) enriched_provided.insert(sym);
+  for (auto named_out : children.subspan(1)) {
+    visit(ResolvedKey{named_out, enriched_provided, {}});
+  }
+}
+
+template <typename Visit>
+void ResolveGenericChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, Visit visit) {
+  for (auto child : enode.children()) {
+    visit(ResolvedKey{child, parent_key.provided, {}});
+  }
+}
+
+/// Dispatch to the appropriate child-resolution function based on enode shape.
+///
+/// `exposed_syms` must be pre-computed by the caller for Subquery enodes
+/// (pass nullptr for all other enode types).  Both the resolver and the builder
+/// call this function once per selected enode; a Subquery may be visited under
+/// multiple provided-sets, so computing the set at the callsite and passing it
+/// in ensures it is derived only once per visit rather than once per call.
+template <typename Visit>
+void ResolveChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, AliveTag is_alive,
+                     SymbolSet const &chosen_introduces, SymbolSet const *exposed_syms, Visit visit) {
   auto const sym_op = enode.symbol();
+  auto const &children = enode.children();
   bool const is_bind_or_unwind = (sym_op == symbol::Bind || sym_op == symbol::Unwind) && children.size() == 3;
+
   if (is_bind_or_unwind && is_alive == AliveTag::Alive) {
-    auto const sym_eclass = children[1];
-    auto alive_provided = parent_key.provided;
-    alive_provided.insert(sym_eclass);
-    auto downstream_demand = bind::SetDifferenceOne(parent_key.demanded_introduces, sym_eclass);
-    visit(ResolvedKey{children[0], std::move(alive_provided), std::move(downstream_demand)});
-    visit(ResolvedKey{sym_eclass, parent_key.provided, {}});
-    visit(ResolvedKey{children[2], parent_key.provided, {}});
+    ResolveBindUnwindAlive(enode, parent_key, visit);
   } else if (is_bind_or_unwind) {
-    // Only Bind has a dead branch (Unwind alts are always emitted alive).
-    visit(ResolvedKey{children[0], parent_key.provided, parent_key.demanded_introduces});
+    ResolveBindDead(enode, parent_key, visit);
   } else if (sym_op == symbol::Subquery && children.size() >= 2) {
-    // Subquery is a scope barrier:
-    //   - outer_input child sees parent.provided and (parent.demand \ exposed)
-    //     because exposed_syms are introduced by the Subquery itself, not by
-    //     the outer input.
-    //   - inner_root child sees a FRESH context (provided={}, demanded={}):
-    //     non-importing means nothing flows in, and the inner's introductions
-    //     don't escape - the picker for the inner just chases the cheapest
-    //     self-contained alt.
-    //   - exposed_sym children are Symbol leaves; provided=parent.provided,
-    //     demanded={}.
-    auto const exposed_syms = ExposedSymsFromChildren(children.subspan(2));
-    auto outer_demand = bind::SetDifference(parent_key.demanded_introduces, exposed_syms);
-    visit(ResolvedKey{children[0], parent_key.provided, std::move(outer_demand)});
-    visit(ResolvedKey{children[1], SymbolSet{}, SymbolSet{}});
-    for (auto sym_child : children.subspan(2)) {
-      visit(ResolvedKey{sym_child, parent_key.provided, {}});
-    }
+    assert(exposed_syms && "caller must precompute exposed_syms for Subquery enodes");
+    ResolveSubqueryChildren(enode, parent_key, *exposed_syms, visit);
   } else if (sym_op == symbol::Output && !children.empty()) {
-    // Input pipe must deliver the introductions the chosen Output alt was
-    // costed against.  NamedOutputs see those introductions in provided.
-    visit(ResolvedKey{children[0], parent_key.provided, chosen_introduces});
-    auto enriched_provided = parent_key.provided;
-    for (auto sym : chosen_introduces) enriched_provided.insert(sym);
-    for (auto named_out : children.subspan(1)) {
-      visit(ResolvedKey{named_out, enriched_provided, {}});
-    }
+    ResolveOutputChildren(enode, parent_key, chosen_introduces, visit);
   } else {
-    // Generic child traversal for expression operators (Leaf, Unary, Binary)
-    // and variable-arity nodes whose children carry no scope context (Function,
-    // NamedOutput).  Structural nodes with scope-threading semantics (Bind,
-    // Unwind, Subquery, Output) must have a dedicated arm above; if one slips
-    // through, the function is out of date - throw rather than silently produce
-    // a wrong plan.
-    static constexpr std::array kRequiresDedicatedArm{
-        symbol::Bind,
-        symbol::Unwind,
-        symbol::Subquery,
-        symbol::Output,
-    };
-    if (std::ranges::contains(kRequiresDedicatedArm, sym_op)) {
+    if (IsScopeThreadingOp(sym_op)) {
       throw QueryException{
-          "Planner internal error: unhandled Special symbol in for_each_resolved_child - "
+          "Planner internal error: unhandled scope-threading symbol in ResolveChildren - "
           "please report this bug at https://github.com/memgraph/memgraph/issues"};
     }
-    for (auto child : children) {
-      visit(ResolvedKey{child, parent_key.provided, {}});
-    }
+    ResolveGenericChildren(enode, parent_key, visit);
   }
 }
 
@@ -599,9 +598,14 @@ struct PlanResolver {
       auto const &chosen = pick_compatible(*fr_it->second, key.provided, key.demanded_introduces);
 
       auto const &enode = egraph.get_enode(chosen.enode_id);
-      for_each_resolved_child(enode, key, chosen.is_alive, chosen.introduces, [this](ResolvedKey child_key) {
-        resolve_and_emit(std::move(child_key));
-      });
+      auto const &enode_children = enode.children();
+      auto const exposed = (enode.symbol() == symbol::Subquery && enode_children.size() >= 2)
+                               ? std::make_optional(ExposedSymsFromChildren(enode_children.subspan(2)))
+                               : std::nullopt;
+      ResolveChildren(
+          enode, key, chosen.is_alive, chosen.introduces, exposed ? &*exposed : nullptr, [this](ResolvedKey child_key) {
+            resolve_and_emit(std::move(child_key));
+          });
       out_order.push_back(TopoEntry{.key = std::move(key),
                                     .enode_id = chosen.enode_id,
                                     .is_alive = chosen.is_alive,
@@ -1006,21 +1010,29 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
 
     // Dead Bind: pass through input.  sym/expr were never resolved for
     // this key, so they're absent from build_cache.  The dead branch
-    // forwards demanded_introduces unchanged (see for_each_resolved_child).
+    // forwards demanded_introduces unchanged (see ResolveChildren).
+    //
+    // The input child key is guaranteed to be in build_cache: the resolver
+    // visited it (via ResolveChildren) before emitting this dead Bind entry,
+    // and each (eclass, provided) pair is resolved exactly once (seen set).
     if (is_bind && entry.is_alive != AliveTag::Alive) {
-      // See contract (1) above: read first, then assign.
-      auto input_result = build_cache.at(ResolvedKey{children[0], entry.key.provided, entry.key.demanded_introduces});
-      build_cache[entry.key] = std::move(input_result);
+      auto const input_key = ResolvedKey{children[0], entry.key.provided, entry.key.demanded_introduces};
+      auto const it = build_cache.find(input_key);
+      DMG_ASSERT(it != build_cache.end(), "Dead Bind input key must be in build_cache - resolver invariant violated");
+      build_cache[entry.key] = std::move(it->second);
       continue;
     }
 
     children_refs.clear();
     children_refs.reserve(children.size());
-    // Resolve children using the same rule the resolver used (see
-    // for_each_resolved_child).
-    for_each_resolved_child(enode, entry.key, entry.is_alive, entry.introduces, [&](ResolvedKey child_key) {
-      children_refs.push_back(cache_lookup(child_key));
-    });
+    // Resolve children using the same rule the resolver used (see ResolveChildren).
+    auto const exposed = (enode.symbol() == symbol::Subquery && children.size() >= 2)
+                             ? std::make_optional(ExposedSymsFromChildren(children.subspan(2)))
+                             : std::nullopt;
+    ResolveChildren(
+        enode, entry.key, entry.is_alive, entry.introduces, exposed ? &*exposed : nullptr, [&](ResolvedKey child_key) {
+          children_refs.push_back(cache_lookup(child_key));
+        });
     // See contract (2) above: materialise Build's result before the LHS [] runs.
     auto build_result = builder.Build(enode, children_refs);
     build_cache[entry.key] = std::move(build_result);

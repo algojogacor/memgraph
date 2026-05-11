@@ -28,13 +28,6 @@ using EClassId = planner::core::EClassId;
 
 auto IntLiteral(egraph &eg, int64_t v) -> eclass { return eg.MakeLiteral(storage::ExternalPropertyValue{v}); }
 
-auto FunctionId(egraph const &eg, std::string_view name) -> uint64_t {
-  auto const &store = internal::get_impl(eg).storage<symbol::Function>().store;
-  auto it = store.find(std::string{name});
-  return it->second;
-}
-
-// Helper: get the underlying core EGraph reference and the arg eclass span.
 auto CoreOf(egraph const &eg) -> EGraph const & { return internal::get_impl(eg).egraph_; }
 
 auto AsCoreId(eclass e) -> EClassId { return EClassId{e.value_of()}; }
@@ -55,54 +48,76 @@ TEST(BuiltinEstimator, RangeWithIntLiteralsReturnsCount) {
   egraph eg;
   auto a = IntLiteral(eg, 0);
   auto b = IntLiteral(eg, 5);
-  (void)eg.MakeFunction("range", {a, b});
+  auto fn = eg.MakeFunction("range", {a, b});
 
   BuiltinEstimator estimator{eg};
-  auto const fid = FunctionId(eg, "range");
+  auto const &core_eg = CoreOf(eg);
+  auto const fn_eclass = internal::get_impl(eg).egraph_.find(EClassId{fn.value_of()});
+  auto const fn_enode_id = core_eg.eclass(fn_eclass).nodes()[0];
+  auto const &fn_enode = core_eg.get_enode(fn_enode_id);
+
   std::array<EClassId, 2> args{AsCoreId(a), AsCoreId(b)};
-  EXPECT_DOUBLE_EQ(estimator.EstimateFunctionCardinality(fid, args, CoreOf(eg)), 6.0);
+  EXPECT_DOUBLE_EQ(estimator.Estimate(fn_enode, args, core_eg), 6.0);
 }
 
 TEST(BuiltinEstimator, RangeWithReversedBoundsClampsAtZero) {
   egraph eg;
   auto a = IntLiteral(eg, 5);
   auto b = IntLiteral(eg, 0);
-  (void)eg.MakeFunction("range", {a, b});
+  auto fn = eg.MakeFunction("range", {a, b});
 
   BuiltinEstimator estimator{eg};
-  auto const fid = FunctionId(eg, "range");
+  auto const &core_eg = CoreOf(eg);
+  auto const fn_eclass = internal::get_impl(eg).egraph_.find(EClassId{fn.value_of()});
+  auto const fn_enode_id = core_eg.eclass(fn_eclass).nodes()[0];
+  auto const &fn_enode = core_eg.get_enode(fn_enode_id);
+
   std::array<EClassId, 2> args{AsCoreId(a), AsCoreId(b)};
-  EXPECT_DOUBLE_EQ(estimator.EstimateFunctionCardinality(fid, args, CoreOf(eg)), 0.0);
+  EXPECT_DOUBLE_EQ(estimator.Estimate(fn_enode, args, core_eg), 0.0);  // 0 - 5 + 1 = -4, clamped to 0
 }
 
 TEST(BuiltinEstimator, RangeWithParameterFallsBackToDefault) {
   egraph eg;
   auto a = IntLiteral(eg, 0);
   auto b = eg.MakeParameterLookup(0);  // not a literal
-  (void)eg.MakeFunction("range", {a, b});
+  auto fn = eg.MakeFunction("range", {a, b});
 
   BuiltinEstimator estimator{eg};
-  auto const fid = FunctionId(eg, "range");
+  auto const &core_eg = CoreOf(eg);
+  auto const fn_eclass = internal::get_impl(eg).egraph_.find(EClassId{fn.value_of()});
+  auto const fn_enode_id = core_eg.eclass(fn_eclass).nodes()[0];
+  auto const &fn_enode = core_eg.get_enode(fn_enode_id);
+
   std::array<EClassId, 2> args{AsCoreId(a), AsCoreId(b)};
-  EXPECT_DOUBLE_EQ(estimator.EstimateFunctionCardinality(fid, args, CoreOf(eg)), kDefaultRowEstimate);
+  EXPECT_DOUBLE_EQ(estimator.Estimate(fn_enode, args, core_eg), kDefaultRowEstimate);
 }
 
 TEST(BuiltinEstimator, UnknownFunctionFallsBackToDefault) {
   egraph eg;
   auto a = IntLiteral(eg, 0);
-  (void)eg.MakeFunction("unknown_func", {a});
+  auto fn = eg.MakeFunction("unknown_func", {a});
 
   BuiltinEstimator estimator{eg};
-  auto const fid = FunctionId(eg, "unknown_func");
+  auto const &core_eg = CoreOf(eg);
+  auto const fn_eclass = internal::get_impl(eg).egraph_.find(EClassId{fn.value_of()});
+  auto const fn_enode_id = core_eg.eclass(fn_eclass).nodes()[0];
+  auto const &fn_enode = core_eg.get_enode(fn_enode_id);
+
   std::array<EClassId, 1> args{AsCoreId(a)};
-  EXPECT_DOUBLE_EQ(estimator.EstimateFunctionCardinality(fid, args, CoreOf(eg)), kDefaultRowEstimate);
+  EXPECT_DOUBLE_EQ(estimator.Estimate(fn_enode, args, core_eg), kDefaultRowEstimate);
 }
 
 TEST(BuiltinEstimator, UnknownFunctionIdReturnsDefault) {
   egraph eg;
   BuiltinEstimator estimator{eg};
-  // No function ever interned -> any id is unknown.
-  EXPECT_DOUBLE_EQ(estimator.EstimateFunctionCardinality(0, {}, CoreOf(eg)), kDefaultRowEstimate);
+  auto const &core_eg = CoreOf(eg);
+  auto fn = eg.MakeFunction("dummy", {});
+  auto const fn_eclass = internal::get_impl(eg).egraph_.find(EClassId{fn.value_of()});
+  auto const fn_enode_id = core_eg.eclass(fn_eclass).nodes()[0];
+  auto fn_enode = core_eg.get_enode(fn_enode_id);
+  // Override disambiguator to 0 to simulate an unknown function id.
+  fn_enode = planner::core::ENode{fn_enode.symbol(), fn_enode.children(), 0};
+  EXPECT_DOUBLE_EQ(estimator.Estimate(fn_enode, {}, core_eg), kDefaultRowEstimate);
 }
 
 }  // namespace
