@@ -12,6 +12,8 @@
 #include <gtest/gtest.h>
 
 #include <sstream>
+#include <typeindex>
+#include <unordered_map>
 
 #include "query/db_accessor.hpp"
 #include "query/frontend/ast/ast.hpp"
@@ -46,30 +48,42 @@ std::string DescribeExpression(Expression *expr) {
     return ident->name_;
   }
 
-  // Binary operators
-  auto describe_binary = [](const char *op, BinaryOperator *bin) -> std::string {
-    return "(" + DescribeExpression(bin->expression1_) + " " + op + " " + DescribeExpression(bin->expression2_) + ")";
+  // Binary operators: map concrete type -> infix symbol.
+  static auto const kBinaryOpSymbols = std::unordered_map<std::type_index, std::string_view>{
+      {typeid(AdditionOperator), "+"},
+      {typeid(SubtractionOperator), "-"},
+      {typeid(MultiplicationOperator), "*"},
+      {typeid(DivisionOperator), "/"},
+      {typeid(ModOperator), "%"},
+      {typeid(ExponentiationOperator), "^"},
+      {typeid(EqualOperator), "="},
+      {typeid(NotEqualOperator), "<>"},
+      {typeid(LessOperator), "<"},
+      {typeid(LessEqualOperator), "<="},
+      {typeid(GreaterOperator), ">"},
+      {typeid(GreaterEqualOperator), ">="},
+      {typeid(AndOperator), "AND"},
+      {typeid(OrOperator), "OR"},
+      {typeid(XorOperator), "XOR"},
   };
-  if (auto *op = utils::Downcast<AdditionOperator>(expr)) return describe_binary("+", op);
-  if (auto *op = utils::Downcast<SubtractionOperator>(expr)) return describe_binary("-", op);
-  if (auto *op = utils::Downcast<MultiplicationOperator>(expr)) return describe_binary("*", op);
-  if (auto *op = utils::Downcast<DivisionOperator>(expr)) return describe_binary("/", op);
-  if (auto *op = utils::Downcast<ModOperator>(expr)) return describe_binary("%", op);
-  if (auto *op = utils::Downcast<ExponentiationOperator>(expr)) return describe_binary("^", op);
-  if (auto *op = utils::Downcast<EqualOperator>(expr)) return describe_binary("=", op);
-  if (auto *op = utils::Downcast<NotEqualOperator>(expr)) return describe_binary("<>", op);
-  if (auto *op = utils::Downcast<LessOperator>(expr)) return describe_binary("<", op);
-  if (auto *op = utils::Downcast<LessEqualOperator>(expr)) return describe_binary("<=", op);
-  if (auto *op = utils::Downcast<GreaterOperator>(expr)) return describe_binary(">", op);
-  if (auto *op = utils::Downcast<GreaterEqualOperator>(expr)) return describe_binary(">=", op);
-  if (auto *op = utils::Downcast<AndOperator>(expr)) return describe_binary("AND", op);
-  if (auto *op = utils::Downcast<OrOperator>(expr)) return describe_binary("OR", op);
-  if (auto *op = utils::Downcast<XorOperator>(expr)) return describe_binary("XOR", op);
+  if (auto *bin = dynamic_cast<BinaryOperator *>(expr)) {
+    if (auto const it = kBinaryOpSymbols.find(typeid(*expr)); it != kBinaryOpSymbols.end()) {
+      return "(" + DescribeExpression(bin->expression1_) + " " + std::string(it->second) + " " +
+             DescribeExpression(bin->expression2_) + ")";
+    }
+  }
 
-  // Unary operators
-  if (auto *op = utils::Downcast<NotOperator>(expr)) return "(NOT " + DescribeExpression(op->expression_) + ")";
-  if (auto *op = utils::Downcast<UnaryMinusOperator>(expr)) return "(-" + DescribeExpression(op->expression_) + ")";
-  if (auto *op = utils::Downcast<UnaryPlusOperator>(expr)) return "(+" + DescribeExpression(op->expression_) + ")";
+  // Unary operators: map concrete type -> prefix (space included for word operators).
+  static auto const kUnaryOpPrefixes = std::unordered_map<std::type_index, std::string_view>{
+      {typeid(NotOperator), "NOT "},
+      {typeid(UnaryMinusOperator), "-"},
+      {typeid(UnaryPlusOperator), "+"},
+  };
+  if (auto *un = dynamic_cast<UnaryOperator *>(expr)) {
+    if (auto const it = kUnaryOpPrefixes.find(typeid(*expr)); it != kUnaryOpPrefixes.end()) {
+      return "(" + std::string(it->second) + DescribeExpression(un->expression_) + ")";
+    }
+  }
 
   // Parameter lookup
   if (utils::Downcast<ParameterLookup>(expr)) return "ParameterLookup";
@@ -304,7 +318,7 @@ TEST(PlannerV2BuildCacheRehash, NoCacheCorruptionAtRehashThreshold) {
 
   plan::v2::QueryPlannerContext planner_context;
   auto result = ConvertToLogicalOperator(eg, root, planner_context);
-  ASSERT_NE(std::get<0>(result), nullptr);
+  ASSERT_NE(result.plan, nullptr);
 }
 
 TEST_F(PlannerV2PipelineTest, ExtractedSymbolPositionsResolveInCompactTable) {
@@ -826,9 +840,9 @@ struct RecordingMockEstimator final : CardinalityEstimator {
 
   explicit RecordingMockEstimator(double v) : return_value(v) {}
 
-  auto EstimateFunctionCardinality(uint64_t function_id, std::span<planner::core::EClassId const> arg_eclasses,
-                                   EGraph const & /*eg*/) const -> double override {
-    calls.push_back({.function_id = function_id, .arg_count = arg_eclasses.size()});
+  auto Estimate(planner::core::ENode<symbol> const &enode, std::span<planner::core::EClassId const> arg_eclasses,
+                EGraph const & /*eg*/) const -> double override {
+    calls.push_back({.function_id = enode.disambiguator(), .arg_count = arg_eclasses.size()});
     return return_value;
   }
 };

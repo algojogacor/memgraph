@@ -45,8 +45,8 @@ struct BuiltinEstimator final : CardinalityEstimator {
   auto operator=(BuiltinEstimator const &) -> BuiltinEstimator & = delete;
   auto operator=(BuiltinEstimator &&) -> BuiltinEstimator & = delete;
 
-  auto EstimateFunctionCardinality(uint64_t function_id, std::span<planner::core::EClassId const> arg_eclasses,
-                                   EGraph const &eg) const -> double override;
+  auto Estimate(planner::core::ENode<symbol> const &enode, std::span<planner::core::EClassId const> arg_eclasses,
+                EGraph const &eg) const -> double override;
 };
 
 }  // namespace memgraph::query::plan::v2

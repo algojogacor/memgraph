@@ -179,7 +179,7 @@ auto MakeLogicalPlan(AstStorage ast_storage, CypherQuery *query, const Parameter
   //       symbols are needed for debugging (a semantic name)
   //       during evaluation frame slots are dumping ground for temporary evaluation results
   //       planner may remove need for all symbols (hence we shouldn't waste frame slots that are unused)
-  auto [root, cost, used_ast_storage, symbol_table] = std::invoke([&] {
+  auto result = std::invoke([&] {
     // TODO: this is problem multi tenant queries (ATM we assume a single active database for whole query)
     auto vertex_counts = plan::VertexCountCache(db_accessor);
     auto symbol_table = MakeSymbolTable(query, predefined_identifiers);
@@ -199,13 +199,19 @@ auto MakeLogicalPlan(AstStorage ast_storage, CypherQuery *query, const Parameter
     }
     auto planning_context = plan::MakePlanningContext(&ast_storage, &symbol_table, query, &vertex_counts);
     auto [plan, cost] = plan::MakeLogicalPlan(&planning_context, parameters, FLAGS_query_cost_planner);
-    return std::tuple{std::move(plan), cost, std::move(ast_storage), std::move(symbol_table)};
+    return plan::v2::ExtractionResult{.plan = std::move(plan),
+                                      .cost = cost,
+                                      .ast_storage = std::move(ast_storage),
+                                      .symbol_table = std::move(symbol_table)};
   });
 
   auto rw_type_checker = plan::ReadWriteTypeChecker();
-  rw_type_checker.InferRWType(*root);
-  return std::make_unique<SingleNodeLogicalPlan>(
-      std::move(root), cost, std::move(used_ast_storage), std::move(symbol_table), rw_type_checker.type);
+  rw_type_checker.InferRWType(*result.plan);
+  return std::make_unique<SingleNodeLogicalPlan>(std::move(result.plan),
+                                                 result.cost,
+                                                 std::move(result.ast_storage),
+                                                 std::move(result.symbol_table),
+                                                 rw_type_checker.type);
 }
 
 std::shared_ptr<PlanWrapper> CypherQueryToPlan(frontend::StrippedQuery const &stripped_query, AstStorage ast_storage,

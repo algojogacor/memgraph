@@ -25,19 +25,20 @@ using EGraph = planner::core::EGraph<symbol, analysis>;
 
 /// Pluggable cardinality estimator.
 ///
-/// The cost model calls this per Function e-node with the function id and
-/// argument e-classes; the estimator owns any e-graph traversal needed to
-/// resolve the answer (e.g. reading literal e-nodes for known-constant
-/// arguments).  Concrete implementations layer:
-///   - BuiltinEstimator      - constant deduction for builtins (e.g.
-///                             range(0,5) → 6); falls back to
-///                             kDefaultRowEstimate for unrecognised
-///                             function ids.  Production default.
+/// The cost model calls this once per e-node that needs a cardinality estimate
+/// (currently: Function).  The enode, its argument e-classes, and the full
+/// e-graph are passed so implementations can walk the graph for constant
+/// deduction.  Non-Function callers receive kDefaultRowEstimate by default.
+///
+/// Concrete implementations:
+///   - BuiltinEstimator  - constant deduction for builtins (e.g. range(0,5)
+///                         → 6); falls back to kDefaultRowEstimate otherwise.
+///                         Production default.
 struct CardinalityEstimator {
   virtual ~CardinalityEstimator() = default;
 
-  virtual auto EstimateFunctionCardinality(uint64_t function_id, std::span<planner::core::EClassId const> arg_eclasses,
-                                           EGraph const &eg) const -> double = 0;
+  virtual auto Estimate(planner::core::ENode<symbol> const &enode,
+                        std::span<planner::core::EClassId const> arg_eclasses, EGraph const &eg) const -> double = 0;
 };
 
 }  // namespace memgraph::query::plan::v2

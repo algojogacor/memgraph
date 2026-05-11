@@ -126,4 +126,37 @@ inline constexpr double kSymbolCost = 1.0;
   return a;
 }
 
+/// `a ∪ b`: sorted merge of two SymbolSets.
+[[nodiscard]] inline auto SetUnion(SymbolSet const &a, SymbolSet const &b) -> SymbolSet {
+  SymbolSet out;
+  auto seq = out.extract_sequence();
+  seq.reserve(a.size() + b.size());
+  std::ranges::set_union(a, b, std::back_inserter(seq));
+  out.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
+  return out;
+}
+
+/// `a \ b`: elements in `a` but not in `b`.
+[[nodiscard]] inline auto SetDifference(SymbolSet const &a, SymbolSet const &b) -> SymbolSet {
+  SymbolSet out;
+  auto seq = out.extract_sequence();
+  seq.reserve(a.size());
+  std::ranges::set_difference(a, b, std::back_inserter(seq));
+  out.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
+  return out;
+}
+
+/// Build a SymbolSet from an arbitrary range of EClassIds (sorts and deduplicates).
+template <std::ranges::input_range R>
+  requires std::same_as<std::ranges::range_value_t<R>, planner::core::EClassId>
+[[nodiscard]] inline auto MakeSymbolSet(R &&rng) -> SymbolSet {
+  SymbolSet out;
+  auto seq = out.extract_sequence();
+  for (auto id : rng) seq.push_back(id);
+  std::ranges::sort(seq);
+  seq.erase(std::ranges::unique(seq).begin(), seq.end());
+  out.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
+  return out;
+}
+
 }  // namespace memgraph::query::plan::v2::bind

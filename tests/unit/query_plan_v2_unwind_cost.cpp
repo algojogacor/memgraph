@@ -37,8 +37,9 @@ struct FixedEstimator final : CardinalityEstimator {
 
   explicit FixedEstimator(double v) : value(v) {}
 
-  auto EstimateFunctionCardinality(uint64_t /*function_id*/, std::span<planner::core::EClassId const> /*arg_eclasses*/,
-                                   EGraph const & /*eg*/) const -> double override {
+  auto Estimate(planner::core::ENode<symbol> const & /*enode*/,
+                std::span<planner::core::EClassId const> /*arg_eclasses*/, EGraph const & /*eg*/) const
+      -> double override {
     return value;
   }
 };

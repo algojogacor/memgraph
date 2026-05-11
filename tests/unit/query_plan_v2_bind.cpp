@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "query/plan_v2/bind_semantics.hpp"
+#include "query/plan_v2/test_support/sym_sets.hpp"
 
 import memgraph.planner.core.egraph;
 
@@ -25,13 +26,6 @@ namespace memgraph::query::plan::v2::bind {
 namespace {
 
 using EClassId = planner::core::EClassId;
-
-// Helper: construct a SymbolSet from an initializer list.
-auto MakeSet(std::initializer_list<uint32_t> ids) -> SymbolSet {
-  SymbolSet s;
-  for (auto id : ids) s.insert(EClassId{id});
-  return s;
-}
 
 TEST(BindAlgebra_IsAlive, SymInRequiredYieldsAlive) {
   auto required = MakeSet({1, 2, 3});

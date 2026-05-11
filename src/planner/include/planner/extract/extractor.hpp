@@ -12,7 +12,6 @@
 #pragma once
 
 #include <concepts>
-#include <deque>
 #include <functional>
 #include <span>
 #include <type_traits>
@@ -283,6 +282,29 @@ struct TraversalScratch {
   }
 };
 
+/// Contiguous FIFO queue for EClassIds.  Stores all elements in a single
+/// vector; a front cursor advances instead of shifting elements.  Retains
+/// buffer capacity across clear() calls, so warm TopologicalSort calls are
+/// allocation-free after the first call's high-water mark is reached.
+struct FifoQueue {
+  void push_back(EClassId id) { buf_.push_back(id); }
+
+  [[nodiscard]] auto front() const -> EClassId { return buf_[front_]; }
+
+  void pop_front() { ++front_; }
+
+  [[nodiscard]] auto empty() const -> bool { return front_ == buf_.size(); }
+
+  void clear() noexcept {
+    buf_.clear();
+    front_ = 0;
+  }
+
+ private:
+  std::vector<EClassId> buf_;
+  std::size_t front_ = 0;
+};
+
 template <typename Symbol, typename Analysis, typename CostResult>
 void CollectDependencies(EGraph<Symbol, Analysis> const &egraph, SelectionMap<CostResult> const &enode_selection,
                          EClassId root, TraversalScratch &scratch, InDegreeMap &out) {
@@ -319,8 +341,7 @@ void CollectDependencies(EGraph<Symbol, Analysis> const &egraph, SelectionMap<Co
 /// from the caller's perspective.  `out` and `ready` are filled (caller-clears).
 template <typename Symbol, typename Analysis, typename CostResult>
 void TopologicalSort(EGraph<Symbol, Analysis> const &egraph, SelectionMap<CostResult> const &enode_selection,
-                     InDegreeMap &in_degree, std::deque<EClassId> &ready,
-                     std::vector<std::pair<EClassId, ENodeId>> &out) {
+                     InDegreeMap &in_degree, FifoQueue &ready, std::vector<std::pair<EClassId, ENodeId>> &out) {
   auto const expected = in_degree.size();
   out.reserve(expected);
 
@@ -377,7 +398,7 @@ struct ExtractionContext {
   InDegreeMap in_degree;
   std::vector<std::pair<EClassId, ENodeId>> order;
   TraversalScratch deps;
-  std::deque<EClassId> ready;
+  FifoQueue ready;
   FrontierBufferPool<CostResult> frontier_buffers;
 
   void clear() noexcept {

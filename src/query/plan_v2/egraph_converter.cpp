@@ -60,14 +60,7 @@ using bind::SymbolSet;
 /// to the outer scope. Sort and dedup is required because e-graph children are
 /// not guaranteed unique.
 auto ExposedSymsFromChildren(std::span<planner::core::EClassId const> children_from_2) -> SymbolSet {
-  SymbolSet exposed;
-  auto seq = exposed.extract_sequence();
-  seq.reserve(children_from_2.size());
-  for (auto child : children_from_2) seq.push_back(child);
-  std::ranges::sort(seq);
-  seq.erase(std::ranges::unique(seq).begin(), seq.end());
-  exposed.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
-  return exposed;
+  return bind::MakeSymbolSet(children_from_2);
 }
 
 // --- Alternatives -----------------------------------------------------------
@@ -96,15 +89,8 @@ struct CostFrontier : planner::core::extract::CostResultBase<Alternative, Altern
 auto CombineAlts(CostFrontier const &lhs, CostFrontier const &rhs, double extra_cost, planner::core::ENodeId enode_id)
     -> CostFrontier {
   return CostFrontier::combine(lhs, rhs, [&](Alternative const &l, Alternative const &r) {
-    // Build directly into the result flat_set's underlying sequence: extract
-    // the empty buffer, set_union into it, adopt back as already-sorted.
-    // Avoids the intermediate-then-copy pattern of set_union → flat_set ctor.
-    SymbolSet required;
-    auto seq = required.extract_sequence();
-    seq.reserve(l.required.size() + r.required.size());
-    std::ranges::set_union(l.required, r.required, std::back_inserter(seq));
-    required.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
-    return Alternative{.cost = extra_cost + l.cost + r.cost, .required = std::move(required), .enode_id = enode_id};
+    return Alternative{
+        .cost = extra_cost + l.cost + r.cost, .required = bind::SetUnion(l.required, r.required), .enode_id = enode_id};
   });
 }
 
@@ -196,10 +182,14 @@ struct PlanCostModel {
                     .is_alive = true});
             }
           }
-          // Emit dead only when input doesn't already demand sym.  When it
-          // does, the alive alt strictly subsumes dead (smaller required,
-          // larger introduces) and Pareto would still keep dead because of
-          // the cost trade-off - bloating the frontier with no semantic win.
+          // Emit dead only when input doesn't already demand sym.
+          // When input_demands_sym is true, the dead alt has sym still in
+          // `required`, so it is only compatible with ancestors that already
+          // provide sym.  But sym is provided only when an ancestor Bind for
+          // it is alive - which is exactly the alive-alt condition.  A dead
+          // alt under that condition is therefore unreachable: no resolver
+          // context can pick it that couldn't also pick alive.  Suppressing
+          // it avoids bloating the frontier with a semantically useless alt.
           if (!input_demands_sym) {
             emit({.cost = bind::DeadCost(input_alt.cost),
                   .cardinality = input_alt.cardinality,
@@ -252,8 +242,8 @@ struct PlanCostModel {
       // when the row pipe is wide (e.g. UNWIND range(0, 100)).
       case symbol::Output: {
         auto result = MapAlts(*children[0], 0.0, enode_id);
-        for (size_t i = 1; i < children.size(); ++i) {
-          result = CostFrontier::combine(result, *children[i], [enode_id](Alternative const &l, Alternative const &r) {
+        for (auto const *named_out : children.subspan(1)) {
+          result = CostFrontier::combine(result, *named_out, [enode_id](Alternative const &l, Alternative const &r) {
             // l: input row pipe.  r: per-evaluation NamedOutput (scalar, 1
             // pair per call).
             // cost = l.cost (whole input pipeline) + l.cardinality * r.cost
@@ -268,21 +258,10 @@ struct PlanCostModel {
             // matching demands in r without needing an ancestor to provide
             // them.  This is what lets `WITH x AS y UNWIND ... RETURN y`
             // satisfy y's demand from the Bind / Unwind below the Output.
-            SymbolSet remaining;
-            {
-              auto rem_seq = remaining.extract_sequence();
-              rem_seq.reserve(r.required.size());
-              std::ranges::set_difference(r.required, l.introduces, std::back_inserter(rem_seq));
-              remaining.adopt_sequence(boost::container::ordered_unique_range, std::move(rem_seq));
-            }
-            SymbolSet required;
-            auto seq = required.extract_sequence();
-            seq.reserve(l.required.size() + remaining.size());
-            std::ranges::set_union(l.required, remaining, std::back_inserter(seq));
-            required.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
+            auto const remaining = bind::SetDifference(r.required, l.introduces);
             return Alternative{.cost = l.cost + l.cardinality * r.cost,
                                .cardinality = l.cardinality,
-                               .required = std::move(required),
+                               .required = bind::SetUnion(l.required, remaining),
                                .introduces = l.introduces,
                                .enode_id = enode_id};
           });
@@ -363,16 +342,10 @@ struct PlanCostModel {
             if (!inner_alt.required.empty()) continue;
 
             // BARRIER: outer.introduces ∪ exposed_syms; inner.introduces is dropped.
-            SymbolSet introduces;
-            auto intro_seq = introduces.extract_sequence();
-            intro_seq.reserve(outer_alt.introduces.size() + exposed_syms.size());
-            std::ranges::set_union(outer_alt.introduces, exposed_syms, std::back_inserter(intro_seq));
-            introduces.adopt_sequence(boost::container::ordered_unique_range, std::move(intro_seq));
-
             emit({.cost = outer_alt.cost + outer_alt.cardinality * inner_alt.cost,
                   .cardinality = outer_alt.cardinality * inner_alt.cardinality,
                   .required = outer_alt.required,
-                  .introduces = std::move(introduces),
+                  .introduces = bind::SetUnion(outer_alt.introduces, exposed_syms),
                   .enode_id = enode_id,
                   .is_alive = true});
           }
@@ -391,12 +364,11 @@ struct PlanCostModel {
           result = CostResult{{{.cost = 0.0, .required = {}, .enode_id = enode_id}}};
         } else {
           result = MapAlts(*children[0], 0.0, enode_id);
-          for (size_t i = 1; i < children.size(); ++i) {
-            result = CombineAlts(result, *children[i], 0.0, enode_id);
+          for (auto const *arg : children.subspan(1)) {
+            result = CombineAlts(result, *arg, 0.0, enode_id);
           }
         }
-        auto const cardinality =
-            estimator.EstimateFunctionCardinality(current.disambiguator(), current.children(), egraph);
+        auto const cardinality = estimator.Estimate(current, current.children(), egraph);
         // Uniform per-alt edit: structural +1 cost and cardinality from
         // estimator.  Same value across alts -> dominance ordering
         // preserved, mutate_pruning_invariant_preserving holds.
@@ -453,16 +425,6 @@ struct TopoEntry {
   bool is_alive = false;
   SymbolSet introduces;
 };
-
-/// Helper: SymbolSet difference (`a \ b`) building into a new flat_set.
-inline auto SetDifference(SymbolSet const &a, SymbolSet const &b) -> SymbolSet {
-  SymbolSet out;
-  auto seq = out.extract_sequence();
-  seq.reserve(a.size());
-  std::ranges::set_difference(a, b, std::back_inserter(seq));
-  out.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
-  return out;
-}
 
 /// Child semantic roles in plan-v2's e-graph.  Every child of every
 /// existing operator falls into one of four roles, and the resolver's
@@ -524,11 +486,11 @@ void for_each_resolved_child(planner::core::ENode<symbol> const &enode, Resolved
     //   - exposed_sym children are Symbol leaves; provided=parent.provided,
     //     demanded={}.
     auto const exposed_syms = ExposedSymsFromChildren(children.subspan(2));
-    auto outer_demand = SetDifference(parent_key.demanded_introduces, exposed_syms);
+    auto outer_demand = bind::SetDifference(parent_key.demanded_introduces, exposed_syms);
     visit(ResolvedKey{children[0], parent_key.provided, std::move(outer_demand)});
     visit(ResolvedKey{children[1], SymbolSet{}, SymbolSet{}});
-    for (size_t i = 2; i < children.size(); ++i) {
-      visit(ResolvedKey{children[i], parent_key.provided, {}});
+    for (auto sym_child : children.subspan(2)) {
+      visit(ResolvedKey{sym_child, parent_key.provided, {}});
     }
   } else if (sym_op == symbol::Output && !children.empty()) {
     // Input pipe must deliver the introductions the chosen Output alt was
@@ -536,10 +498,27 @@ void for_each_resolved_child(planner::core::ENode<symbol> const &enode, Resolved
     visit(ResolvedKey{children[0], parent_key.provided, chosen_introduces});
     auto enriched_provided = parent_key.provided;
     for (auto sym : chosen_introduces) enriched_provided.insert(sym);
-    for (size_t i = 1; i < children.size(); ++i) {
-      visit(ResolvedKey{children[i], enriched_provided, {}});
+    for (auto named_out : children.subspan(1)) {
+      visit(ResolvedKey{named_out, enriched_provided, {}});
     }
   } else {
+    // Generic child traversal for expression operators (Leaf, Unary, Binary)
+    // and variable-arity nodes whose children carry no scope context (Function,
+    // NamedOutput).  Structural nodes with scope-threading semantics (Bind,
+    // Unwind, Subquery, Output) must have a dedicated arm above; if one slips
+    // through, the function is out of date - throw rather than silently produce
+    // a wrong plan.
+    static constexpr std::array kRequiresDedicatedArm{
+        symbol::Bind,
+        symbol::Unwind,
+        symbol::Subquery,
+        symbol::Output,
+    };
+    if (std::ranges::contains(kRequiresDedicatedArm, sym_op)) {
+      throw QueryException{
+          "Planner internal error: unhandled Special symbol in for_each_resolved_child - "
+          "please report this bug at https://github.com/memgraph/memgraph/issues"};
+    }
     for (auto child : children) {
       visit(ResolvedKey{child, parent_key.provided, {}});
     }
@@ -599,9 +578,9 @@ struct PlanResolver {
         // input subtree can't deliver.  Planner bug, but throw for production
         // safety rather than UB.
         throw QueryException{
-            "Plan extraction failed: no compatible alternative at this node - "
-            "a symbol is demanded that no ancestor can provide, or the input "
-            "row pipe cannot introduce a symbol the output references."};
+            "Plan extraction failed: no compatible alternative at this node. "
+            "This is a planner bug - please report it at "
+            "https://github.com/memgraph/memgraph/issues"};
       }
       return *best;
     }
@@ -897,8 +876,7 @@ auto QueryPlannerContext::estimator_override() const -> CardinalityEstimator con
 
 auto QueryPlannerContext::last_root_cardinality() const -> double { return impl_->last_root_cardinality; }
 
-auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext &planner_context)
-    -> std::tuple<std::unique_ptr<LogicalOperator>, double, AstStorage, SymbolTable> {
+auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext &planner_context) -> ExtractionResult {
   auto const &impl = internal::get_impl(e);
 
   /// STAGE: Multi-alt extraction from EGraph using PlanCostModel
@@ -1064,6 +1042,9 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
       root_frontier.alts() | std::views::filter([](Alternative const &a) { return a.required.empty(); });
   auto const &best = *std::ranges::min_element(self_contained, std::less<>{}, &Alternative::cost);
   ctx.last_root_cardinality = best.cardinality;
-  return {std::move(unique_result), best.cost, std::move(builder.ast_storage_), std::move(builder.symbol_table_)};
+  return ExtractionResult{.plan = std::move(unique_result),
+                          .cost = best.cost,
+                          .ast_storage = std::move(builder.ast_storage_),
+                          .symbol_table = std::move(builder.symbol_table_)};
 }
 }  // namespace memgraph::query::plan::v2

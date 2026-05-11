@@ -241,6 +241,11 @@ constexpr auto AllHaveDescriptorsImpl(symbol_sequence<Ss...>) -> bool {
 }
 
 template <symbol... Ss>
+constexpr auto CountInSequenceImpl(symbol_sequence<Ss...>) -> std::size_t {
+  return sizeof...(Ss);
+}
+
+template <symbol... Ss>
 constexpr auto CountBinaryExprImpl(symbol_sequence<Ss...>) -> std::size_t {
   return (std::size_t{0} + ... + (is_binary_expr_op_v<Ss> ? 1U : 0U));
 }
@@ -251,6 +256,11 @@ constexpr auto CountUnaryExprImpl(symbol_sequence<Ss...>) -> std::size_t {
 }
 
 }  // namespace detail
+
+// Enum values must be contiguous from 0 to N-1 (required by CostClassOfImpl's
+// default-zero sentinel and the exhaustiveness fold).  Add new symbols at the end.
+static_assert(detail::CountInSequenceImpl(AllSymbolsSeq{}) == static_cast<std::size_t>(symbol::Subquery) + 1,
+              "AllSymbolsSeq must enumerate every symbol enum value; update both the enum and AllSymbolsSeq together");
 
 /// Count of binary expression operators in AllSymbolsSeq - cross-checked against
 /// EGRAPH_BINARY_OPS in egraph.cpp.
@@ -285,6 +295,21 @@ constexpr auto CostClassOfImpl(symbol s, symbol_sequence<Ss...>) -> CostClass {
 }  // namespace detail
 
 constexpr auto CostClassOf(symbol s) -> CostClass { return detail::CostClassOfImpl(s, AllSymbolsSeq{}); }
+
+namespace detail {
+
+template <symbol... Ss>
+constexpr auto ArityOfImpl(symbol s, symbol_sequence<Ss...>) -> Arity {
+  Arity result{};
+  bool const found = (((s == Ss) && ((result = symbol_descriptor<Ss>::arity), true)) || ...);
+  assert(found && "ArityOf: symbol missing from AllSymbolsSeq - see private_symbol.hpp");
+  if (!found) std::unreachable();
+  return result;
+}
+
+}  // namespace detail
+
+constexpr auto ArityOf(symbol s) -> Arity { return detail::ArityOfImpl(s, AllSymbolsSeq{}); }
 
 }  // namespace memgraph::query::plan::v2
 

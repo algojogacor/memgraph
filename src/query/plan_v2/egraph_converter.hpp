@@ -12,6 +12,7 @@
 #pragma once
 
 #include <memory>
+#include <tuple>
 
 #include "frontend/ast/ast_storage.hpp"
 #include "query/frontend/semantic/symbol_table.hpp"
@@ -24,6 +25,14 @@ class LogicalOperator;
 namespace memgraph::query::plan::v2 {
 
 struct CardinalityEstimator;
+
+/// Result of a successful ConvertToLogicalOperator call.
+struct ExtractionResult {
+  std::unique_ptr<LogicalOperator> plan;
+  double cost;
+  AstStorage ast_storage;
+  SymbolTable symbol_table;
+};
 
 /// Per-session planner state.  Today this owns the ExtractionContext buffers
 /// (frontier map, selection, in-degree, topo order) so their allocated
@@ -70,7 +79,7 @@ class QueryPlannerContext {
   Impl &impl() { return *impl_; }
 
   friend auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext &planner_context)
-      -> std::tuple<std::unique_ptr<LogicalOperator>, double, AstStorage, SymbolTable>;
+      -> ExtractionResult;
 
   std::unique_ptr<Impl> impl_;
 };
@@ -81,6 +90,5 @@ class QueryPlannerContext {
 /// `planner_context` is required: callers must own one and pass it in.
 /// Long-lived owners (Interpreter) get amortised buffer allocations across
 /// queries; short-lived callers (triggers, tests) just declare a local one.
-auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext &planner_context)
-    -> std::tuple<std::unique_ptr<LogicalOperator>, double, AstStorage, SymbolTable>;
+auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext &planner_context) -> ExtractionResult;
 }  // namespace memgraph::query::plan::v2

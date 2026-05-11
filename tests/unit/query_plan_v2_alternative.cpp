@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include "query/plan_v2/plan_alternative.hpp"
+#include "query/plan_v2/test_support/sym_sets.hpp"
 
 import memgraph.planner.core.egraph;
 
@@ -24,12 +25,7 @@ namespace {
 
 using EClassId = planner::core::EClassId;
 using ENodeId = planner::core::ENodeId;
-
-auto MakeSet(std::initializer_list<uint32_t> ids) -> bind::SymbolSet {
-  bind::SymbolSet s;
-  for (auto id : ids) s.insert(EClassId{id});
-  return s;
-}
+using bind::MakeSet;
 
 auto Cmp(Alternative const &a, Alternative const &b) { return AlternativeDominance{}(a, b); }
 

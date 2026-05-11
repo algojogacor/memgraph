@@ -30,8 +30,9 @@ struct RecordingEstimator final : CardinalityEstimator {
 
   explicit RecordingEstimator(double v) : return_value(v) {}
 
-  auto EstimateFunctionCardinality(uint64_t /*function_id*/, std::span<planner::core::EClassId const> /*arg_eclasses*/,
-                                   EGraph const & /*eg*/) const -> double override {
+  auto Estimate(planner::core::ENode<symbol> const & /*enode*/,
+                std::span<planner::core::EClassId const> /*arg_eclasses*/, EGraph const & /*eg*/) const
+      -> double override {
     ++call_count;
     return return_value;
   }
@@ -57,7 +58,8 @@ TEST(EstimatorPlumbing, InjectedEstimatorIsReachable) {
   // dummy EGraph reference is fine: RecordingEstimator does not dereference
   // the egraph at this layer.
   EGraph dummy_eg;
-  auto const result = ctx.estimator_override()->EstimateFunctionCardinality(0, {}, dummy_eg);
+  planner::core::ENode<symbol> dummy_enode{symbol::Once, {}};
+  auto const result = ctx.estimator_override()->Estimate(dummy_enode, {}, dummy_eg);
   EXPECT_DOUBLE_EQ(result, 42.0);
   EXPECT_EQ(raw->call_count, 1);
 }
