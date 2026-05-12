@@ -66,8 +66,100 @@ namespace memgraph::query::plan::v2::bind {
 /// So treating an EClassId in this set as "a variable" is safe today.  If
 /// someone later adds a rewrite that merges Symbol e-classes, that breaks
 /// and IsAlive/IsCompatible will silently mix up different variables.
-using SymbolSet = boost::container::flat_set<planner::core::EClassId, std::less<>,
-                                             boost::container::small_vector<planner::core::EClassId, 8>>;
+///
+/// All operations (set algebra, compatibility checks, range construction)
+/// are members rather than free functions — call sites read as
+/// straightforward expressions on the set object.
+class SymbolSet {
+ public:
+  using set_type = boost::container::flat_set<planner::core::EClassId, std::less<>,
+                                              boost::container::small_vector<planner::core::EClassId, 8>>;
+
+  SymbolSet() = default;
+
+  SymbolSet(std::initializer_list<planner::core::EClassId> il) : set_(il) {}
+
+  // Construct from an arbitrary range of EClassIds (sorts and deduplicates).
+  template <std::ranges::input_range R>
+    requires std::same_as<std::ranges::range_value_t<R>, planner::core::EClassId>
+  explicit SymbolSet(R &&rng) {
+    auto seq = set_.extract_sequence();
+    for (auto id : rng) seq.push_back(id);
+    std::ranges::sort(seq);
+    seq.erase(std::ranges::unique(seq).begin(), seq.end());
+    set_.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
+  }
+
+  // --- Access ---
+  auto begin() const { return set_.begin(); }
+
+  auto end() const { return set_.end(); }
+
+  auto size() const { return set_.size(); }
+
+  auto empty() const { return set_.empty(); }
+
+  auto contains(planner::core::EClassId x) const { return set_.contains(x); }
+
+  // --- Queries ---
+  [[nodiscard]] bool is_alive(planner::core::EClassId sym) const { return contains(sym); }
+
+  [[nodiscard]] bool is_compatible(SymbolSet const &provided) const { return std::ranges::includes(provided, *this); }
+
+  // --- Mutation ---
+  void insert(planner::core::EClassId x) { set_.insert(x); }
+
+  template <typename Iter>
+  void insert(Iter first, Iter last) {
+    set_.insert(first, last);
+  }
+
+  void erase(planner::core::EClassId x) { set_.erase(x); }
+
+  // --- Set algebra (return new SymbolSet, *this unchanged) ---
+  auto set_union(SymbolSet const &other) const -> SymbolSet {
+    SymbolSet out;
+    auto seq = out.set_.extract_sequence();
+    seq.reserve(set_.size() + other.set_.size());
+    std::ranges::set_union(set_, other.set_, std::back_inserter(seq));
+    out.set_.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
+    return out;
+  }
+
+  auto difference(SymbolSet const &other) const -> SymbolSet {
+    SymbolSet out;
+    auto seq = out.set_.extract_sequence();
+    seq.reserve(set_.size());
+    std::ranges::set_difference(set_, other.set_, std::back_inserter(seq));
+    out.set_.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
+    return out;
+  }
+
+  auto difference_one(planner::core::EClassId x) const -> SymbolSet {
+    SymbolSet out = *this;
+    out.set_.erase(x);
+    return out;
+  }
+
+  auto alive_required(planner::core::EClassId sym, SymbolSet const &expr_required) const -> SymbolSet {
+    auto out = difference_one(sym);
+    out.insert(expr_required.begin(), expr_required.end());
+    return out;
+  }
+
+  // --- Raw sequence (for bulk construction) ---
+  auto extract_sequence() { return set_.extract_sequence(); }
+
+  void adopt_sequence(boost::container::ordered_unique_range_t, set_type::sequence_type &&seq) {
+    set_.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
+  }
+
+  // --- Equality ---
+  auto operator==(SymbolSet const &other) const -> bool = default;
+
+ private:
+  set_type set_;
+};
 
 /// Cost of a Symbol leaf alternative.
 ///
@@ -77,20 +169,6 @@ using SymbolSet = boost::container::flat_set<planner::core::EClassId, std::less<
 /// leaf shape on entry as the canary if the invariant ever weakens.
 inline constexpr double kSymbolCost = 1.0;
 
-/// "Are all the variables this node needs already in scope?"
-/// Used by the resolver going down the plan.
-[[nodiscard]] inline auto IsCompatible(SymbolSet const &required, SymbolSet const &provided) -> bool {
-  return std::ranges::includes(provided, required);
-}
-
-/// "Does the input below this Bind actually use `sym`?"
-/// Used by the cost model going up the plan.  If yes, this Bind has work
-/// to do (alive: evaluate expr, introduce sym).  If no, the Bind is dead
-/// weight and we'll skip it.
-[[nodiscard]] inline auto IsAlive(SymbolSet const &input_required, planner::core::EClassId sym) -> bool {
-  return input_required.contains(sym);
-}
-
 /// Cost of the alive branch.  Pay for input, sym evaluation, and expr.
 [[nodiscard]] inline auto AliveCost(double input_cost, double sym_cost, double expr_cost) -> double {
   return input_cost + sym_cost + expr_cost;
@@ -98,65 +176,5 @@ inline constexpr double kSymbolCost = 1.0;
 
 /// Cost of the dead branch.  Only the input runs; sym and expr are skipped.
 [[nodiscard]] inline auto DeadCost(double input_cost) -> double { return input_cost; }
-
-/// What variables does an alive Bind still need from above?
-/// Take what the input still needed, drop `sym` (this Bind introduces
-/// it), then add whatever `expr` references - because we're about to
-/// evaluate `expr`, so its needs become this Bind's needs.
-///
-/// The filtered view over `input_required` preserves sortedness because
-/// `input_required` is itself sorted (flat_set guarantee) and filtering
-/// drops elements without reordering, so the set_union output is sorted
-/// and unique - safe to adopt as ordered_unique_range.
-[[nodiscard]] inline auto AliveRequired(SymbolSet const &input_required, planner::core::EClassId sym,
-                                        SymbolSet const &expr_required) -> SymbolSet {
-  boost::container::small_vector<planner::core::EClassId, 16> buf;
-  buf.reserve(input_required.size() + expr_required.size());
-  auto input_minus_sym = input_required | std::views::filter([sym](planner::core::EClassId id) { return id != sym; });
-  std::ranges::set_union(input_minus_sym, expr_required, std::back_inserter(buf));
-  return SymbolSet(boost::container::ordered_unique_range, buf.begin(), buf.end());
-}
-
-/// `a \ {x}`: copy `a`, remove a single element.  Used by the resolver's
-/// alive-Bind dispatch where the bound symbol is subtracted from the
-/// downstream demand.  Cheaper than `SetDifference(a, SymbolSet{x})`
-/// because no temporary single-element set is constructed.
-[[nodiscard]] inline auto SetDifferenceOne(SymbolSet a, planner::core::EClassId x) -> SymbolSet {
-  a.erase(x);
-  return a;
-}
-
-/// `a ∪ b`: sorted merge of two SymbolSets.
-[[nodiscard]] inline auto SetUnion(SymbolSet const &a, SymbolSet const &b) -> SymbolSet {
-  SymbolSet out;
-  auto seq = out.extract_sequence();
-  seq.reserve(a.size() + b.size());
-  std::ranges::set_union(a, b, std::back_inserter(seq));
-  out.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
-  return out;
-}
-
-/// `a \ b`: elements in `a` but not in `b`.
-[[nodiscard]] inline auto SetDifference(SymbolSet const &a, SymbolSet const &b) -> SymbolSet {
-  SymbolSet out;
-  auto seq = out.extract_sequence();
-  seq.reserve(a.size());
-  std::ranges::set_difference(a, b, std::back_inserter(seq));
-  out.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
-  return out;
-}
-
-/// Build a SymbolSet from an arbitrary range of EClassIds (sorts and deduplicates).
-template <std::ranges::input_range R>
-  requires std::same_as<std::ranges::range_value_t<R>, planner::core::EClassId>
-[[nodiscard]] inline auto MakeSymbolSet(R &&rng) -> SymbolSet {
-  SymbolSet out;
-  auto seq = out.extract_sequence();
-  for (auto id : rng) seq.push_back(id);
-  std::ranges::sort(seq);
-  seq.erase(std::ranges::unique(seq).begin(), seq.end());
-  out.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
-  return out;
-}
 
 }  // namespace memgraph::query::plan::v2::bind

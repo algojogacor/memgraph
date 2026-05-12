@@ -60,7 +60,7 @@ using bind::SymbolSet;
 /// to the outer scope. Sort and dedup is required because e-graph children are
 /// not guaranteed unique.
 auto ExposedSymsFromChildren(std::span<planner::core::EClassId const> children_from_2) -> SymbolSet {
-  return bind::MakeSymbolSet(children_from_2);
+  return SymbolSet{children_from_2};
 }
 
 // --- Alternatives -----------------------------------------------------------
@@ -90,7 +90,7 @@ auto CombineAlts(CostFrontier const &lhs, CostFrontier const &rhs, double extra_
     -> CostFrontier {
   return CostFrontier::combine(lhs, rhs, [&](Alternative const &l, Alternative const &r) {
     return Alternative{
-        .cost = extra_cost + l.cost + r.cost, .required = bind::SetUnion(l.required, r.required), .enode_id = enode_id};
+        .cost = extra_cost + l.cost + r.cost, .required = l.required.set_union(r.required), .enode_id = enode_id};
   });
 }
 
@@ -165,11 +165,11 @@ struct PlanCostModel {
           //     might cross a sibling boundary at an enclosing Output.
           // If neither holds, sym has no consumer and the alive alt would
           // bloat the frontier unbounded - up to 2^N for an N-Bind chain.
-          bool const input_demands_sym = bind::IsAlive(input_alt.required, sym_eclass);
+          bool const input_demands_sym = input_alt.required.is_alive(sym_eclass);
           bool const should_emit_alive = input_demands_sym || referenced_syms.contains(sym_eclass);
           if (should_emit_alive) {
             for (auto const &expr_alt : expr_frontier.alts()) {
-              auto required = bind::AliveRequired(input_alt.required, sym_eclass, expr_alt.required);
+              auto required = input_alt.required.alive_required(sym_eclass, expr_alt.required);
               auto introduces = input_alt.introduces;
               introduces.insert(sym_eclass);
               // Bind is one-shot, not a row-pipe: passes input's cardinality
@@ -258,10 +258,10 @@ struct PlanCostModel {
             // matching demands in r without needing an ancestor to provide
             // them.  This is what lets `WITH x AS y UNWIND ... RETURN y`
             // satisfy y's demand from the Bind / Unwind below the Output.
-            auto const remaining = bind::SetDifference(r.required, l.introduces);
+            auto const remaining = r.required.difference(l.introduces);
             return Alternative{.cost = l.cost + l.cardinality * r.cost,
                                .cardinality = l.cardinality,
-                               .required = bind::SetUnion(l.required, remaining),
+                               .required = l.required.set_union(remaining),
                                .introduces = l.introduces,
                                .enode_id = enode_id};
           });
@@ -294,8 +294,8 @@ struct PlanCostModel {
           for (auto const &list_alt : list_frontier.alts()) {
             // sym is always introduced by Unwind, so remove it from input's
             // required and union list_expr's required (its needs become
-            // ours).  Same algebra as bind::AliveRequired.
-            auto required = bind::AliveRequired(input_alt.required, sym_eclass, list_alt.required);
+            // ours).  Same algebra as alive_required.
+            auto required = input_alt.required.alive_required(sym_eclass, list_alt.required);
             auto introduces = input_alt.introduces;
             introduces.insert(sym_eclass);
             auto const cost =
@@ -345,7 +345,7 @@ struct PlanCostModel {
             emit({.cost = outer_alt.cost + outer_alt.cardinality * inner_alt.cost,
                   .cardinality = outer_alt.cardinality * inner_alt.cardinality,
                   .required = outer_alt.required,
-                  .introduces = bind::SetUnion(outer_alt.introduces, exposed_syms),
+                  .introduces = outer_alt.introduces.set_union(exposed_syms),
                   .enode_id = enode_id,
                   .is_alive = AliveTag::Alive});
           }
@@ -450,7 +450,7 @@ void ResolveBindUnwindAlive(planner::core::ENode<symbol> const &enode, ResolvedK
   auto const sym_eclass = children[1];
   auto alive_provided = parent_key.provided;
   alive_provided.insert(sym_eclass);
-  auto downstream_demand = bind::SetDifferenceOne(parent_key.demanded_introduces, sym_eclass);
+  auto downstream_demand = parent_key.demanded_introduces.difference_one(sym_eclass);
   visit(ResolvedKey{children[0], std::move(alive_provided), std::move(downstream_demand)});
   visit(ResolvedKey{sym_eclass, parent_key.provided, {}});
   visit(ResolvedKey{children[2], parent_key.provided, {}});
@@ -465,7 +465,7 @@ template <typename Visit>
 void ResolveSubqueryChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key,
                              SymbolSet const &exposed_syms, Visit visit) {
   auto const &children = enode.children();
-  auto outer_demand = bind::SetDifference(parent_key.demanded_introduces, exposed_syms);
+  auto outer_demand = parent_key.demanded_introduces.difference(exposed_syms);
   visit(ResolvedKey{children[0], parent_key.provided, std::move(outer_demand)});
   visit(ResolvedKey{children[1], SymbolSet{}, SymbolSet{}});
   for (auto sym_child : children.subspan(2)) {
@@ -570,7 +570,7 @@ struct PlanResolver {
                                        SymbolSet const &demanded) -> Alternative const & {
       Alternative const *best = nullptr;
       for (auto const &alt : frontier.alts()) {
-        if (!bind::IsCompatible(alt.required, provided)) continue;
+        if (!alt.required.is_compatible(provided)) continue;
         if (!std::ranges::includes(alt.introduces, demanded)) continue;
         if (!best || alt.cost < best->cost) best = &alt;
       }
@@ -906,24 +906,20 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   // Identifier e-node anywhere in the e-graph.  This is the demand signal
   // Bind's cost case uses to decide whether to emit an alive alt (see
   // PlanCostModel::referenced_syms).  O(num_enodes) one-time scan.
-  bind::SymbolSet referenced_syms;
-  {
-    auto seq = referenced_syms.extract_sequence();
+  SymbolSet referenced_syms = [&] {
+    boost::container::small_vector<planner::core::EClassId, 32> buf;
     for (auto eclass_id : impl.egraph_.canonical_eclass_ids()) {
-      auto const &cls = impl.egraph_.eclass(eclass_id);
-      for (auto enode_id : cls.nodes()) {
+      for (auto enode_id : impl.egraph_.eclass(eclass_id).nodes()) {
         auto const &enode = impl.egraph_.get_enode(enode_id);
         if (enode.symbol() == symbol::Identifier && !enode.children().empty()) {
           // children()[0] is canonical: EGraph::emplace canonicalizes children
           // at insert time and rebuild() re-canonicalizes via canonicalize_in_place().
-          seq.push_back(enode.children()[0]);
+          buf.push_back(enode.children()[0]);
         }
       }
     }
-    std::ranges::sort(seq);
-    seq.erase(std::ranges::unique(seq).begin(), seq.end());
-    referenced_syms.adopt_sequence(boost::container::ordered_unique_range, std::move(seq));
-  }
+    return SymbolSet{std::move(buf)};
+  }();
 
 #ifndef NDEBUG
   // Invariant: Symbol e-classes are never merged with each other (see bind_semantics.hpp).
