@@ -244,13 +244,14 @@ TEST_P(PlannerV2PipelineTest, Pipeline) {
 
   auto details = GetOperatorDetails(plan.get());
 
-  // Print plan for debugging
-  std::cout << "Plan for '" << tc.query << "':" << std::endl;
-  for (auto const &detail : details) {
-    std::cout << "  " << detail << std::endl;
+  // Verify plan structure
+  if (details != tc.expected_details) {
+    std::cerr << "Plan for '" << tc.query << "':" << std::endl;
+    for (auto const &detail : details) {
+      std::cerr << "  " << detail << std::endl;
+    }
   }
 
-  // Verify plan structure
   ASSERT_EQ(details, tc.expected_details);
 
   // Verify rewrite statistics
