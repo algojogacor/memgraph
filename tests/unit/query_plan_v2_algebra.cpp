@@ -35,6 +35,20 @@ using bind::MakeSet;
 
 auto Cmp(Alternative const &a, Alternative const &b) { return AlternativeDominance{}(a, b); }
 
+struct AltDominanceCase {
+  std::string_view name;
+  Alternative a;
+  Alternative b;
+  std::partial_ordering expected;
+};
+
+class AltDominanceTest : public testing::TestWithParam<AltDominanceCase> {};
+
+TEST_P(AltDominanceTest, Verify) {
+  auto const &tc = GetParam();
+  EXPECT_EQ(Cmp(tc.a, tc.b), tc.expected);
+}
+
 // ============================================================================
 // Bind algebra: IsAlive
 // ============================================================================
@@ -70,100 +84,86 @@ TEST(BindAlgebra_Cost, kSymbolCostIsOne) { EXPECT_DOUBLE_EQ(bind::kSymbolCost, 1
 // Bind algebra: AliveRequired set algebra
 // ============================================================================
 
-TEST(BindAlgebra_AliveRequired, RemovesSymFromInput) {
-  auto result = bind::AliveRequired(MakeSet({1, 2, 3}), EClassId{2}, MakeSet({}));
-  EXPECT_EQ(result, MakeSet({1, 3}));
+struct AliveRequiredCase {
+  std::string_view name;
+  bind::AliveRequired::set_type input;
+  EClassId sym;
+  bind::AliveRequired::set_type expr_demands;
+  bind::AliveRequired::set_type expected;
+};
+
+class AliveRequiredTest : public testing::TestWithParam<AliveRequiredCase> {};
+
+TEST_P(AliveRequiredTest, Verify) {
+  auto const &tc = GetParam();
+  EXPECT_EQ(bind::AliveRequired(tc.input, tc.sym, tc.expr_demands), tc.expected);
 }
 
-TEST(BindAlgebra_AliveRequired, AddsExprDemandsToOutput) {
-  auto result = bind::AliveRequired(MakeSet({1, 2}), EClassId{2}, MakeSet({4, 5}));
-  EXPECT_EQ(result, MakeSet({1, 4, 5}));
-}
+INSTANTIATE_TEST_SUITE_P(
+    BindAlgebra_AliveRequired, AliveRequiredTest,
+    testing::Values(
+        AliveRequiredCase{"RemovesSymFromInput", MakeSet({1, 2, 3}), EClassId{2}, MakeSet({}), MakeSet({1, 3})},
+        AliveRequiredCase{"AddsExprDemandsToOutput", MakeSet({1, 2}), EClassId{2}, MakeSet({4, 5}), MakeSet({1, 4, 5})},
+        AliveRequiredCase{"ExprDemandOverlapsInputProducesUnion",
+                          MakeSet({1, 2, 3}),
+                          EClassId{2},
+                          MakeSet({3, 4}),
+                          MakeSet({1, 3, 4})},
+        AliveRequiredCase{"ExprDemandReintroducesSym", MakeSet({1, 2}), EClassId{2}, MakeSet({2}), MakeSet({1, 2})},
+        AliveRequiredCase{"EmptyInputAndExprYieldsEmpty", MakeSet({}), EClassId{2}, MakeSet({}), MakeSet({})},
+        AliveRequiredCase{
+            "SymIsMinElementOfInput_NoDemands", MakeSet({1, 2, 3}), EClassId{1}, MakeSet({}), MakeSet({2, 3})},
+        AliveRequiredCase{
+            "SymIsMinElementOfInput_WithDemands", MakeSet({1, 2, 3}), EClassId{1}, MakeSet({4}), MakeSet({2, 3, 4})},
+        AliveRequiredCase{
+            "SymIsMaxElementOfInput_NoDemands", MakeSet({1, 2, 3}), EClassId{3}, MakeSet({}), MakeSet({1, 2})},
+        AliveRequiredCase{
+            "SymIsMaxElementOfInput_WithDemands", MakeSet({1, 2, 3}), EClassId{3}, MakeSet({4}), MakeSet({1, 2, 4})},
+        AliveRequiredCase{"SymIsSoleElementOfInput_NoDemands", MakeSet({2}), EClassId{2}, MakeSet({}), MakeSet({})},
+        AliveRequiredCase{
+            "SymIsSoleElementOfInput_WithDemands", MakeSet({2}), EClassId{2}, MakeSet({1, 3}), MakeSet({1, 3})}),
+    [](auto const &info) { return std::string(info.param.name); });
 
-TEST(BindAlgebra_AliveRequired, ExprDemandOverlapsInputProducesUnion) {
-  auto result = bind::AliveRequired(MakeSet({1, 2, 3}), EClassId{2}, MakeSet({3, 4}));
-  EXPECT_EQ(result, MakeSet({1, 3, 4}));
-}
-
-TEST(BindAlgebra_AliveRequired, ExprDemandReintroducesSym) {
-  auto result = bind::AliveRequired(MakeSet({1, 2}), EClassId{2}, MakeSet({2}));
-  EXPECT_EQ(result, MakeSet({1, 2}));
-}
-
-TEST(BindAlgebra_AliveRequired, EmptyInputAndExprYieldsEmpty) {
-  auto result = bind::AliveRequired(MakeSet({}), EClassId{2}, MakeSet({}));
-  EXPECT_EQ(result, MakeSet({}));
-}
-
-TEST(BindAlgebra_AliveRequired, SymIsMinElementOfInput) {
-  EXPECT_EQ(bind::AliveRequired(MakeSet({1, 2, 3}), EClassId{1}, MakeSet({})), MakeSet({2, 3}));
-  EXPECT_EQ(bind::AliveRequired(MakeSet({1, 2, 3}), EClassId{1}, MakeSet({4})), MakeSet({2, 3, 4}));
-}
-
-TEST(BindAlgebra_AliveRequired, SymIsMaxElementOfInput) {
-  EXPECT_EQ(bind::AliveRequired(MakeSet({1, 2, 3}), EClassId{3}, MakeSet({})), MakeSet({1, 2}));
-  EXPECT_EQ(bind::AliveRequired(MakeSet({1, 2, 3}), EClassId{3}, MakeSet({4})), MakeSet({1, 2, 4}));
-}
-
-TEST(BindAlgebra_AliveRequired, SymIsSoleElementOfInput) {
-  EXPECT_EQ(bind::AliveRequired(MakeSet({2}), EClassId{2}, MakeSet({})), MakeSet({}));
-  EXPECT_EQ(bind::AliveRequired(MakeSet({2}), EClassId{2}, MakeSet({1, 3})), MakeSet({1, 3}));
-}
-
-// ============================================================================
-// Alternative dominance: cost axis
-// ============================================================================
-
-TEST(AltDominance, LowerCostDominatesWhenCardinalityAndRequiredEqual) {
-  Alternative a{.cost = 1.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{0}};
-  Alternative b{.cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{1}};
-  EXPECT_EQ(Cmp(a, b), std::partial_ordering::greater);
-}
-
-TEST(AltDominance, EqualOnAllAxesIsEquivalent) {
-  Alternative a{.cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{0}};
-  Alternative b{.cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{1}};
-  EXPECT_EQ(Cmp(a, b), std::partial_ordering::equivalent);
-}
-
-TEST(AltDominance, LowerCostHigherCardinalityIsUnordered) {
-  Alternative a{.cost = 1.0, .cardinality = 1000.0, .required = MakeSet({1}), .enode_id = ENodeId{0}};
-  Alternative b{.cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{1}};
-  EXPECT_EQ(Cmp(a, b), std::partial_ordering::unordered);
-}
-
-// ============================================================================
-// Alternative dominance: required-set axis
-// ============================================================================
-
-TEST(AltDominance, SmallerRequiredDominatesWhenCostAndCardinalityEqual) {
-  Alternative a{.cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{0}};
-  Alternative b{.cost = 5.0, .cardinality = 6.0, .required = MakeSet({1, 2}), .enode_id = ENodeId{1}};
-  EXPECT_EQ(Cmp(a, b), std::partial_ordering::greater);
-}
-
-// ============================================================================
-// Alternative dominance: cardinality axis
-// ============================================================================
-
-TEST(AltDominance, LowerCardinalityDominatesWhenCostAndRequiredEqual) {
-  Alternative a{.cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{0}};
-  Alternative b{.cost = 5.0, .cardinality = 1000.0, .required = MakeSet({1}), .enode_id = ENodeId{1}};
-  EXPECT_EQ(Cmp(a, b), std::partial_ordering::greater);
-  EXPECT_EQ(Cmp(b, a), std::partial_ordering::less);
-}
-
-// ============================================================================
-// Alternative dominance: is_alive does not participate
-// ============================================================================
-
-TEST(AltDominance, IsAliveDoesNotParticipate) {
-  Alternative a{
-      .cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{0}, .is_alive = AliveTag::Alive};
-  Alternative b{
-      .cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{1}, .is_alive = AliveTag::Dead};
-  EXPECT_EQ(Cmp(a, b), std::partial_ordering::equivalent);
-}
+INSTANTIATE_TEST_SUITE_P(
+    AltDominance, AltDominanceTest,
+    testing::Values(
+        AltDominanceCase{"LowerCostDominatesWhenCardinalityAndRequiredEqual",
+                         {.cost = 1.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{0}},
+                         {.cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{1}},
+                         std::partial_ordering::greater},
+        AltDominanceCase{"EqualOnAllAxesIsEquivalent",
+                         {.cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{0}},
+                         {.cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{1}},
+                         std::partial_ordering::equivalent},
+        AltDominanceCase{"LowerCostHigherCardinalityIsUnordered",
+                         {.cost = 1.0, .cardinality = 1000.0, .required = MakeSet({1}), .enode_id = ENodeId{0}},
+                         {.cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{1}},
+                         std::partial_ordering::unordered},
+        AltDominanceCase{"SmallerRequiredDominatesWhenCostAndCardinalityEqual",
+                         {.cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{0}},
+                         {.cost = 5.0, .cardinality = 6.0, .required = MakeSet({1, 2}), .enode_id = ENodeId{1}},
+                         std::partial_ordering::greater},
+        AltDominanceCase{"LowerCardinalityDominates_Forward",
+                         {.cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{0}},
+                         {.cost = 5.0, .cardinality = 1000.0, .required = MakeSet({1}), .enode_id = ENodeId{1}},
+                         std::partial_ordering::greater},
+        AltDominanceCase{"LowerCardinalityDominates_Reverse",
+                         {.cost = 5.0, .cardinality = 1000.0, .required = MakeSet({1}), .enode_id = ENodeId{0}},
+                         {.cost = 5.0, .cardinality = 6.0, .required = MakeSet({1}), .enode_id = ENodeId{1}},
+                         std::partial_ordering::less},
+        AltDominanceCase{"IsAliveDoesNotParticipate",
+                         {.cost = 5.0,
+                          .cardinality = 6.0,
+                          .required = MakeSet({1}),
+                          .enode_id = ENodeId{0},
+                          .is_alive = AliveTag::Alive},
+                         {.cost = 5.0,
+                          .cardinality = 6.0,
+                          .required = MakeSet({1}),
+                          .enode_id = ENodeId{1},
+                          .is_alive = AliveTag::Dead},
+                         std::partial_ordering::equivalent}),
+    [](auto const &info) { return std::string(info.param.name); });
 
 }  // namespace
 }  // namespace memgraph::query::plan::v2
