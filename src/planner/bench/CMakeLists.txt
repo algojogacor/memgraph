@@ -14,10 +14,6 @@ target_sources(memgraph__benchmark__new_planner
     bench_extract.cpp
 )
 
-target_include_directories(memgraph__benchmark__new_planner PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
-)
-
 target_link_libraries(memgraph__benchmark__new_planner PRIVATE mg::planner mg::planner::test_support benchmark::benchmark)
 
 add_dependencies(memgraph__benchmark memgraph__benchmark__new_planner)

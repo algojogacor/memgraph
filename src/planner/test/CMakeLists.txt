@@ -13,8 +13,6 @@ add_unit_test(planner
         unittest__vm_compiler.cpp
         unittest__vm_trace.cpp
         unittest__vm_state.cpp
-    INCLUDE_DIRS
-        ${CMAKE_CURRENT_SOURCE_DIR}/..
     LINK_TARGETS mg::planner mg::planner::test_support ApprovalTests::ApprovalTests
 )
 
