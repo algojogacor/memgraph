@@ -37,6 +37,15 @@ auto CoreOf(egraph const &eg) -> EGraph const & { return internal::get_impl(eg).
 
 auto AsCoreId(eclass e) -> EClassId { return EClassId{e.value_of()}; }
 
+auto EstimateBuiltin(egraph &eg, eclass fn, std::vector<EClassId> args) -> double {
+  BuiltinEstimator estimator{eg};
+  auto const &core_eg = CoreOf(eg);
+  auto const fn_eclass = core_eg.find(EClassId{fn.value_of()});
+  auto const fn_enode_id = core_eg.eclass(fn_eclass).nodes()[0];
+  auto const &fn_enode = core_eg.get_enode(fn_enode_id);
+  return estimator.Estimate(fn_enode, args, core_eg);
+}
+
 // ============================================================================
 // BuiltinKind classification
 // ============================================================================
@@ -61,63 +70,28 @@ TEST(BuiltinEstimator, RangeWithIntLiteralsReturnsCount) {
   egraph eg;
   auto a = IntLiteral(eg, 0);
   auto b = IntLiteral(eg, 5);
-  auto fn = eg.MakeFunction("range", {a, b});
-
-  BuiltinEstimator estimator{eg};
-  auto const &core_eg = CoreOf(eg);
-  auto const fn_eclass = internal::get_impl(eg).egraph_.find(EClassId{fn.value_of()});
-  auto const fn_enode_id = core_eg.eclass(fn_eclass).nodes()[0];
-  auto const &fn_enode = core_eg.get_enode(fn_enode_id);
-
-  std::array<EClassId, 2> args{AsCoreId(a), AsCoreId(b)};
-  EXPECT_DOUBLE_EQ(estimator.Estimate(fn_enode, args, core_eg), 6.0);
+  EXPECT_DOUBLE_EQ(EstimateBuiltin(eg, eg.MakeFunction("range", {a, b}), {AsCoreId(a), AsCoreId(b)}), 6.0);
 }
 
 TEST(BuiltinEstimator, RangeWithReversedBoundsClampsAtZero) {
   egraph eg;
   auto a = IntLiteral(eg, 5);
   auto b = IntLiteral(eg, 0);
-  auto fn = eg.MakeFunction("range", {a, b});
-
-  BuiltinEstimator estimator{eg};
-  auto const &core_eg = CoreOf(eg);
-  auto const fn_eclass = internal::get_impl(eg).egraph_.find(EClassId{fn.value_of()});
-  auto const fn_enode_id = core_eg.eclass(fn_eclass).nodes()[0];
-  auto const &fn_enode = core_eg.get_enode(fn_enode_id);
-
-  std::array<EClassId, 2> args{AsCoreId(a), AsCoreId(b)};
-  EXPECT_DOUBLE_EQ(estimator.Estimate(fn_enode, args, core_eg), 0.0);  // 0 - 5 + 1 = -4, clamped to 0
+  EXPECT_DOUBLE_EQ(EstimateBuiltin(eg, eg.MakeFunction("range", {a, b}), {AsCoreId(a), AsCoreId(b)}), 0.0);
 }
 
 TEST(BuiltinEstimator, RangeWithParameterFallsBackToDefault) {
   egraph eg;
   auto a = IntLiteral(eg, 0);
   auto b = eg.MakeParameterLookup(0);
-  auto fn = eg.MakeFunction("range", {a, b});
-
-  BuiltinEstimator estimator{eg};
-  auto const &core_eg = CoreOf(eg);
-  auto const fn_eclass = internal::get_impl(eg).egraph_.find(EClassId{fn.value_of()});
-  auto const fn_enode_id = core_eg.eclass(fn_eclass).nodes()[0];
-  auto const &fn_enode = core_eg.get_enode(fn_enode_id);
-
-  std::array<EClassId, 2> args{AsCoreId(a), AsCoreId(b)};
-  EXPECT_DOUBLE_EQ(estimator.Estimate(fn_enode, args, core_eg), kDefaultRowEstimate);
+  EXPECT_DOUBLE_EQ(EstimateBuiltin(eg, eg.MakeFunction("range", {a, b}), {AsCoreId(a), AsCoreId(b)}),
+                   kDefaultRowEstimate);
 }
 
 TEST(BuiltinEstimator, UnknownFunctionFallsBackToDefault) {
   egraph eg;
   auto a = IntLiteral(eg, 0);
-  auto fn = eg.MakeFunction("unknown_func", {a});
-
-  BuiltinEstimator estimator{eg};
-  auto const &core_eg = CoreOf(eg);
-  auto const fn_eclass = internal::get_impl(eg).egraph_.find(EClassId{fn.value_of()});
-  auto const fn_enode_id = core_eg.eclass(fn_eclass).nodes()[0];
-  auto const &fn_enode = core_eg.get_enode(fn_enode_id);
-
-  std::array<EClassId, 1> args{AsCoreId(a)};
-  EXPECT_DOUBLE_EQ(estimator.Estimate(fn_enode, args, core_eg), kDefaultRowEstimate);
+  EXPECT_DOUBLE_EQ(EstimateBuiltin(eg, eg.MakeFunction("unknown_func", {a}), {AsCoreId(a)}), kDefaultRowEstimate);
 }
 
 TEST(BuiltinEstimator, UnknownFunctionIdReturnsDefault) {
@@ -125,7 +99,7 @@ TEST(BuiltinEstimator, UnknownFunctionIdReturnsDefault) {
   BuiltinEstimator estimator{eg};
   auto const &core_eg = CoreOf(eg);
   auto fn = eg.MakeFunction("dummy", {});
-  auto const fn_eclass = internal::get_impl(eg).egraph_.find(EClassId{fn.value_of()});
+  auto const fn_eclass = core_eg.find(EClassId{fn.value_of()});
   auto const fn_enode_id = core_eg.eclass(fn_eclass).nodes()[0];
   auto fn_enode = core_eg.get_enode(fn_enode_id);
   fn_enode = planner::core::ENode{fn_enode.symbol(), fn_enode.children(), 0};
