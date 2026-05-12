@@ -171,11 +171,25 @@ add_unit_test(query_plan_read_write_typecheck
     LINK_TARGETS mg-query disk_test_utils
 )
 
-add_unit_test(query_plan_v2_create_set_remove_delete
-    SOURCES query_plan_v2_create_set_remove_delete.cpp
-    LINK_TARGETS mg-query mg-glue disk_test_utils
+# ============================================================================
+# plan_v2 unit tests - Layer 1: Pure algebra (no egraph, no planner)
+# ============================================================================
+add_unit_test(query_plan_v2_algebra
+    SOURCES query_plan_v2_algebra.cpp
+    LINK_TARGETS mg-query mg-planner mg::query::plan_v2::test_support
 )
 
+# ============================================================================
+# plan_v2 unit tests - Layer 2: Cardinality estimation (no full pipeline)
+# ============================================================================
+add_unit_test(query_plan_v2_cardinality
+    SOURCES query_plan_v2_cardinality.cpp
+    LINK_TARGETS mg-query mg-planner
+)
+
+# ============================================================================
+# plan_v2 unit tests - Layer 3: Full extraction pipeline + rewrites
+# ============================================================================
 add_unit_test(query_plan_v2_rewrites
     SOURCES query_plan_v2_rewrites.cpp
     LINK_TARGETS mg-query mg-planner
@@ -186,25 +200,12 @@ add_unit_test(query_plan_v2_pipeline
     LINK_TARGETS mg-query mg-planner
 )
 
-add_unit_test(query_plan_v2_bind
-    SOURCES query_plan_v2_bind.cpp
-    LINK_TARGETS mg-query mg-planner mg::query::plan_v2::test_support
-)
-
-add_unit_test(query_plan_v2_alternative
-    SOURCES query_plan_v2_alternative.cpp
-    LINK_TARGETS mg-query mg-planner mg::query::plan_v2::test_support
-)
-
-
-add_unit_test(query_plan_v2_builtin_estimator
-    SOURCES query_plan_v2_builtin_estimator.cpp
-    LINK_TARGETS mg-query mg-planner
-)
-
-add_unit_test(query_plan_v2_unwind_cost
-    SOURCES query_plan_v2_unwind_cost.cpp
-    LINK_TARGETS mg-query mg-planner
+# ============================================================================
+# plan_v2 unit tests - Layer 4: End-to-end DML (CREATE/SET/REMOVE/DELETE)
+# ============================================================================
+add_unit_test(query_plan_v2_create_set_remove_delete
+    SOURCES query_plan_v2_create_set_remove_delete.cpp
+    LINK_TARGETS mg-query mg-glue disk_test_utils
 )
 
 add_unit_test(query_pretty_print
