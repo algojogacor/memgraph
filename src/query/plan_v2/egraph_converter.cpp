@@ -229,11 +229,18 @@ struct PlanCostModel {
       // Unary expression operators: pass through child, +kUnary, re-stamp
       // enode_id so the Builder dispatches *this* unary node via enode.symbol().
       // Same dispatch story as binary: cost via descriptor.
+      //
+      // Uses LazyMap (view-style): no materialisation; chains of unary
+      // operators collapse to a single materialisation at the eventual
+      // iteration point.  is_alive is left untouched - children of unary
+      // expressions never come from Bind/Unwind (those are row-pipe shapes,
+      // and unary operators only run inside per-row expression evaluation),
+      // so is_alive is already NotApplicable on every alt of children[0].
       case symbol::Not:
       case symbol::UnaryMinus:
       case symbol::UnaryPlus: {
         auto const cost = expression_cost::FromClass(CostClassOf(current.symbol()));
-        return MapAlts(*children[0], cost, enode_id);
+        return CostFrontier::LazyMap(*children[0], cost, enode_id);
       }
 
       // Output: row-pipe.  Re-stamp child[0]'s frontier (no extra cost) so
