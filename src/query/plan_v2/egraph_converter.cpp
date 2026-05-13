@@ -528,12 +528,9 @@ void ResolveChildren(planner::core::ENode<symbol> const &enode, ResolvedKey cons
 /// Pick the cheapest alt with required ⊆ provided AND introduces ⊇ demanded.
 [[nodiscard]] auto pick_compatible(CostFrontier const &frontier, SymbolSet const &provided, SymbolSet const &demanded)
     -> Alternative const & {
-  Alternative const *best = nullptr;
-  for (auto const &alt : frontier.alts()) {
-    if (!alt.required.is_compatible(provided)) continue;
-    if (!std::ranges::includes(alt.introduces, demanded)) continue;
-    if (!best || alt.cost < best->cost) best = &alt;
-  }
+  auto const *best = planner::core::extract::PickBest(frontier.alts(), [&](Alternative const &alt) {
+    return alt.required.is_compatible(provided) && std::ranges::includes(alt.introduces, demanded);
+  });
   if (!best) {
     throw QueryException{
         "Plan extraction failed: no compatible alternative at this node. "
