@@ -40,8 +40,9 @@ namespace memgraph::query::plan::v2 {
 // The TU is structured bottom-up; each section depends on the ones above:
 //   1. Alternatives    : the (cost, required, enode_id, is_alive) tuple, its
 //                        dominance relation, and the Pareto frontier type.
-//   2. Frontier ops    : Cartesian product (CombineAlts) and in-place
-//                        re-stamping (MapAlts) used by the cost model.
+//   2. Frontier ops    : Cartesian product (CombineAlts) and view-style
+//                        re-stamping (CostFrontier::LazyMap) used by the
+//                        cost model.
 //   3. Policies        : PlanCostModel (per-enode dispatch into ops) and
 //                        PlanResolver (demand-aware top-down DAG walk).
 //                        These are the two customisation points the generic
@@ -94,22 +95,6 @@ auto CombineAlts(CostFrontier const &lhs, CostFrontier const &rhs, double extra_
     return Alternative{
         .cost = extra_cost + l.cost + r.cost, .required = l.required.set_union(r.required), .enode_id = enode_id};
   });
-}
-
-/// Map over a single frontier - adjust each alternative's cost by `extra_cost`
-/// and re-stamp `enode_id`.  Single-frontier sibling of CombineAlts.
-/// Pareto invariant is preserved: a uniform cost shift does not change relative
-/// ordering, `required` is untouched, and dominance does not read enode_id or
-/// is_alive.  This lets us mutate in place without re-pruning or copying the
-/// per-alt SymbolSet.  Callers used only for non-Bind enodes, so is_alive is
-/// reset to NotApplicable (it is meaningful only when the alt's enode is a Bind or Unwind).
-auto MapAlts(CostFrontier input, double extra_cost, planner::core::ENodeId enode_id) -> CostFrontier {
-  input.mutate_pruning_invariant_preserving([&](Alternative &alt) {
-    alt.cost += extra_cost;
-    alt.enode_id = enode_id;
-    alt.is_alive = AliveTag::NotApplicable;
-  });
-  return input;
 }
 
 // --- Policies ---------------------------------------------------------------
@@ -250,7 +235,7 @@ struct PlanCostModel {
       // the planner prefer a one-shot Bind over an inlined alternative
       // when the row pipe is wide (e.g. UNWIND range(0, 100)).
       case symbol::Output: {
-        auto result = MapAlts(*children[0], 0.0, enode_id);
+        CostFrontier result = CostFrontier::LazyMap(*children[0], 0.0, enode_id);
         for (auto const *named_out : children.subspan(1)) {
           result = CostFrontier::cartesian_product(
               result, *named_out, [enode_id](Alternative const &l, Alternative const &r) {
@@ -373,7 +358,7 @@ struct PlanCostModel {
         if (children.empty()) {
           result = CostResult{{{.cost = 0.0, .required = {}, .enode_id = enode_id}}};
         } else {
-          result = MapAlts(*children[0], 0.0, enode_id);
+          result = CostFrontier::LazyMap(*children[0], 0.0, enode_id);
           for (auto const *arg : children.subspan(1)) {
             result = CombineAlts(result, *arg, 0.0, enode_id);
           }
@@ -386,7 +371,6 @@ struct PlanCostModel {
           alt.cost += 1.0;
           alt.cardinality = cardinality;
           alt.enode_id = enode_id;
-          alt.is_alive = AliveTag::NotApplicable;
         });
         return result;
       }
