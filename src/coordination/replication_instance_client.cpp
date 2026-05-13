@@ -19,16 +19,6 @@
 
 #include <string>
 
-namespace {
-
-auto CreateClientContext(std::optional<memgraph::utils::TlsConfig> const &tls_config)
-    -> memgraph::communication::ClientContext {
-  return tls_config.has_value() ? memgraph::communication::ClientContext{tls_config->key_file, tls_config->cert_file}
-                                : memgraph::communication::ClientContext{};
-}
-
-}  // namespace
-
 namespace memgraph::coordination {
 
 // clang-format off
@@ -52,8 +42,8 @@ RpcInfoMetrics(UpdateDataInstanceConfigRpc)
     ReplicationInstanceClient::ReplicationInstanceClient(std::string instance_name, io::network::Endpoint mgt_server,
                                                          CoordinatorInstance *coord_instance,
                                                          const std::chrono::seconds instance_health_check_frequency_sec,
-                                                         std::optional<utils::TlsConfig> const &tls_config)
-    : rpc_context_{CreateClientContext(tls_config)},
+                                                         std::optional<utils::TlsClientConfig> const &tls_config)
+    : rpc_context_{communication::CreateClientContext(tls_config)},
       rpc_client_{std::move(mgt_server), &rpc_context_},
       instance_name_(std::move(instance_name)),
       coord_instance_(coord_instance),
