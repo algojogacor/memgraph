@@ -17,7 +17,7 @@ A callable `(egraph, frontier_map, root, vector<Entry> &out)` that traverses the
 _Avoid_: "selector" (selection is a consequence, traversal is the contract)
 
 **DfsPostOrder**:
-Generic DFS scaffolding provided by `extractor.hpp`. Handles deduplication via a caller-supplied `seen` set and post-order emission. The caller supplies a `resolve(key, visit_child) -> Entry` callback that does the per-node work; `DfsPostOrder` supplies the recursion and emit structure.
+Generic DFS scaffolding provided by `extractor.hpp`. Handles deduplication via a caller-supplied `seen` map (`Key -> uint32_t` emitted index) and post-order emission. The caller supplies a `resolve(key, visit_child) -> Entry` callback that does the per-node work; `DfsPostOrder` supplies the recursion and emit structure. `visit_child` returns the child's emitted index in `out`, so callers that need forward parent-to-child edges (e.g. to avoid re-deriving child keys downstream) can capture it.
 _Avoid_: calling it "the resolver" — it is scaffolding a resolver uses, not a resolver itself
 
 **PickBest**:

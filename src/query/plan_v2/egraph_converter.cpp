@@ -407,14 +407,20 @@ struct ResolvedKeyHash {
 
 /// One entry in the resolver's topological output: this key resolved to
 /// `enode_id`.  `is_alive` is meaningful only for Bind enodes; the builder
-/// reads it to decide whether sym/expr children participate.  `introduces`
-/// is carried so the builder can compute the same per-child keys the
-/// resolver did when the chosen alt was picked.
+/// reads it to decide whether sym/expr children participate.
+///
+/// `child_begin`/`child_end` index into the shared `child_indices` CSR
+/// buffer on `QueryPlannerContext::impl()`.  Each slot holds the
+/// `build_order` index of one child the resolver visited - in resolver-visit
+/// order, which matches enode-children order for the dispatch arms in
+/// `ResolveChildren` (alive Bind/Unwind: [input, sym, expr];
+/// dead Bind/Unwind: [input]; Subquery: [outer, inner, syms...];
+/// Output: [pipe, named_outs...]; generic: enode children).
 struct TopoEntry {
-  ResolvedKey key;
   planner::core::ENodeId enode_id;
   AliveTag is_alive = AliveTag::NotApplicable;
-  SymbolSet introduces;
+  std::uint32_t child_begin = 0;
+  std::uint32_t child_end = 0;
 };
 
 // ============================================================================
@@ -485,11 +491,12 @@ void ResolveGenericChildren(planner::core::ENode<symbol> const &enode, ResolvedK
 
 /// Dispatch to the appropriate child-resolution function based on enode shape.
 ///
+/// Called only by `PlanResolver`.  The builder reads forward child indices the
+/// resolver recorded into `child_indices`, so the child-key derivation rule
+/// lives in exactly one place.
+///
 /// `exposed_syms` must be pre-computed by the caller for Subquery enodes
-/// (pass nullptr for all other enode types).  Both the resolver and the builder
-/// call this function once per selected enode; a Subquery may be visited under
-/// multiple provided-sets, so computing the set at the callsite and passing it
-/// in ensures it is derived only once per visit rather than once per call.
+/// (pass nullptr for all other enode types).
 template <typename Visit>
 void ResolveChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, AliveTag is_alive,
                      SymbolSet const &chosen_introduces, SymbolSet const *exposed_syms, Visit visit) {
@@ -530,10 +537,12 @@ void ResolveChildren(planner::core::ENode<symbol> const &enode, ResolvedKey cons
 /// its own provided set, so no path is forced to settle for a sub-optimal
 /// alt that another path's smaller scope already chose.
 ///
-/// Output is a topological order (children-before-parents) of TopoEntries.
-/// The builder consumes this order, keying its build cache by ResolvedKey,
-/// so subtrees are shared exactly when they appear under the same provided
-/// context and instantiated independently when they don't.
+/// Output is a topological order (children-before-parents) of TopoEntries
+/// plus a packed CSR `child_indices` buffer where each entry's slice gives
+/// the `build_order` indices of the children the resolver visited (in the
+/// order `ResolveChildren` emits them).  The builder reads the CSR directly
+/// and never re-derives child keys, so the child-resolution rule lives in
+/// exactly one place.
 struct PlanResolver {
   using EClassId = planner::core::EClassId;
   using FrontierMap = planner::core::extract::FrontierMap<CostFrontier>;
@@ -541,13 +550,15 @@ struct PlanResolver {
   using TopoOrder = std::vector<TopoEntry>;
 
   void operator()(EGraph const &egraph, FrontierMap const &frontier_map, EClassId root, TopoOrder &out_order,
-                  boost::unordered_flat_set<ResolvedKey, ResolvedKeyHash> &seen) const {
+                  std::vector<std::uint32_t> &child_indices,
+                  boost::unordered_flat_map<ResolvedKey, std::uint32_t, ResolvedKeyHash> &seen) const {
     if (!out_order.empty()) ThrowPlannerBug("resolver output must be empty on entry.");
+    if (!child_indices.empty()) ThrowPlannerBug("resolver child_indices must be empty on entry.");
     planner::core::extract::DfsPostOrder(
         ResolvedKey{root, SymbolSet{}, SymbolSet{}},
         seen,
         out_order,
-        [&](ResolvedKey key, auto visit_child) -> TopoEntry {
+        [&](ResolvedKey const &key, auto visit_child) -> TopoEntry {
           auto const fr_it = frontier_map.find(key.eclass);
           if (fr_it == frontier_map.end() || !fr_it->second.has_value())
             ThrowPlannerBug("eclass has no frontier during resolution.");
@@ -562,16 +573,21 @@ struct PlanResolver {
           auto const exposed = (enode.symbol() == symbol::Subquery && enode_children.size() >= 2)
                                    ? std::make_optional(ExposedSymsFromChildren(enode_children.subspan(2)))
                                    : std::nullopt;
+          // Per-frame scratch: collect this entry's child indices contiguously
+          // here, then bulk-append to the shared CSR at emit time.  Direct
+          // append-on-visit would interleave with grandchildren's appends.
+          boost::container::small_vector<std::uint32_t, 4> scratch;
           ResolveChildren(enode,
                           key,
                           chosen.is_alive,
                           chosen.introduces,
                           exposed ? &*exposed : nullptr,
-                          [&](ResolvedKey child_key) { visit_child(std::move(child_key)); });
-          return TopoEntry{.key = std::move(key),
-                           .enode_id = chosen.enode_id,
-                           .is_alive = chosen.is_alive,
-                           .introduces = chosen.introduces};
+                          [&](ResolvedKey child_key) { scratch.push_back(visit_child(std::move(child_key))); });
+          auto const begin = static_cast<std::uint32_t>(child_indices.size());
+          child_indices.insert(child_indices.end(), scratch.begin(), scratch.end());
+          auto const end = static_cast<std::uint32_t>(child_indices.size());
+          return TopoEntry{
+              .enode_id = chosen.enode_id, .is_alive = chosen.is_alive, .child_begin = begin, .child_end = end};
         });
   }
 };
@@ -815,7 +831,11 @@ struct Builder {
 struct QueryPlannerContext::Impl {
   planner::core::extract::FrontierContext<CostFrontier> frontier_context;
   std::vector<TopoEntry> build_order;
-  boost::unordered_flat_set<ResolvedKey, ResolvedKeyHash> resolver_seen;
+  /// CSR child-index buffer: each `TopoEntry`'s [child_begin, child_end)
+  /// slice references children by their `build_order` index.  Filled by the
+  /// resolver in entry-emit order, so each entry's children are contiguous.
+  std::vector<std::uint32_t> child_indices;
+  boost::unordered_flat_map<ResolvedKey, std::uint32_t, ResolvedKeyHash> resolver_seen;
   /// User-provided estimator override.  null -> ConvertToLogicalOperator
   /// builds a BuiltinEstimator over the current egraph for this call.
   std::unique_ptr<CardinalityEstimator> estimator_override;
@@ -826,6 +846,7 @@ struct QueryPlannerContext::Impl {
   void clear() {
     frontier_context.clear();
     build_order.clear();
+    child_indices.clear();
     resolver_seen.clear();
   }
 };
@@ -918,7 +939,12 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   // (eclass, provided) pairs - one entry per distinct path-context the
   // resolver visited, so each path can pick the alt that's optimal under
   // its own scope.
-  PlanResolver{}(impl.egraph_, ctx.frontier_context.frontier_map, true_root, ctx.build_order, ctx.resolver_seen);
+  PlanResolver{}(impl.egraph_,
+                 ctx.frontier_context.frontier_map,
+                 true_root,
+                 ctx.build_order,
+                 ctx.child_indices,
+                 ctx.resolver_seen);
 
   /// STAGE: Build selected (LogicalOperator, Expression *, Symbol, NamedExpression *, etc.)
   auto builder = Builder{impl.storage<symbol::Literal>().store,
@@ -926,79 +952,39 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
                          impl.storage<symbol::Symbol>().store,
                          impl.storage<symbol::Function>().info};
 
-  // ---------------------------------------------------------------------------
-  // build_cache reference-stability contract - DO NOT REGRESS.
-  // ---------------------------------------------------------------------------
-  //
-  // build_cache uses open-addressing (boost::unordered_flat_map).  On rehash,
-  // ALL references / iterators / pointers into the table are invalidated -
-  // there are no stable nodes to fall back to.  Two consequences for the
-  // Builder loop:
-  //
-  //   (1) Never write `cache[k] = cache.at(other_k)` or any expression where
-  //       the LHS subscript and the RHS read the same map.  The LHS [] may
-  //       insert (rehashing), invalidating the RHS reference before the
-  //       assignment runs.  Always sequence: read RHS into a local first,
-  //       then assign.
-  //
-  //   (2) Never hold a reference into build_cache across an insertion
-  //       (including via children_refs / reference_wrapper / span).  If the
-  //       insert rehashes, the captured ref dangles and any subsequent read
-  //       through it is undefined.  The builder.Build() call below takes a
-  //       span of refs into build_cache; we materialise its return into a
-  //       local BEFORE the LHS [] runs.
-  //
-  // Belt-and-braces: reserve(build_order.size()) up-front so the loop's []
-  // inserts can never rehash.
-  auto build_cache = boost::unordered_flat_map<ResolvedKey, BuildResult, ResolvedKeyHash>{};
-  build_cache.reserve(ctx.build_order.size());
+  // Dense build cache indexed by `build_order` position.  The resolver's
+  // `seen` map guarantees each (eclass, provided) is emitted exactly once,
+  // so a flat vector suffices - no hashing, no rehash-invalidation hazards.
+  // The vector is sized once and never resized, so refs into it are stable
+  // for the duration of the loop.
+  auto built = std::vector<BuildResult>(ctx.build_order.size());
 
-  auto const cache_lookup = [&](ResolvedKey const &child_key) {
-    auto const it = build_cache.find(child_key);
-    DMG_ASSERT(it != build_cache.end(), "Building bottom up we should be able to find our child");
-    return std::cref(it->second);
-  };
-  // build_order is children-before-parents (post-order from the resolver);
-  // walk it forward so every child is in build_cache before its parent.
   auto children_refs = std::vector<child_ref>{};
-  for (auto const &entry : ctx.build_order) {
+  for (std::uint32_t i = 0; i < ctx.build_order.size(); ++i) {
+    auto const &entry = ctx.build_order[i];
     auto const &enode = impl.egraph_.get_enode(entry.enode_id);
-    auto const &children = enode.children();
-    bool const is_bind = enode.symbol() == symbol::Bind && children.size() == 3;
+    bool const is_bind = enode.symbol() == symbol::Bind && enode.children().size() == 3;
 
-    // Dead Bind: pass through input.  sym/expr were never resolved for
-    // this key, so they're absent from build_cache.  The dead branch
-    // forwards demanded_introduces unchanged (see ResolveChildren).
-    //
-    // The input child key is guaranteed to be in build_cache: the resolver
-    // visited it (via ResolveChildren) before emitting this dead Bind entry,
-    // and each (eclass, provided) pair is resolved exactly once (seen set).
+    // Dead Bind: forward the input child's BuildResult.  sym/expr were never
+    // resolved; the resolver emitted exactly one child (the input).
     if (is_bind && entry.is_alive != AliveTag::Alive) {
-      auto const input_key = ResolvedKey{children[0], entry.key.provided, entry.key.demanded_introduces};
-      auto const it = build_cache.find(input_key);
-      DMG_ASSERT(it != build_cache.end(), "Dead Bind input key must be in build_cache - resolver invariant violated");
-      build_cache[entry.key] = std::move(it->second);
+      DMG_ASSERT(entry.child_end - entry.child_begin == 1, "dead Bind must have one resolver-emitted child");
+      built[i] = std::move(built[ctx.child_indices[entry.child_begin]]);
       continue;
     }
 
     children_refs.clear();
-    children_refs.reserve(children.size());
-    // Resolve children using the same rule the resolver used (see ResolveChildren).
-    auto const exposed = (enode.symbol() == symbol::Subquery && children.size() >= 2)
-                             ? std::make_optional(ExposedSymsFromChildren(children.subspan(2)))
-                             : std::nullopt;
-    ResolveChildren(
-        enode, entry.key, entry.is_alive, entry.introduces, exposed ? &*exposed : nullptr, [&](ResolvedKey child_key) {
-          children_refs.push_back(cache_lookup(child_key));
-        });
-    // See contract (2) above: materialise Build's result before the LHS [] runs.
-    auto build_result = builder.Build(enode, children_refs);
-    build_cache[entry.key] = std::move(build_result);
+    children_refs.reserve(entry.child_end - entry.child_begin);
+    for (auto j = entry.child_begin; j < entry.child_end; ++j) {
+      children_refs.push_back(std::cref(built[ctx.child_indices[j]]));
+    }
+    built[i] = builder.Build(enode, children_refs);
   }
 
   // STAGE: Get the built root as std::unique_ptr<LogicalOperator>.
-  auto root_key = ResolvedKey{true_root, SymbolSet{}, SymbolSet{}};
-  auto *ptr = std::get_if<LogicalOperatorPtr>(&build_cache[root_key]);
+  // Post-order emits the root last (it is the outermost recursion).
+  DMG_ASSERT(!built.empty(), "build order must contain at least the root entry");
+  auto *ptr = std::get_if<LogicalOperatorPtr>(&built.back());
   if (!ptr) throw QueryException{"Root should be LogicalOperator"};
   auto &result = *ptr;
 

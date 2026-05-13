@@ -12,7 +12,9 @@
 #pragma once
 
 #include <concepts>
+#include <cstdint>
 #include <deque>
+#include <limits>
 #include <span>
 #include <utility>
 #include <vector>
@@ -20,7 +22,6 @@
 #include <cassert>
 
 #include <boost/unordered/unordered_flat_map.hpp>
-#include <boost/unordered/unordered_flat_set.hpp>
 
 #include "planner/extract/pareto_frontier.hpp"
 
@@ -248,16 +249,27 @@ template <typename Symbol, typename Analysis, typename CostModel>
 //
 // resolve signature: (Key key, auto visit_child) -> Entry
 //   - Must call visit_child(child_key) for each child the entry depends on.
+//     visit_child returns the child's index in `out` (its emitted position
+//     in the post-order), which the caller may record to build forward
+//     parent-to-child edges without re-deriving keys downstream.
 //   - May call visit_child zero times (leaf node).
 //   - Must return the Entry to emit for `key` after all children are visited.
 
 template <typename Key, typename KeyHash, typename Entry, typename ResolveFn>
-void DfsPostOrder(Key root, boost::unordered_flat_set<Key, KeyHash> &seen, std::vector<Entry> &out,
+void DfsPostOrder(Key root, boost::unordered_flat_map<Key, std::uint32_t, KeyHash> &seen, std::vector<Entry> &out,
                   ResolveFn &&resolve) {
-  auto recurse = [&](this auto const &self, Key key) {
-    if (!seen.insert(key).second) return;
-    auto entry = resolve(key, [&self](Key child) { self(std::move(child)); });
+  constexpr std::uint32_t kCycleSentinel = std::numeric_limits<std::uint32_t>::max();
+  auto recurse = [&](this auto const &self, Key key) -> std::uint32_t {
+    auto [it, inserted] = seen.try_emplace(std::move(key), kCycleSentinel);
+    if (!inserted) {
+      assert(it->second != kCycleSentinel && "cycle in DfsPostOrder");
+      return it->second;
+    }
+    auto entry = resolve(it->first, [&self](Key child) { return self(std::move(child)); });
+    auto const idx = static_cast<std::uint32_t>(out.size());
     out.push_back(std::move(entry));
+    it->second = idx;
+    return idx;
   };
   recurse(std::move(root));
 }

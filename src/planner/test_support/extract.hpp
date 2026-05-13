@@ -12,10 +12,11 @@
 #pragma once
 
 #include <cassert>
+#include <cstdint>
 #include <utility>
 #include <vector>
 
-#include <boost/unordered/unordered_flat_set.hpp>
+#include <boost/unordered/unordered_flat_map.hpp>
 
 #include "planner/extract/extractor.hpp"
 
@@ -55,13 +56,13 @@ struct DefaultResolver {
                   core::extract::FrontierMap<CostResult> const &frontier_map, core::EClassId root,
                   std::vector<std::pair<core::EClassId, core::ENodeId>> &out) const {
     assert(out.empty() && "Resolver precondition: out must be empty on entry");
-    boost::unordered_flat_set<core::EClassId> seen;
+    boost::unordered_flat_map<core::EClassId, std::uint32_t> seen;
     core::extract::DfsPostOrder(
         root, seen, out, [&](core::EClassId id, auto visit_child) -> std::pair<core::EClassId, core::ENodeId> {
           auto it = frontier_map.find(id);
           assert(it != frontier_map.end() && it->second.has_value());
           auto [enode_id, cost] = it->second->resolve();
-          for (auto child : egraph.get_enode(enode_id).children()) visit_child(child);
+          for (auto child : egraph.get_enode(enode_id).children()) (void)visit_child(child);
           return {id, enode_id};
         });
   }
