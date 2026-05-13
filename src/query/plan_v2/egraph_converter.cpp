@@ -525,19 +525,10 @@ void ResolveChildren(planner::core::ENode<symbol> const &enode, ResolvedKey cons
   }
 }
 
-/// Pick the cheapest alt with required ⊆ provided AND introduces ⊇ demanded.
-[[nodiscard]] auto pick_compatible(CostFrontier const &frontier, SymbolSet const &provided, SymbolSet const &demanded)
-    -> Alternative const & {
-  auto const *best = planner::core::extract::PickBest(frontier.alts(), [&](Alternative const &alt) {
-    return alt.required.is_compatible(provided) && std::ranges::includes(alt.introduces, demanded);
-  });
-  if (!best) {
-    throw QueryException{
-        "Plan extraction failed: no compatible alternative at this node. "
-        "This is a planner bug - please report it at "
-        "https://github.com/memgraph/memgraph/issues"};
-  }
-  return *best;
+[[noreturn]] void ThrowPlannerBug(std::string_view detail) {
+  throw QueryException{std::string{"Plan extraction failed: "} + std::string{detail} +
+                       " This is a planner bug - please report it at "
+                       "https://github.com/memgraph/memgraph/issues"};
 }
 
 /// Context-aware resolver with PER-PATH caching.
@@ -560,15 +551,21 @@ struct PlanResolver {
 
   void operator()(EGraph const &egraph, FrontierMap const &frontier_map, EClassId root, TopoOrder &out_order,
                   boost::unordered_flat_set<ResolvedKey, ResolvedKeyHash> &seen) const {
-    assert(out_order.empty() && "Resolver precondition: out must be empty on entry");
+    if (!out_order.empty()) ThrowPlannerBug("resolver output must be empty on entry.");
     planner::core::extract::DfsPostOrder(
         ResolvedKey{root, SymbolSet{}, SymbolSet{}},
         seen,
         out_order,
         [&](ResolvedKey key, auto visit_child) -> TopoEntry {
-          auto fr_it = frontier_map.find(key.eclass);
-          assert(fr_it != frontier_map.end() && fr_it->second.has_value());
-          auto const &chosen = pick_compatible(*fr_it->second, key.provided, key.demanded_introduces);
+          auto const fr_it = frontier_map.find(key.eclass);
+          if (fr_it == frontier_map.end() || !fr_it->second.has_value())
+            ThrowPlannerBug("eclass has no frontier during resolution.");
+          auto valid_alt = [&provided = key.provided, &demanded = key.demanded_introduces](Alternative const &alt) {
+            return alt.required.is_compatible(provided) && std::ranges::includes(alt.introduces, demanded);
+          };
+          auto const *best = planner::core::extract::PickBest(fr_it->second->alts(), valid_alt);
+          if (!best) ThrowPlannerBug("no compatible alternative at this node.");
+          auto const &chosen = *best;
           auto const &enode = egraph.get_enode(chosen.enode_id);
           auto const &enode_children = enode.children();
           auto const exposed = (enode.symbol() == symbol::Subquery && enode_children.size() >= 2)
