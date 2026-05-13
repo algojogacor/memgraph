@@ -244,19 +244,12 @@ template <typename Symbol, typename Analysis, typename CostModel>
 template <typename Key, typename KeyHash, typename Entry, typename ResolveFn>
 void DfsPostOrder(Key root, boost::unordered_flat_set<Key, KeyHash> &seen, std::vector<Entry> &out,
                   ResolveFn &&resolve) {
-  struct Recurse {
-    boost::unordered_flat_set<Key, KeyHash> &seen;
-    std::vector<Entry> &out;
-    std::remove_reference_t<ResolveFn> &resolve;
-
-    void operator()(Key key) {
-      if (!seen.insert(key).second) return;
-      auto entry = resolve(key, [this](Key child) { (*this)(std::move(child)); });
-      out.push_back(std::move(entry));
-    }
+  auto recurse = [&](this auto const &self, Key key) {
+    if (!seen.insert(key).second) return;
+    auto entry = resolve(key, [&self](Key child) { self(std::move(child)); });
+    out.push_back(std::move(entry));
   };
-
-  Recurse{seen, out, resolve}(std::move(root));
+  recurse(std::move(root));
 }
 
 }  // namespace memgraph::planner::core::extract
