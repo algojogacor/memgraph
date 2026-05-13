@@ -13,12 +13,10 @@
 //
 // Bypasses the Cypher parser by building the egraph directly through the
 // public Make* API and calling ConvertToLogicalOperator(egraph, root), which
-// invokes all five extraction stages in egraph_converter.cpp:
+// invokes the extraction pipeline in egraph_converter.cpp:
 //   1. ComputeFrontiers       (bottom-up Pareto frontier propagation)
-//   2. PlanResolver           (top-down Bind-aware selection, the focus)
-//   3. CollectDependencies    (in-degree counting over selected enodes)
-//   4. TopologicalSort        (Kahn-order materialisation)
-//   5. Builder                (AST emission per selected enode)
+//   2. PlanResolver           (top-down Bind-aware DFS post-order selection, the focus)
+//   3. Builder                (AST emission per selected enode)
 
 #include <string>
 #include <vector>

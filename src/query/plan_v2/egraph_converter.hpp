@@ -34,13 +34,13 @@ struct ExtractionResult {
   SymbolTable symbol_table;
 };
 
-/// Per-session planner state.  Today this owns the ExtractionContext buffers
-/// (frontier map, selection, in-degree, topo order) so their allocated
-/// capacity is reused across queries instead of being freed and re-grown each
-/// time; it will grow to hold any other per-session planner state (caches,
-/// scratch arenas) as the planner v2 stabilises.  Hold one per Interpreter and
-/// pass it to ConvertToLogicalOperator.  Pimpl so callers don't see
-/// CostFrontier / Alternative.
+/// Per-session planner state.  Today this owns the FrontierContext buffers
+/// (frontier map, resolver scratch) so their allocated capacity is reused
+/// across queries instead of being freed and re-grown each time; it will grow
+/// to hold any other per-session planner state (caches, scratch arenas) as
+/// the planner v2 stabilises.  Hold one per Interpreter and pass it to
+/// ConvertToLogicalOperator.  Pimpl so callers don't see CostFrontier /
+/// Alternative.
 ///
 /// Optionally holds a user-provided CardinalityEstimator override.  Default
 /// construction leaves the override empty: ConvertToLogicalOperator builds

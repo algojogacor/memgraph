@@ -34,7 +34,7 @@ namespace memgraph::planner::core::extract {
 //
 // Every cost model defines:
 //   using CostResult = ...;
-//   operator()(ENode const &, ENodeId, span<CostResult const * const>) -> CostResult
+//   operator()(ENode const &, ENodeId, span<CostResult const * const> children) -> CostResult
 //
 // `children` is a span of pointers into `frontier_map`; the pointees are
 // read-only.  Cost models that need to consume a child frontier (e.g. pass
@@ -68,52 +68,14 @@ concept CostResultType = std::copyable<CR> && requires(CR &a, CR &&r, CR const &
 template <typename CostResult>
 using EClassFrontier = std::optional<CostResult>;
 
-/// Map from EClassId to its computed frontier.  Part of the Resolver contract:
-/// resolvers receive `FrontierMap<CR> const &` after ComputeFrontiers populates it.
+/// Map from EClassId to its computed frontier.  Passed to the Resolver after
+/// ComputeFrontiers populates it.
 template <typename CostResult>
 using FrontierMap = boost::unordered_flat_map<EClassId, EClassFrontier<CostResult>>;
-
-/// Selection: one enode chosen per eclass, with its cost.
-template <typename CostType>
-struct Selection {
-  ENodeId enode_id;
-  CostType cost;
-};
-
-/// Map from EClassId to the enode chosen by a Resolver, with its cost.
-template <typename CostType>
-using SelectionMap = boost::unordered_flat_map<EClassId, Selection<CostType>>;
-
-// ============================================================================
-// Resolver contract
-// ============================================================================
-//
-// A Resolver is a stateless functor `r(egraph, frontier_map, root, out)` that
-// fills `out` with a SelectionMap.  It chooses one enode per eclass and decides
-// which of that enode's children are part of the extracted tree.
-//
-// Precondition: `out` is empty on entry.
-//
-// Contract on the populated SelectionMap:
-//   - root is in the map.
-//   - For each (id, sel) in the map, sel.enode_id is a valid enode in eclass id.
-//   - For each (id, sel) in the map, every child of sel.enode_id that the
-//     resolver wishes to be part of the extracted tree is also in the map.
-//   - Children absent from the map are deliberately excluded ("dead").
-
-template <typename R, typename Symbol, typename Analysis, typename CostResult>
-concept Resolver =
-    CostResultType<CostResult> && std::invocable<R, EGraph<Symbol, Analysis> const &, FrontierMap<CostResult> const &,
-                                                 EClassId, SelectionMap<typename CostResult::cost_t> &>;
 
 // ============================================================================
 // Extraction stages
 // ============================================================================
-// Most callers should use Extract().  The individual stages are public for
-// callers that need to interleave their own work between them.
-
-/// In-degree map for topological sorting.
-using InDegreeMap = boost::unordered_flat_map<EClassId, int>;
 
 /// Pool of children-frontier buffers used by ComputeFrontiers' recursive
 /// descent.  Each recursive frame acquires one buffer; nested frames acquire
@@ -121,12 +83,10 @@ using InDegreeMap = boost::unordered_flat_map<EClassId, int>;
 /// shared buffer would not work because the recursive call to ComputeFrontiers
 /// happens inside the per-enode loop, which would clobber the caller frame's
 /// buffer.  Capacity of inner vectors persists across queries because the
-/// outer pool is owned by ExtractionContext.
+/// outer pool is owned by FrontierContext.
 template <CostResultType CostResult>
 struct FrontierBufferPool {
  private:
-  /// Acquire a buffer for the current recursive frame.  Cleared on entry but
-  /// keeps its capacity from previous uses at the same depth.
   auto internal_acquire() -> std::vector<CostResult const *> & {
     if (depth == pool.size()) pool.emplace_back();
     auto &buf = pool[depth++];
@@ -228,18 +188,18 @@ template <typename Symbol, typename Analysis, typename CostModel>
     // does not trigger a rehash since the key already exists.
     children_frontiers.clear();
     children_frontiers.reserve(enode.children().size());
-    auto has_cyclic_child = false;
+    auto has_uncomputable_child = false;
     for (auto child : enode.children()) {
       auto it = out.find(child);
       if (it == out.end() || !it->second) {
         // Erased (fully cyclic) or in-progress sentinel (self/mutual cycle).
         // Cost model won't be called, no need to gather remaining children.
-        has_cyclic_child = true;
+        has_uncomputable_child = true;
         break;
       }
       children_frontiers.push_back(&*it->second);
     }
-    if (has_cyclic_child) continue;
+    if (has_uncomputable_child) continue;
 
     auto enode_frontier = cost_model(enode, enode_id, children_frontiers);
 
@@ -264,194 +224,39 @@ template <typename Symbol, typename Analysis, typename CostModel>
   return nullptr;
 }
 
-/// Scratch buffers used by the dependency traversal in CollectDependencies.
-/// Owned by ExtractionContext so that warm Extract() calls don't reallocate.
-struct TraversalScratch {
-  std::vector<EClassId> worklist;
-  boost::unordered_flat_set<EClassId> visited;
-
-  void clear() noexcept {
-    worklist.clear();
-    visited.clear();
-  }
-};
-
-/// Contiguous FIFO queue for EClassIds.  Stores all elements in a single
-/// vector; a front cursor advances instead of shifting elements.  Retains
-/// buffer capacity across clear() calls, so warm TopologicalSort calls are
-/// allocation-free after the first call's high-water mark is reached.
-struct FifoQueue {
-  void push_back(EClassId id) { buf_.push_back(id); }
-
-  [[nodiscard]] auto front() const -> EClassId { return buf_[front_]; }
-
-  void pop_front() { ++front_; }
-
-  [[nodiscard]] auto empty() const -> bool { return front_ == buf_.size(); }
-
-  void clear() noexcept {
-    buf_.clear();
-    front_ = 0;
-  }
-
- private:
-  std::vector<EClassId> buf_;
-  std::size_t front_ = 0;
-};
-
-template <typename Symbol, typename Analysis, typename CostResult>
-void CollectDependencies(EGraph<Symbol, Analysis> const &egraph, SelectionMap<CostResult> const &enode_selection,
-                         EClassId root, TraversalScratch &scratch, InDegreeMap &out) {
-  out.emplace(root, 0);
-  auto const n = enode_selection.size();
-  scratch.worklist.reserve(n);
-  scratch.visited.reserve(n);
-  scratch.worklist.push_back(root);
-  scratch.visited.insert(root);
-
-  // Iterative DFS traversal (LIFO worklist).
-  while (!scratch.worklist.empty()) {
-    auto curr = scratch.worklist.back();
-    scratch.worklist.pop_back();
-
-    auto enode_it = enode_selection.find(curr);
-    assert(enode_it != enode_selection.end() && "all reachable EClasses should have selected ENode");
-
-    auto const &enode = egraph.get_enode(enode_it->second.enode_id);
-    for (auto child : enode.children()) {
-      // Only walk children present in the selection (Resolver contract:
-      // absent children are deliberately excluded).
-      if (!enode_selection.contains(child)) continue;
-      ++out[child];
-      if (scratch.visited.insert(child).second) {
-        scratch.worklist.emplace_back(child);
-      }
-    }
-  }
-}
-
-/// Kahn's topological sort.  `in_degree` is consumed in place - its counts are
-/// decremented to zero by the algorithm; on return its contents are unspecified
-/// from the caller's perspective.  `out` and `ready` are filled (caller-clears).
-template <typename Symbol, typename Analysis, typename CostResult>
-void TopologicalSort(EGraph<Symbol, Analysis> const &egraph, SelectionMap<CostResult> const &enode_selection,
-                     InDegreeMap &in_degree, FifoQueue &ready, std::vector<std::pair<EClassId, ENodeId>> &out) {
-  auto const expected = in_degree.size();
-  out.reserve(expected);
-
-  for (auto const &[eclass, degree] : in_degree)
-    if (degree == 0) ready.push_back(eclass);
-
-  while (!ready.empty()) {
-    auto current = ready.front();
-    ready.pop_front();
-
-    auto it = enode_selection.find(current);
-    assert(it != enode_selection.end() && "all reachable EClasses should have selected ENode");
-
-    auto enode_id = it->second.enode_id;
-    out.emplace_back(current, enode_id);
-
-    auto const &enode = egraph.get_enode(enode_id);
-    for (EClassId child : enode.children()) {
-      auto deg_it = in_degree.find(child);
-      if (deg_it == in_degree.end()) continue;  // resolver excluded child - see Resolver contract
-      if (--deg_it->second == 0) {
-        ready.push_back(child);
-      }
-    }
-  }
-
-  // Post-condition: all nodes must have been emitted. If not, the input contained a cycle,
-  // which means an upstream stage (ComputeFrontiers or the Resolver) admitted a cyclic
-  // dependency into the resolved selection - a bug in that stage.
-  assert(out.size() == expected &&
-         "TopologicalSort: cycle detected - resolved selection is not a DAG; "
-         "check ComputeFrontiers and the Resolver for upstream bug");
-}
-
 // ============================================================================
-// Extract - test/bench entry point
+// DfsPostOrder — resolver scaffolding
 // ============================================================================
 //
-// Everything below (ExtractionContext, ExtractView, Extract) is intended for
-// tests and benchmarks only.  Production code calls ComputeFrontiers and the
-// resolver directly via QueryPlannerContext / ConvertToLogicalOperator.
+// Resolvers fill a `vector<Entry>` in children-before-parents order.  The
+// caller supplies a `resolve(key, visit_child) -> Entry` callback that handles
+// per-node logic (frontier lookup, alt selection, child-key dispatch); this
+// function supplies the recursion, deduplication, and post-order emit.
 //
-// The pipeline (frontier-build → resolve → collect-deps → topo-sort) lives
-// here as one function so the order, the invariants, and the contract between
-// stages are all in one place.  Two customisation points: the `cost_model`
-// (CostResultType) and the `resolver` (Resolver).
+// `seen` is owned by the caller for reuse across queries (clear() between
+// calls).  `out` is also caller-owned and must be empty on entry.
+//
+// resolve signature: (Key key, auto visit_child) -> Entry
+//   - Must call visit_child(child_key) for each child the entry depends on.
+//   - May call visit_child zero times (leaf node).
+//   - Must return the Entry to emit for `key` after all children are visited.
 
-/// Caller-owned buffer for stage state, reused across Extract() calls.
-///
-/// All four output buffers (frontier_ctx, selection, in_degree, order) and the
-/// two scratch buffers (deps, ready) are passed by reference into the pipeline
-/// stages, which fill them in place.  clear() preserves capacity so that warm
-/// Extract() calls allocate only when growing past the high-water mark.
-template <CostResultType CostResult>
-struct ExtractionContext {
-  FrontierContext<CostResult> frontier_ctx;
-  SelectionMap<typename CostResult::cost_t> selection;
-  InDegreeMap in_degree;
-  std::vector<std::pair<EClassId, ENodeId>> order;
-  TraversalScratch deps;
-  FifoQueue ready;
+template <typename Key, typename KeyHash, typename Entry, typename ResolveFn>
+void DfsPostOrder(Key root, boost::unordered_flat_set<Key, KeyHash> &seen, std::vector<Entry> &out,
+                  ResolveFn &&resolve) {
+  struct Recurse {
+    boost::unordered_flat_set<Key, KeyHash> &seen;
+    std::vector<Entry> &out;
+    std::remove_reference_t<ResolveFn> &resolve;
 
-  void clear() noexcept {
-    frontier_ctx.clear();
-    selection.clear();
-    in_degree.clear();
-    order.clear();
-    deps.clear();
-    ready.clear();
-  }
-};
+    void operator()(Key key) {
+      if (!seen.insert(key).second) return;
+      auto entry = resolve(key, [this](Key child) { (*this)(std::move(child)); });
+      out.push_back(std::move(entry));
+    }
+  };
 
-/// View over ExtractionContext-owned storage.  Valid until the next Extract()
-/// call on the same context.
-template <CostResultType CostResult>
-struct ExtractView {
-  std::span<std::pair<EClassId, ENodeId> const> order;
-  CostResult::cost_t root_cost;
-};
-
-/// Primary entry point.  Caller owns `ctx`; the returned view points into
-/// ctx-owned storage and is valid until the next Extract() call on `ctx`.
-///
-/// This entry point is intended for tests and benchmarks. Production code calls
-/// ComputeFrontiers and the resolver directly via QueryPlannerContext.
-template <typename Symbol, typename Analysis, typename CostModel, typename ResolverFn>
-  requires CostResultType<typename CostModel::CostResult> &&
-           Resolver<ResolverFn, Symbol, Analysis, typename CostModel::CostResult>
-[[nodiscard]] auto Extract(EGraph<Symbol, Analysis> const &egraph, EClassId root, CostModel const &cost_model,
-                           ResolverFn resolver, ExtractionContext<typename CostModel::CostResult> &ctx)
-    -> ExtractView<typename CostModel::CostResult> {
-  using CostResult = CostModel::CostResult;
-
-  ctx.clear();
-
-  // Stage 1: bottom-up cost propagation.  Reserve up-front so the recursive
-  // descent doesn't re-hash as eclasses are inserted.
-  ctx.frontier_ctx.frontier_map.reserve(egraph.num_classes());
-  (void)ComputeFrontiers(egraph, cost_model, root, ctx.frontier_ctx);
-
-  // Stage 2: top-down resolution.  Resolver is responsible for the contract
-  // documented above (chosen-coverage selection map).
-  resolver(egraph, ctx.frontier_ctx.frontier_map, root, ctx.selection);
-
-  // Stage 3: count in-degrees over the resolver-chosen child set.
-  CollectDependencies(egraph, ctx.selection, root, ctx.deps, ctx.in_degree);
-
-  // Stage 4: topological sort.  Consumes ctx.in_degree in place.
-  TopologicalSort(egraph, ctx.selection, ctx.in_degree, ctx.ready, ctx.order);
-
-  auto root_cost = typename CostResult::cost_t{};
-  if (auto it = ctx.selection.find(root); it != ctx.selection.end()) {
-    root_cost = it->second.cost;
-  }
-
-  return ExtractView<CostResult>{ctx.order, root_cost};
+  Recurse{seen, out, resolve}(std::move(root));
 }
 
 }  // namespace memgraph::planner::core::extract

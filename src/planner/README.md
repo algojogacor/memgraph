@@ -70,13 +70,12 @@ Bytecode-based pattern matching for performance:
 
 ### Extraction (`extract/`)
 - `extractor.hpp` - Cost-based expression extraction
-  - Public stages: `ComputeFrontiers`, `CollectDependencies`, `TopologicalSort`
-  - `ExtractionContext` - reusable per-extraction storage (frontier map, selection, in-degree, order)
-  - `Extract(ctx, ...)` - one-shot sugar over the four stages
+  - `ComputeFrontiers` - bottom-up Pareto frontier propagation
+  - `DfsPostOrder` - resolver scaffolding: DFS post-order traversal (children-before-parents)
+  - `FrontierContext` - reusable per-extraction storage (frontier map, buffer pool)
 - `pareto_frontier.hpp` - `ParetoFrontier<Alt, Dominance>`
   - Used by cost models that propagate demand sets (or any per-alt context)
-  - Dominance pruning, merge, and `mutate_pruning_invariant_preserving` for
-    in-place edits that preserve the Pareto invariant
+  - Dominance pruning, merge, `mutate_pruning_invariant_preserving`, and `PickBest`
 
 ## Testing
 

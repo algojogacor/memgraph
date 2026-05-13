@@ -12,6 +12,7 @@
 #pragma once
 
 #include <cassert>
+#include <utility>
 #include <vector>
 
 #include <boost/unordered/unordered_flat_set.hpp>
@@ -38,42 +39,31 @@ struct DefaultCostResult {
 
 static_assert(core::extract::CostResultType<DefaultCostResult<double>>);
 
-/// Generic Resolver for tests and benchmarks: selects each eclass via
-/// CostResult::resolve and walks every child of the chosen enode.  Safe
-/// for any cost model whose children are unconditionally part of the
-/// extracted tree.
+/// Resolver for tests and benchmarks: selects each eclass via
+/// CostResult::resolve (min-cost alt) and walks every child of the chosen
+/// enode unconditionally.
 ///
-/// Not safe for cost models where a chosen alt may exclude some of its
-/// enode's children (e.g. plan_v2's PlanResolver, which honours alive/dead
+/// Not suitable for cost models where a chosen alt may exclude some of its
+/// enode's children (e.g. plan_v2's PlanResolver honours alive/dead
 /// semantics).  Production cost models with that shape provide their own
 /// resolver.
+///
+/// Output: vector<pair<EClassId, ENodeId>> in children-before-parents order.
 struct DefaultResolver {
   template <typename Symbol, typename Analysis, core::extract::CostResultType CostResult>
   void operator()(core::EGraph<Symbol, Analysis> const &egraph,
                   core::extract::FrontierMap<CostResult> const &frontier_map, core::EClassId root,
-                  core::extract::SelectionMap<typename CostResult::cost_t> &out) const {
+                  std::vector<std::pair<core::EClassId, core::ENodeId>> &out) const {
     assert(out.empty() && "Resolver precondition: out must be empty on entry");
-    auto to_visit = std::vector{root};
-    auto visited = boost::unordered_flat_set{root};
-
-    while (!to_visit.empty()) {
-      auto current = to_visit.back();
-      to_visit.pop_back();
-
-      auto it = frontier_map.find(current);
-      assert(it != frontier_map.end() && it->second.has_value());
-
-      auto const &frontier = *it->second;
-      auto [enode_id, cost] = frontier.resolve();
-      out.try_emplace(current, enode_id, cost);
-
-      auto const &enode = egraph.get_enode(enode_id);
-      for (auto child : enode.children()) {
-        if (visited.insert(child).second) {
-          to_visit.push_back(child);
-        }
-      }
-    }
+    boost::unordered_flat_set<core::EClassId> seen;
+    core::extract::DfsPostOrder(
+        root, seen, out, [&](core::EClassId id, auto visit_child) -> std::pair<core::EClassId, core::ENodeId> {
+          auto it = frontier_map.find(id);
+          assert(it != frontier_map.end() && it->second.has_value());
+          auto [enode_id, cost] = it->second->resolve();
+          for (auto child : egraph.get_enode(enode_id).children()) visit_child(child);
+          return {id, enode_id};
+        });
   }
 };
 

@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <set>
+#include <unordered_map>
 
 #include "planner/extract/extractor.hpp"
 #include "test_support/extract.hpp"
@@ -65,13 +66,16 @@ struct SymbolCostModel {
   }
 };
 
-// Test helper: runs the full extraction pipeline.
+// Test helper: runs the full extraction pipeline (ComputeFrontiers + DefaultResolver).
+// Returns entries in children-before-parents order.
 template <typename CostModel>
 auto TestExtract(EGraph<symbol, analysis> const &egraph, CostModel const &cost_model, EClassId root)
     -> std::vector<std::pair<EClassId, ENodeId>> {
-  extract::ExtractionContext<typename CostModel::CostResult> ctx;
-  auto view = extract::Extract(egraph, root, cost_model, DefaultResolver{}, ctx);
-  return {view.order.begin(), view.order.end()};
+  extract::FrontierContext<typename CostModel::CostResult> frontier_ctx;
+  std::vector<std::pair<EClassId, ENodeId>> out;
+  (void)extract::ComputeFrontiers(egraph, cost_model, root, frontier_ctx);
+  DefaultResolver{}(egraph, frontier_ctx.frontier_map, root, out);
+  return out;
 }
 
 TEST(Extract_Basic, BasicLeafExtraction) {
@@ -395,275 +399,6 @@ TEST(Extract_Cost, FullyCyclicEClassInfiniteCost) {
 }
 
 // ========================================
-// Extract_Dependencies Tests
-// ========================================
-
-TEST(Extract_Dependencies, SingleLeafNode) {
-  auto egraph = EGraph<symbol, analysis>{};
-  auto [leaf_class, leaf_node, leaf_new] = egraph.emplace(symbol::A);
-  SelectionMap<double> cheapest_enode;
-  cheapest_enode[leaf_class] = {leaf_node, 1.0};
-
-  extract::InDegreeMap in_degree;
-  extract::TraversalScratch deps_scratch;
-  extract::CollectDependencies(egraph, cheapest_enode, leaf_class, deps_scratch, in_degree);
-
-  // Leaf has no children, so in_degree should be empty
-  ASSERT_EQ(in_degree.size(), 1);
-}
-
-TEST(Extract_Dependencies, LinearChain) {
-  auto egraph = EGraph<symbol, analysis>{};
-  auto [leaf_class, leaf_node, leaf_new] = egraph.emplace(symbol::A);
-  auto [mid_class, mid_node, mid_new] = egraph.emplace(symbol::B, {leaf_class});
-  auto [root_class, root_node, root_new] = egraph.emplace(symbol::A, {mid_class});
-
-  SelectionMap<double> cheapest_enode;
-  cheapest_enode[leaf_class] = {leaf_node, 1.0};
-  cheapest_enode[mid_class] = {mid_node, 1.0};
-  cheapest_enode[root_class] = {root_node, 1.0};
-
-  extract::InDegreeMap in_degree;
-  extract::TraversalScratch deps_scratch;
-  extract::CollectDependencies(egraph, cheapest_enode, root_class, deps_scratch, in_degree);
-
-  // mid has in_degree 1 (from root), leaf has in_degree 1 (from mid)
-  ASSERT_EQ(in_degree.size(), 3);
-  ASSERT_EQ(in_degree[root_class], 0);
-  ASSERT_EQ(in_degree[mid_class], 1);
-  ASSERT_EQ(in_degree[leaf_class], 1);
-}
-
-TEST(Extract_Dependencies, SimpleTree) {
-  auto egraph = EGraph<symbol, analysis>{};
-  auto [left_class, left_node, left_new] = egraph.emplace(symbol::A);
-  auto [right_class, right_node, right_new] = egraph.emplace(symbol::B);
-  auto [root_class, root_node, root_new] = egraph.emplace(symbol::A, {left_class, right_class});
-
-  SelectionMap<double> cheapest_enode;
-  cheapest_enode[left_class] = {left_node, 1.0};
-  cheapest_enode[right_class] = {right_node, 1.0};
-  cheapest_enode[root_class] = {root_node, 1.0};
-
-  extract::InDegreeMap in_degree;
-  extract::TraversalScratch deps_scratch;
-  extract::CollectDependencies(egraph, cheapest_enode, root_class, deps_scratch, in_degree);
-
-  // Both left and right have in_degree 1 (from root)
-  ASSERT_EQ(in_degree.size(), 3);
-  ASSERT_EQ(in_degree[left_class], 1);
-  ASSERT_EQ(in_degree[right_class], 1);
-  ASSERT_EQ(in_degree[root_class], 0);
-}
-
-TEST(Extract_Dependencies, DiamondDAG) {
-  auto egraph = EGraph<symbol, analysis>{};
-  auto [shared_class, shared_node, shared_new] = egraph.emplace(symbol::A);
-  auto [left_class, left_node, left_new] = egraph.emplace(symbol::B, {shared_class}, 1);     // disambiguator = 1
-  auto [right_class, right_node, right_new] = egraph.emplace(symbol::B, {shared_class}, 2);  // disambiguator = 2
-  auto [root_class, root_node, root_new] = egraph.emplace(symbol::A, {left_class, right_class});
-
-  SelectionMap<double> cheapest_enode;
-  cheapest_enode[shared_class] = {shared_node, 1.0};
-  cheapest_enode[left_class] = {left_node, 1.0};
-  cheapest_enode[right_class] = {right_node, 1.0};
-  cheapest_enode[root_class] = {root_node, 1.0};
-
-  extract::InDegreeMap in_degree;
-  extract::TraversalScratch deps_scratch;
-  extract::CollectDependencies(egraph, cheapest_enode, root_class, deps_scratch, in_degree);
-
-  // shared has in_degree 2 (from left and right)
-  // left and right each have in_degree 1 (from root)
-  ASSERT_EQ(in_degree.size(), 4);
-  ASSERT_EQ(in_degree[root_class], 0);
-  ASSERT_EQ(in_degree[left_class], 1);
-  ASSERT_EQ(in_degree[right_class], 1);
-  ASSERT_EQ(in_degree[shared_class], 2);
-}
-
-TEST(Extract_Dependencies, DeadBindChildrenSkipped) {
-  // Simulates a dead Bind: enode has 3 children (input, sym, expr) but
-  // only input is in the selection (sym/expr were skipped by resolution).
-  // CollectDependencies should skip sym/expr. TopologicalSort should not
-  // corrupt in_degree with default-inserted entries for missing children.
-  auto egraph = EGraph<symbol, analysis>{};
-  auto [input_class, input_node, input_new] = egraph.emplace(symbol::A);
-  auto [sym_class, sym_node, sym_new] = egraph.emplace(symbol::B);
-  auto [expr_class, expr_node, expr_new] = egraph.emplace(symbol::A, {}, 42);
-  // Bind enode with 3 children: input, sym, expr
-  auto [bind_class, bind_node, bind_new] = egraph.emplace(symbol::A, {input_class, sym_class, expr_class});
-
-  // Selection: bind and input are resolved, sym and expr are NOT (dead Bind)
-  using Sel = Selection<double>;
-  SelectionMap<double> selection;
-  selection[bind_class] = Sel{bind_node, 1.0};
-  selection[input_class] = Sel{input_node, 1.0};
-  // sym_class and expr_class intentionally absent - dead Bind
-
-  extract::InDegreeMap in_degree;
-  extract::TraversalScratch deps_scratch;
-  extract::CollectDependencies(egraph, selection, bind_class, deps_scratch, in_degree);
-
-  // Only bind and input should be in in_degree
-  ASSERT_EQ(in_degree.size(), 2);
-  ASSERT_EQ(in_degree[bind_class], 0);
-  ASSERT_EQ(in_degree[input_class], 1);
-  // sym and expr must NOT be in in_degree
-  ASSERT_FALSE(in_degree.contains(sym_class));
-  ASSERT_FALSE(in_degree.contains(expr_class));
-
-  // TopologicalSort consumes in_degree in place; copy so the assertions above
-  // can still reference the original.  Output: exactly [bind, input], no
-  // default-inserted entries for dead sym/expr children.
-  auto in_degree_copy = in_degree;
-  std::vector<std::pair<EClassId, ENodeId>> topo;
-  FifoQueue ready_scratch;
-  extract::TopologicalSort(egraph, selection, in_degree_copy, ready_scratch, topo);
-  ASSERT_EQ(topo.size(), 2);
-  ASSERT_EQ(topo[0].first, bind_class);
-  ASSERT_EQ(topo[1].first, input_class);
-
-  // The real check: TopologicalSort walks enode.children() which includes dead
-  // sym/expr.  Without the in_degree.find() guard, --in_degree[child] would
-  // default-insert entries for sym and expr with value -1.  These never reach
-  // 0, so the topo output is correct, but the in_degree map is corrupted.
-  ASSERT_EQ(topo.size(), selection.size()) << "Topo sort should contain exactly the resolved eclasses";
-}
-
-// ========================================
-// Extract_TopologicalSort Tests
-// ========================================
-
-TEST(Extract_TopologicalSort, SingleNode) {
-  auto egraph = EGraph<symbol, analysis>{};
-  auto [leaf_class, leaf_node, leaf_new] = egraph.emplace(symbol::A);
-  SelectionMap<double> cheapest_enode{};
-  cheapest_enode[leaf_class] = {leaf_node, 1.0};
-  extract::InDegreeMap in_degree;
-  extract::TraversalScratch deps_scratch;
-  extract::CollectDependencies(egraph, cheapest_enode, leaf_class, deps_scratch, in_degree);
-  std::vector<std::pair<EClassId, ENodeId>> result;
-  FifoQueue ready_scratch;
-  extract::TopologicalSort(egraph, cheapest_enode, in_degree, ready_scratch, result);
-
-  ASSERT_EQ(result.size(), 1);
-  ASSERT_EQ(result[0].first, leaf_class);
-  ASSERT_EQ(result[0].second, leaf_node);
-}
-
-TEST(Extract_TopologicalSort, LinearChainOrdering) {
-  auto egraph = EGraph<symbol, analysis>{};
-  auto [leaf_class, leaf_node, leaf_new] = egraph.emplace(symbol::A);
-  auto [mid_class, mid_node, mid_new] = egraph.emplace(symbol::B, {leaf_class});
-  auto [root_class, root_node, root_new] = egraph.emplace(symbol::A, {mid_class});
-
-  SelectionMap<double> cheapest_enode;
-  cheapest_enode[leaf_class] = {leaf_node, 1.0};
-  cheapest_enode[mid_class] = {mid_node, 1.0};
-  cheapest_enode[root_class] = {root_node, 1.0};
-  extract::InDegreeMap in_degree;
-  extract::TraversalScratch deps_scratch;
-  extract::CollectDependencies(egraph, cheapest_enode, root_class, deps_scratch, in_degree);
-  std::vector<std::pair<EClassId, ENodeId>> result;
-  FifoQueue ready_scratch;
-  extract::TopologicalSort(egraph, cheapest_enode, in_degree, ready_scratch, result);
-
-  ASSERT_EQ(result.size(), 3);
-  // Order should be: root, mid, leaf
-  ASSERT_EQ(result[0].first, root_class);
-  ASSERT_EQ(result[1].first, mid_class);
-  ASSERT_EQ(result[2].first, leaf_class);
-}
-
-TEST(Extract_TopologicalSort, SimpleTreeOrdering) {
-  auto egraph = EGraph<symbol, analysis>{};
-  auto [left_class, left_node, left_new] = egraph.emplace(symbol::A);
-  auto [right_class, right_node, right_new] = egraph.emplace(symbol::B);
-  auto [root_class, root_node, root_new] = egraph.emplace(symbol::A, {left_class, right_class});
-
-  SelectionMap<double> cheapest_enode;
-  cheapest_enode[left_class] = {left_node, 1.0};
-  cheapest_enode[right_class] = {right_node, 1.0};
-  cheapest_enode[root_class] = {root_node, 1.0};
-  extract::InDegreeMap in_degree;
-  extract::TraversalScratch deps_scratch;
-  extract::CollectDependencies(egraph, cheapest_enode, root_class, deps_scratch, in_degree);
-  std::vector<std::pair<EClassId, ENodeId>> result;
-  FifoQueue ready_scratch;
-  extract::TopologicalSort(egraph, cheapest_enode, in_degree, ready_scratch, result);
-
-  ASSERT_EQ(result.size(), 3);
-  // Root should come first
-  ASSERT_EQ(result[0].first, root_class);
-  // Left and right can come in any order, but both should be after root
-}
-
-TEST(Extract_TopologicalSort, DiamondTopology) {
-  auto egraph = EGraph<symbol, analysis>{};
-  auto [shared_class, shared_node, shared_new] = egraph.emplace(symbol::A);
-  auto [left_class, left_node, left_new] = egraph.emplace(symbol::B, {shared_class}, 1);     // disambiguator = 1
-  auto [right_class, right_node, right_new] = egraph.emplace(symbol::B, {shared_class}, 2);  // disambiguator = 2
-  auto [root_class, root_node, root_new] = egraph.emplace(symbol::A, {left_class, right_class});
-
-  SelectionMap<double> cheapest_enode;
-  cheapest_enode[shared_class] = {shared_node, 1.0};
-  cheapest_enode[left_class] = {left_node, 1.0};
-  cheapest_enode[right_class] = {right_node, 1.0};
-  cheapest_enode[root_class] = {root_node, 1.0};
-  extract::InDegreeMap in_degree;
-  extract::TraversalScratch deps_scratch;
-  extract::CollectDependencies(egraph, cheapest_enode, root_class, deps_scratch, in_degree);
-  std::vector<std::pair<EClassId, ENodeId>> result;
-  FifoQueue ready_scratch;
-  extract::TopologicalSort(egraph, cheapest_enode, in_degree, ready_scratch, result);
-
-  ASSERT_EQ(result.size(), 4);
-  // Root comes first
-  ASSERT_EQ(result[0].first, root_class);
-  // Shared must come after both left and right
-  ASSERT_EQ(result[3].first, shared_class);
-}
-
-TEST(Extract_TopologicalSort, CycleDetection_IncompleteResult) {
-  // Construct an extract::InDegreeMap that simulates a cycle: both nodes have in-degree 1,
-  // so neither ever enters the queue. Documents the silent-truncation behaviour
-  // that the post-condition assertion in TopologicalSort is designed to catch.
-  auto egraph = EGraph<symbol, analysis>{};
-  auto [a_class, a_node, a_new] = egraph.emplace(symbol::A);
-  auto [b_class, b_node, b_new] = egraph.emplace(symbol::B, {a_class});
-
-  SelectionMap<double> selection;
-  selection[a_class] = {a_node, 1.0};
-  selection[b_class] = {b_node, 1.0};
-
-  // Manually construct in_degree with a cycle: both stuck at 1
-  extract::InDegreeMap in_degree;
-  in_degree[a_class] = 1;
-  in_degree[b_class] = 1;
-
-  // The post-condition assertion in TopologicalSort fires because neither node
-  // reaches in-degree 0, so result.size() == 0 != in_degree.size() == 2.
-  // In debug builds (assert enabled), ASSERT_DEATH verifies the assertion fires.
-  // In release builds (NDEBUG defined), assert is compiled out and TopologicalSort
-  // silently returns an incomplete result - the test verifies the truncation instead.
-#ifdef NDEBUG
-  std::vector<std::pair<EClassId, ENodeId>> result;
-  FifoQueue ready_scratch;
-  extract::TopologicalSort(egraph, selection, in_degree, ready_scratch, result);
-  // Without the assertion, the cycle causes silent truncation: no nodes emitted
-  EXPECT_EQ(result.size(), 0);
-#else
-  ASSERT_DEATH(([&] {
-                 std::vector<std::pair<EClassId, ENodeId>> result;
-                 FifoQueue ready_scratch;
-                 extract::TopologicalSort(egraph, selection, in_degree, ready_scratch, result);
-               }()),
-               "cycle detected");
-#endif
-}
-
-// ========================================
 // Integration Tests (Full Extract Pipeline)
 // ========================================
 
@@ -677,9 +412,8 @@ TEST(Extract_Basic, IntegrationComplexTree) {
   auto extracted = TestExtract(egraph, UniformCostModel{}, root_class);
 
   ASSERT_EQ(extracted.size(), 4);
-  // Verify root is first
-  ASSERT_EQ(extracted[0].first, root_class);
-  ASSERT_EQ(extracted[1].first, mid_class);
+  ASSERT_EQ(extracted.back().first, root_class);
+  ASSERT_EQ(extracted[2].first, mid_class);
 }
 
 TEST(Extract_Basic, IntegrationDiamondDAG) {
@@ -692,9 +426,8 @@ TEST(Extract_Basic, IntegrationDiamondDAG) {
   auto extracted = TestExtract(egraph, UniformCostModel{}, root_class);
 
   ASSERT_EQ(extracted.size(), 4);
-  // Verify shared node comes last
-  ASSERT_EQ(extracted[0].first, root_class);
-  ASSERT_EQ(extracted[3].first, shared_class);
+  ASSERT_EQ(extracted.back().first, root_class);
+  ASSERT_EQ(extracted[0].first, shared_class);
 }
 
 TEST(Extract_Basic, IntegrationNestedEquivalence) {
@@ -714,9 +447,8 @@ TEST(Extract_Basic, IntegrationNestedEquivalence) {
   auto extracted = TestExtract(egraph, SymbolCostModel{1.0, 5.0}, root);
 
   ASSERT_EQ(extracted.size(), 2);
-  // Should select cheaper A nodes at both levels
-  ASSERT_EQ(extracted[0].second, a2_node);
-  ASSERT_EQ(extracted[1].second, a1_node);
+  ASSERT_EQ(extracted[0].second, a1_node);
+  ASSERT_EQ(extracted[1].second, a2_node);
 }
 
 // ========================================
@@ -1094,8 +826,8 @@ TEST(Extract_MultiAlt, SingleAlternative_BehavesLikeSingleBest) {
   auto extracted = TestExtract(egraph, SimpleMultiAltCostModel{}, root_class);
 
   ASSERT_EQ(extracted.size(), 3);
-  ASSERT_EQ(extracted[0].first, root_class);
-  ASSERT_EQ(extracted[0].second, root_node);
+  ASSERT_EQ(extracted.back().first, root_class);
+  ASSERT_EQ(extracted.back().second, root_node);
 }
 
 TEST(Extract_MultiAlt, TwoAlternatives_MergeFrontier) {
@@ -1143,10 +875,9 @@ TEST(Extract_MultiAlt, DemandPropagation) {
   auto extracted = TestExtract(egraph, DemandAwareMultiAltCostModel{}, parent_class);
 
   ASSERT_EQ(extracted.size(), 2);
-  ASSERT_EQ(extracted[0].first, parent_class);
-  ASSERT_EQ(extracted[0].second, parent_node);
-  // Child should resolve to B (cheapest no-demand alternative)
-  ASSERT_EQ(extracted[1].second, b_node);
+  ASSERT_EQ(extracted.back().first, parent_class);
+  ASSERT_EQ(extracted.back().second, parent_node);
+  ASSERT_EQ(extracted[0].second, b_node);
 }
 
 TEST(Extract_MultiAlt, DominatedPruning) {
@@ -1207,15 +938,11 @@ TEST(Extract_MultiAlt, DiamondDAG_WithDemand) {
 
   auto extracted = TestExtract(egraph, DemandAwareMultiAltCostModel{}, root_class);
 
-  // Should have 4 nodes: root, left, right, shared
   ASSERT_EQ(extracted.size(), 4);
-  // Root comes first in topological order
-  ASSERT_EQ(extracted[0].first, root_class);
-  ASSERT_EQ(extracted[0].second, root_node);
-  // Shared comes last (highest in-degree = 2)
-  ASSERT_EQ(extracted[3].first, shared_class);
-  // The shared eclass should resolve to its A enode (only enode in the class)
-  ASSERT_EQ(extracted[3].second, shared_node);
+  ASSERT_EQ(extracted.back().first, root_class);
+  ASSERT_EQ(extracted.back().second, root_node);
+  ASSERT_EQ(extracted[0].first, shared_class);
+  ASSERT_EQ(extracted[0].second, shared_node);
 
   // Verify shared eclass appears exactly once (not duplicated for each parent)
   auto shared_count = std::ranges::count_if(extracted, [&](auto const &p) { return p.first == shared_class; });
@@ -1375,7 +1102,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
   ASSERT_EQ(frontier_ctx.frontier_map.at(shared_class)->alts().size(), 2);
   ASSERT_EQ(frontier_ctx.frontier_map.at(leaf_class)->alts().size(), 2);
 
-  auto resolved = SelectionMap<double>{};
+  auto resolved = std::unordered_map<EClassId, std::pair<ENodeId, double>>{};
   auto resolved_required = std::unordered_map<EClassId, std::set<int>>{};
 
   auto resolve = [&](this auto const &self, EClassId id, std::set<int> const &provided) -> void {
@@ -1384,7 +1111,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
       auto const &frontier = *frontier_ctx.frontier_map.at(id);
       auto const *chosen = PickBestCompatible(frontier, provided);
       ASSERT_NE(chosen, nullptr);
-      existing->second = Selection{chosen->enode_id, chosen->cost};
+      existing->second = std::pair{chosen->enode_id, chosen->cost};
       resolved_required[id] = chosen->required;
       auto const &enode = egraph.get_enode(chosen->enode_id);
       for (auto child : enode.children()) {
@@ -1395,7 +1122,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
     auto const &frontier = *frontier_ctx.frontier_map.at(id);
     auto const *chosen = PickBestCompatible(frontier, provided);
     ASSERT_NE(chosen, nullptr);
-    resolved[id] = Selection{chosen->enode_id, chosen->cost};
+    resolved[id] = std::pair{chosen->enode_id, chosen->cost};
     resolved_required[id] = chosen->required;
     auto const &enode = egraph.get_enode(chosen->enode_id);
     auto const &children = enode.children();
@@ -1414,7 +1141,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadesToChildren) {
   // Shared was re-resolved to req={} on the right branch; the cascade must
   // re-resolve Leaf under {} too, swapping it onto the {cost=2, req={}} alt.
   ASSERT_TRUE(resolved_required[shared_class].empty());
-  ASSERT_EQ(resolved.at(leaf_class).cost, 2.0);
+  ASSERT_EQ(resolved.at(leaf_class).second, 2.0);
   ASSERT_TRUE(resolved_required[leaf_class].empty());
 }
 
@@ -1443,7 +1170,7 @@ TEST(Extract_MultiAlt, DAGResolution_AliveToDeadErasesStaleChildren) {
   FrontierContext<CM::CostResult> frontier_ctx;
   (void)extract::ComputeFrontiers(egraph, CM{}, root_class, frontier_ctx);
 
-  auto resolved = SelectionMap<double>{};
+  auto resolved = std::unordered_map<EClassId, std::pair<ENodeId, double>>{};
   auto resolved_required = std::unordered_map<EClassId, std::set<int>>{};
 
   auto resolve = [&](this auto const &self, EClassId id, std::set<int> const &provided) -> void {
@@ -1452,7 +1179,7 @@ TEST(Extract_MultiAlt, DAGResolution_AliveToDeadErasesStaleChildren) {
       auto const &frontier = *frontier_ctx.frontier_map.at(id);
       auto const *chosen = PickBestCompatible(frontier, provided);
       ASSERT_NE(chosen, nullptr);
-      existing->second = Selection{chosen->enode_id, chosen->cost};
+      existing->second = std::pair{chosen->enode_id, chosen->cost};
       resolved_required[id] = chosen->required;
       // Cascade + erase stale children if switching to no-demand alt
       auto const &enode = egraph.get_enode(chosen->enode_id);
@@ -1473,7 +1200,7 @@ TEST(Extract_MultiAlt, DAGResolution_AliveToDeadErasesStaleChildren) {
     auto const &frontier = *frontier_ctx.frontier_map.at(id);
     auto const *chosen = PickBestCompatible(frontier, provided);
     ASSERT_NE(chosen, nullptr);
-    resolved[id] = Selection{chosen->enode_id, chosen->cost};
+    resolved[id] = std::pair{chosen->enode_id, chosen->cost};
     resolved_required[id] = chosen->required;
     auto const &enode = egraph.get_enode(chosen->enode_id);
     if (id == root_class && enode.children().size() == 2) {
@@ -1523,7 +1250,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadeTraversesIntermediate) {
   ASSERT_EQ(frontier_ctx.frontier_map.at(mid_class)->alts().size(), 2);
   ASSERT_EQ(frontier_ctx.frontier_map.at(leaf_class)->alts().size(), 2);
 
-  auto resolved = SelectionMap<double>{};
+  auto resolved = std::unordered_map<EClassId, std::pair<ENodeId, double>>{};
   auto resolved_required = std::unordered_map<EClassId, std::set<int>>{};
 
   auto resolve = [&](this auto const &self, EClassId id, std::set<int> const &provided) -> void {
@@ -1532,7 +1259,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadeTraversesIntermediate) {
       auto const &frontier = *frontier_ctx.frontier_map.at(id);
       auto const *chosen = PickBestCompatible(frontier, provided);
       ASSERT_NE(chosen, nullptr);
-      existing->second = Selection{chosen->enode_id, chosen->cost};
+      existing->second = std::pair{chosen->enode_id, chosen->cost};
       resolved_required[id] = chosen->required;
       auto const &enode = egraph.get_enode(chosen->enode_id);
       for (auto child : enode.children()) {
@@ -1543,7 +1270,7 @@ TEST(Extract_MultiAlt, DAGResolution_CascadeTraversesIntermediate) {
     auto const &frontier = *frontier_ctx.frontier_map.at(id);
     auto const *chosen = PickBestCompatible(frontier, provided);
     ASSERT_NE(chosen, nullptr);
-    resolved[id] = Selection{chosen->enode_id, chosen->cost};
+    resolved[id] = std::pair{chosen->enode_id, chosen->cost};
     resolved_required[id] = chosen->required;
     auto const &enode = egraph.get_enode(chosen->enode_id);
     auto const &children = enode.children();

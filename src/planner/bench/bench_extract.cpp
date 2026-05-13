@@ -118,7 +118,7 @@ static auto BuildDeepChain(int64_t depth) -> std::pair<TestEGraph, EClassId> {
 
 static void BM_Extract_DeepChain(benchmark::State &state) {
   auto [egraph, root] = BuildDeepChain(state.range(0));
-  // Out-of-loop map mirrors production (ExtractionContext owns frontier_map across
+  // Out-of-loop map mirrors production (FrontierContext owns frontier_map across
   // calls); clear() each iter retains bucket capacity.
   FrontierContext<DemandFrontier> frontier_ctx;
   frontier_ctx.frontier_map.reserve(egraph.num_classes());
@@ -172,21 +172,22 @@ static void BM_Extract_WideMerge(benchmark::State &state) {
 BENCHMARK(BM_Extract_WideMerge)->RangeMultiplier(4)->Range(8, 128)->Unit(benchmark::kMicrosecond);
 
 // ---------------------------------------------------------------------------
-// Full-pipeline shapes - Extract() invokes all four stages:
-//   1. ComputeFrontiers        (already covered above in isolation)
-//   2. Resolver                (DefaultResolver: picks min-cost alt per eclass)
-//   3. CollectDependencies     (in-degree counting over selected children)
-//   4. TopologicalSort         (Kahn-style emit order)
+// Full-pipeline shapes - ComputeFrontiers + DefaultResolver
 // ---------------------------------------------------------------------------
-using memgraph::planner::core::extract::Extract;
-using memgraph::planner::core::extract::ExtractionContext;
 using memgraph::planner::test_support::DefaultResolver;
 
 static void BM_Extract_FullPipeline_DeepChain(benchmark::State &state) {
   auto [egraph, root] = BuildDeepChain(state.range(0));
-  ExtractionContext<DemandFrontier> ctx;
+  FrontierContext<DemandFrontier> frontier_ctx;
+  frontier_ctx.frontier_map.reserve(egraph.num_classes());
+  std::vector<std::pair<EClassId, ENodeId>> out;
+  out.reserve(egraph.num_classes());
   for (auto _ : state) {
-    benchmark::DoNotOptimize(Extract(egraph, root, CostModel{}, DefaultResolver{}, ctx));
+    frontier_ctx.clear();
+    out.clear();
+    memgraph::planner::core::extract::ComputeFrontiers(egraph, CostModel{}, root, frontier_ctx);
+    DefaultResolver{}(egraph, frontier_ctx.frontier_map, root, out);
+    benchmark::DoNotOptimize(out);
   }
   state.SetItemsProcessed(state.iterations() * state.range(0));
 }
@@ -195,9 +196,16 @@ BENCHMARK(BM_Extract_FullPipeline_DeepChain)->RangeMultiplier(8)->Range(64, 4096
 
 static void BM_Extract_FullPipeline_WideMerge(benchmark::State &state) {
   auto [egraph, root] = BuildWideMerge(state.range(0));
-  ExtractionContext<DemandFrontier> ctx;
+  FrontierContext<DemandFrontier> frontier_ctx;
+  frontier_ctx.frontier_map.reserve(egraph.num_classes());
+  std::vector<std::pair<EClassId, ENodeId>> out;
+  out.reserve(egraph.num_classes());
   for (auto _ : state) {
-    benchmark::DoNotOptimize(Extract(egraph, root, CostModel{}, DefaultResolver{}, ctx));
+    frontier_ctx.clear();
+    out.clear();
+    memgraph::planner::core::extract::ComputeFrontiers(egraph, CostModel{}, root, frontier_ctx);
+    DefaultResolver{}(egraph, frontier_ctx.frontier_map, root, out);
+    benchmark::DoNotOptimize(out);
   }
   state.SetItemsProcessed(state.iterations() * state.range(0));
 }

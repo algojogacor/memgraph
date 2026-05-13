@@ -15,6 +15,7 @@
 #include <cassert>
 #include <compare>
 #include <concepts>
+#include <functional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -348,5 +349,19 @@ struct CostResultBase : ParetoFrontier<Alt, DominanceFn> {
     return {it->enode_id, it->cost};
   }
 };
+
+/// Returns a pointer to the minimum-cost alternative in `alts` satisfying
+/// `pred`, or nullptr if none match.  Caller decides what nullptr means.
+template <std::ranges::range Alts, typename Pred>
+  requires std::invocable<Pred, std::ranges::range_value_t<Alts> const &>
+[[nodiscard]] auto PickBest(Alts &&alts, Pred &&pred) -> std::ranges::range_value_t<Alts> const * {
+  using Alt = std::ranges::range_value_t<Alts>;
+  Alt const *best = nullptr;
+  for (auto const &alt : alts) {
+    if (!std::invoke(pred, alt)) continue;
+    if (!best || alt.cost < best->cost) best = &alt;
+  }
+  return best;
+}
 
 }  // namespace memgraph::planner::core::extract

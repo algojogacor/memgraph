@@ -525,6 +525,24 @@ void ResolveChildren(planner::core::ENode<symbol> const &enode, ResolvedKey cons
   }
 }
 
+/// Pick the cheapest alt with required ⊆ provided AND introduces ⊇ demanded.
+[[nodiscard]] auto pick_compatible(CostFrontier const &frontier, SymbolSet const &provided, SymbolSet const &demanded)
+    -> Alternative const & {
+  Alternative const *best = nullptr;
+  for (auto const &alt : frontier.alts()) {
+    if (!alt.required.is_compatible(provided)) continue;
+    if (!std::ranges::includes(alt.introduces, demanded)) continue;
+    if (!best || alt.cost < best->cost) best = &alt;
+  }
+  if (!best) {
+    throw QueryException{
+        "Plan extraction failed: no compatible alternative at this node. "
+        "This is a planner bug - please report it at "
+        "https://github.com/memgraph/memgraph/issues"};
+  }
+  return *best;
+}
+
 /// Context-aware resolver with PER-PATH caching.
 ///
 /// Each (eclass, provided) pair is resolved exactly once.  Different parent
@@ -546,72 +564,31 @@ struct PlanResolver {
   void operator()(EGraph const &egraph, FrontierMap const &frontier_map, EClassId root, TopoOrder &out_order,
                   boost::unordered_flat_set<ResolvedKey, ResolvedKeyHash> &seen) const {
     assert(out_order.empty() && "Resolver precondition: out must be empty on entry");
-    Impl impl{egraph, frontier_map, seen, out_order};
-    impl.resolve_and_emit(ResolvedKey{root, SymbolSet{}, SymbolSet{}});
+    planner::core::extract::DfsPostOrder(
+        ResolvedKey{root, SymbolSet{}, SymbolSet{}},
+        seen,
+        out_order,
+        [&](ResolvedKey key, auto visit_child) -> TopoEntry {
+          auto fr_it = frontier_map.find(key.eclass);
+          assert(fr_it != frontier_map.end() && fr_it->second.has_value());
+          auto const &chosen = pick_compatible(*fr_it->second, key.provided, key.demanded_introduces);
+          auto const &enode = egraph.get_enode(chosen.enode_id);
+          auto const &enode_children = enode.children();
+          auto const exposed = (enode.symbol() == symbol::Subquery && enode_children.size() >= 2)
+                                   ? std::make_optional(ExposedSymsFromChildren(enode_children.subspan(2)))
+                                   : std::nullopt;
+          ResolveChildren(enode,
+                          key,
+                          chosen.is_alive,
+                          chosen.introduces,
+                          exposed ? &*exposed : nullptr,
+                          [&](ResolvedKey child_key) { visit_child(std::move(child_key)); });
+          return TopoEntry{.key = std::move(key),
+                           .enode_id = chosen.enode_id,
+                           .is_alive = chosen.is_alive,
+                           .introduces = chosen.introduces};
+        });
   }
-
- private:
-  struct Impl {
-    // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
-    EGraph const &egraph;
-    // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
-    FrontierMap const &frontier_map;
-    // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
-    boost::unordered_flat_set<ResolvedKey, ResolvedKeyHash> &seen;
-    // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
-    TopoOrder &out_order;
-
-    /// `provided` is the set of variables already introduced by ancestors.
-    /// `demanded` is the set the chosen alt must itself introduce (driven
-    /// down from an enclosing Output whose NamedOutputs reference symbols
-    /// this row pipe must bind).  Pick the cheapest alt with required ⊆
-    /// provided AND introduces ⊇ demanded.
-    [[nodiscard]] auto pick_compatible(CostFrontier const &frontier, SymbolSet const &provided,
-                                       SymbolSet const &demanded) -> Alternative const & {
-      Alternative const *best = nullptr;
-      for (auto const &alt : frontier.alts()) {
-        if (!alt.required.is_compatible(provided)) continue;
-        if (!std::ranges::includes(alt.introduces, demanded)) continue;
-        if (!best || alt.cost < best->cost) best = &alt;
-      }
-      if (!best) {
-        // Nothing fits: either a symbol is demanded that no ancestor can
-        // provide, or a downstream consumer needs an introduction the
-        // input subtree can't deliver.  Planner bug, but throw for production
-        // safety rather than UB.
-        throw QueryException{
-            "Plan extraction failed: no compatible alternative at this node. "
-            "This is a planner bug - please report it at "
-            "https://github.com/memgraph/memgraph/issues"};
-      }
-      return *best;
-    }
-
-    /// Resolve this key once, recursively resolve children with the keys
-    /// the chosen alt's enode dictates, then emit this entry in post-order
-    /// (children-before-parents) so the builder can walk forward.
-    void resolve_and_emit(ResolvedKey key) {
-      if (!seen.insert(key).second) return;
-
-      auto fr_it = frontier_map.find(key.eclass);
-      assert(fr_it != frontier_map.end() && fr_it->second.has_value());
-      auto const &chosen = pick_compatible(*fr_it->second, key.provided, key.demanded_introduces);
-
-      auto const &enode = egraph.get_enode(chosen.enode_id);
-      auto const &enode_children = enode.children();
-      auto const exposed = (enode.symbol() == symbol::Subquery && enode_children.size() >= 2)
-                               ? std::make_optional(ExposedSymsFromChildren(enode_children.subspan(2)))
-                               : std::nullopt;
-      ResolveChildren(
-          enode, key, chosen.is_alive, chosen.introduces, exposed ? &*exposed : nullptr, [this](ResolvedKey child_key) {
-            resolve_and_emit(std::move(child_key));
-          });
-      out_order.push_back(TopoEntry{.key = std::move(key),
-                                    .enode_id = chosen.enode_id,
-                                    .is_alive = chosen.is_alive,
-                                    .introduces = chosen.introduces});
-    }
-  };
 };
 
 }  // namespace
