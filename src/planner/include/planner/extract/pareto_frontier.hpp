@@ -117,16 +117,6 @@ concept ParetoDimension = requires(Alt const &a, Alt const &b) {
   { D::compare(a, b) } -> std::convertible_to<std::partial_ordering>;
 };
 
-namespace detail {
-template <typename O>
-concept IsTotalOrderingType = std::same_as<O, std::strong_ordering> || std::same_as<O, std::weak_ordering>;
-}  // namespace detail
-
-template <typename D, typename Alt>
-concept TotallyOrderedDim = ParetoDimension<D, Alt> && requires(Alt const &a, Alt const &b) {
-  requires detail::IsTotalOrderingType<std::remove_cvref_t<decltype(D::compare(a, b))>>;
-};
-
 /// A combine function for ParetoFrontier::cartesian_product: produces a new Alt
 /// from a pair of input Alts (one cartesian-product element).
 template <typename Fn, typename Alt>
@@ -134,7 +124,7 @@ concept Combiner = std::invocable<Fn const &, Alt const &, Alt const &> &&
                    std::convertible_to<std::invoke_result_t<Fn const &, Alt const &, Alt const &>, Alt>;
 
 // ============================================================================
-// Dominance / lex helpers
+// Dominance
 // ============================================================================
 
 /// Pareto fold over all dims:
@@ -164,37 +154,6 @@ auto dominance_compare(Alt const &a, Alt const &b) -> std::partial_ordering {
   return acc;
 }
 
-namespace detail {
-
-/// Step one dim of the lex compare.  Returns true to continue folding, false
-/// to short-circuit because this dim already decided the order.
-template <typename D, typename Alt>
-constexpr bool lex_step(Alt const &a, Alt const &b, std::weak_ordering &result) {
-  if constexpr (TotallyOrderedDim<D, Alt>) {
-    auto const cmp = D::compare(a, b);
-    if (cmp == 0) return true;  // tied on this dim, look at the next
-    // cmp > 0 ⇒ a "dominates" b in this dim ⇒ a is better ⇒ a sorts first
-    // ⇒ a precedes b ⇒ less.
-    result = (cmp > 0) ? std::weak_ordering::less : std::weak_ordering::greater;
-    return false;
-  }
-  return true;  // non-totally-ordered dims don't participate in lex sort
-}
-
-/// Lex compare two alts using each totally-ordered dim's ranking.  Folds with
-/// `&&` so remaining dims aren't evaluated once one of them decides the order.
-template <typename Alt, typename... Dims>
-auto lex_compare(Alt const &a, Alt const &b) -> std::weak_ordering {
-  std::weak_ordering result = std::weak_ordering::equivalent;
-  (void)(lex_step<Dims, Alt>(a, b, result) && ...);
-  return result;
-}
-
-template <typename Alt, typename... Dims>
-constexpr bool has_totally_ordered_dim_v = (TotallyOrderedDim<Dims, Alt> || ...);
-
-}  // namespace detail
-
 // ============================================================================
 // ParetoFrontier
 // ============================================================================
@@ -203,14 +162,12 @@ constexpr bool has_totally_ordered_dim_v = (TotallyOrderedDim<Dims, Alt> || ...)
 /// dimensions `Dims...`.  Each `Dims` must satisfy `ParetoDimension<D, Alt>`.
 ///
 /// The dominance relation is the pareto-fold of all per-dim comparators (see
-/// `detail::dom_compare`).  Every comparator must be transitive on its own
-/// axis: a ≥ b and b ≥ c ⇒ a ≥ c (with `≥` here meaning "dominates or ties").
-/// The pruner's early-out on dominance relies on this property.
+/// `dominance_compare`).  Every comparator must be transitive on its own axis:
+/// a ≥ b and b ≥ c ⇒ a ≥ c (with `≥` here meaning "dominates or ties").  The
+/// pruner's early-out on dominance relies on this property.
 ///
-/// `alts_` is maintained in lex-sorted order by the sort keys of the totally-
-/// ordered dims (in declaration order).  Callers may rely on this:
-/// `alts().front()` is the lex-smallest survivor, which under the conventional
-/// `LowerIsBetter`-on-cost setup is the minimum-cost alternative.
+/// Storage order of `alts_` is implementation-defined; callers must not depend
+/// on it.  Iterate via `alts()` and select via `PickBest` / `min_element`.
 ///
 /// Example:
 ///   struct MyAlt { double cost; std::set<int> req; ENodeId id; };
@@ -222,27 +179,26 @@ template <typename Alt, typename... Dims>
 struct ParetoFrontier {
   ParetoFrontier() = default;
 
-  /// Construct from an unpruned list of alternatives.  Sorts and prunes on
-  /// construction so the resulting frontier satisfies the Pareto invariant
-  /// and the lex-sorted-storage contract.  flat_map / cartesian_product /
-  /// merge_in_place are the compositional alternatives.
-  explicit ParetoFrontier(std::vector<Alt> alts) : alts_(std::move(alts)) { sort_and_prune(); }
+  /// Construct from an unpruned list of alternatives.  Prunes on construction
+  /// so the resulting frontier satisfies the Pareto invariant.  flat_map /
+  /// cartesian_product / merge_in_place are the compositional alternatives.
+  explicit ParetoFrontier(std::vector<Alt> alts) : alts_(std::move(alts)) { prune(); }
 
-  /// Read-only view over the (Pareto-pruned, lex-sorted) alternatives.
-  /// Returning span keeps the storage choice out of the public contract.
+  /// Read-only view over the (Pareto-pruned) alternatives.  Order is
+  /// implementation-defined.  Returning span keeps the storage choice out of
+  /// the public contract.
   [[nodiscard]] auto alts() const noexcept -> std::span<Alt const> { return alts_; }
 
-  /// In-place mutation that the caller promises preserves the Pareto invariant
-  /// AND the lex sort order.  Calls fn(alt) on each surviving alt; no re-prune
-  /// or re-sort is performed.
+  /// In-place mutation that the caller promises preserves the Pareto invariant.
+  /// Calls fn(alt) on each surviving alt; no re-prune is performed.
   ///
-  /// Contract: for every totally-ordered dim D and every pair (A, B) in the
-  /// frontier, the result of `D::compare(A, B)` must be unchanged by fn —
-  /// i.e., fn is monotone on each totally-ordered axis.  Adding a uniform
-  /// constant to a `cost` field, or rewriting a field that no dim reads
-  /// (e.g., enode_id), both satisfy this contract.  Mutations that could
-  /// flip ordering on any axis must go through flat_map / merge_in_place /
-  /// cartesian_product instead, which re-sort and re-prune.
+  /// Contract: fn must not change the relative ordering of any pair under the
+  /// composed dominance relation — i.e., for every pair (A, B) in the frontier,
+  /// `dominance_compare<Dims...>(A, B)` must be unchanged by fn.  Adding a
+  /// uniform constant to a `cost` field, or rewriting a field that no dim
+  /// reads (e.g., enode_id), both satisfy this contract.  Mutations that
+  /// could flip dominance must go through flat_map / merge_in_place /
+  /// cartesian_product instead, which re-prune.
   template <typename Fn>
     requires std::invocable<Fn, Alt &>
   void mutate_pruning_invariant_preserving(Fn &&fn) {
@@ -250,7 +206,7 @@ struct ParetoFrontier {
   }
 
   /// Flat-map: for each alternative, produce zero or more new alternatives via
-  /// a callback, collect into a new frontier, then sort + prune.
+  /// a callback, collect into a new frontier, then prune.
   /// @param fn  (Alt const&, auto emit) -> void - calls emit(Alt&&) to produce
   ///            output alternatives.
   template <typename Fn>
@@ -263,24 +219,18 @@ struct ParetoFrontier {
     return ParetoFrontier{std::move(out)};
   }
 
-  /// Union another frontier into this one and re-prune.  Both `*this` and
-  /// `other` are already lex-sorted and Pareto-pruned, so the concat is an
-  /// O(n) `inplace_merge`; only the dominance pass is quadratic.  `other`'s
-  /// alts are moved-from on return.
+  /// Union another frontier into this one and re-prune.  `other`'s alts are
+  /// moved-from on return.
   void merge_in_place(ParetoFrontier &&other) {
-    auto const pivot = alts_.size();
-    alts_.reserve(pivot + other.alts_.size());
+    alts_.reserve(alts_.size() + other.alts_.size());
     std::ranges::move(other.alts_, std::back_inserter(alts_));
-    if constexpr (detail::has_totally_ordered_dim_v<Alt, Dims...>) {
-      std::inplace_merge(alts_.begin(), alts_.begin() + pivot, alts_.end(), LexLess{});
-    }
-    prune_sorted();
+    prune();
   }
 
   /// Cartesian product of two frontiers.  For each (l, r) pair, calls
-  /// combine_fn(l, r) to produce a new alternative, then sorts and prunes the
-  /// result.  Output size before pruning is lhs.size() * rhs.size(); callers
-  /// paying that cost should expect it.
+  /// combine_fn(l, r) to produce a new alternative, then prunes the result.
+  /// Output size before pruning is lhs.size() * rhs.size(); callers paying
+  /// that cost should expect it.
   template <typename CombineFn>
     requires Combiner<CombineFn, Alt>
   [[nodiscard]] static auto cartesian_product(ParetoFrontier const &lhs, ParetoFrontier const &rhs,
@@ -300,26 +250,13 @@ struct ParetoFrontier {
   // element-wise move dominates here because Alt is large with a non-trivial move.
   std::vector<Alt> alts_;
 
-  struct LexLess {
-    auto operator()(Alt const &a, Alt const &b) const -> bool { return detail::lex_compare<Alt, Dims...>(a, b) < 0; }
-  };
-
-  void sort_and_prune() {
-    if constexpr (detail::has_totally_ordered_dim_v<Alt, Dims...>) {
-      std::ranges::sort(alts_, LexLess{});
-    }
-    prune_sorted();
-  }
-
-  /// Forward-sweep skyline maintenance.  Assumes `alts_` is in lex-sorted
-  /// order (or that no totally-ordered dim exists, in which case order is
-  /// irrelevant).  For each candidate, scans the running survivor list:
-  /// drops the candidate if any survivor dominates it; drops survivors that
-  /// the candidate dominates; keeps everything else.  Transitivity lets us
-  /// stop scanning the survivor list once the candidate itself has been
-  /// dominated (it can no longer dominate any survivor it hasn't already
-  /// inspected, because that would chain via the dominator).
-  void prune_sorted() {
+  /// Forward-sweep skyline maintenance.  For each candidate, scans the
+  /// running survivor list: drops the candidate if any survivor dominates it;
+  /// drops survivors that the candidate dominates; keeps everything else.
+  /// Transitivity lets us stop scanning the survivor list once the candidate
+  /// itself has been dominated (it can no longer dominate any survivor it
+  /// hasn't already inspected, because that would chain via the dominator).
+  void prune() {
     auto const n = alts_.size();
     if (n < 2) return;
     size_t write = 0;

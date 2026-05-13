@@ -25,7 +25,7 @@ Generic helper in `pareto_frontier.hpp`. Iterates `frontier.alts()` and returns 
 _Avoid_: "pick compatible" as a generic term — `pick_compatible` is a `plan_v2`-specific wrapper around `PickBest`
 
 **Dim**:
-A single axis of a Pareto frontier, expressed as `Dim<MemPtr, Cmp>` where `MemPtr` projects an Alt to a comparable value and `Cmp` is a comparator struct (`LowerIsBetter`, `SmallerSubsetIsBetter`, `LargerSubsetIsBetter`). Totality is auto-detected from `Cmp::compare`'s `<=>` return type; totally-ordered dims contribute to the lex sort key the pruner maintains on `alts_`. `ParetoFrontier` is parameterised by `Alt` and a pack of `Dim`s; there is no separate "dominance functor" type. See [ADR 0007](../../docs/adr/0007-pareto-frontier-dims-as-type-parameter.md).
+A single axis of a Pareto frontier, expressed as `Dim<MemPtr, Cmp>` where `MemPtr` projects an Alt to a comparable value and `Cmp` is a comparator struct (`LowerIsBetter`, `SmallerSubsetIsBetter`, `LargerSubsetIsBetter`). `ParetoFrontier` is parameterised by `Alt` and a pack of `Dim`s; there is no separate "dominance functor" type. See [ADR 0007](../../docs/adr/0007-pareto-frontier-dims-as-type-parameter.md).
 _Avoid_: "dominance function", "axis comparator"
 
 **DefaultResolver**:

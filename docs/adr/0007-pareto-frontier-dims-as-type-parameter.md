@@ -6,13 +6,16 @@ The frontier is now parameterised by `Alt` and a variadic pack of `Dim<MemPtr, C
 
 ## Why
 
-With dims visible to the frontier, the pruner can:
+With dims visible to the frontier as types, the pruner can:
 
-- **Sort `alts_` once by the lex key of all totally-ordered dims** (auto-detected via the comparator's `<=>` return type; if `compare` returns `strong_ordering` or `weak_ordering`, the dim is totally ordered and contributes a sort key). For production `Alternative` this fixes the `cost` and `cardinality` axes by position, so the inner pairwise check only invokes the set-merge comparators.
-- **Maintain a sorted invariant on `alts_` across every public op.** Constructor / `flat_map` / `cartesian_product` sort; `merge_in_place` uses `std::inplace_merge` over the two pre-sorted halves.
 - **Replace the two-pass mark-and-compact prune with a single forward sweep.** `prune_with_pruned_prefix`'s `pruned_prefix` parameter, the `boost::small_vector<bool, 64>` dominated-flag buffer, and the two-pass structure all go away. The remaining algorithm is textbook skyline maintenance.
+- **Compile-time dispatch over the per-dim comparators**, removing the indirect call through `DominanceFn` and letting the compiler inline the fold over `Dims::compare`.
 
-The complexity stays O(n²) in pairs — the set-inclusion dims (`smaller_subset_is_better` / `larger_subset_is_better`) are partial orders, so the divide-and-conquer skyline approach that gets to O(n log^(d-1) n) for purely totally-ordered axes does not apply. The wins here are constant-factor (fewer dim comparisons per pair, cache-friendlier sweep, no flag-vector allocation), not asymptotic.
+The complexity stays O(n²) in pairs — the set-inclusion dims are partial orders, so the divide-and-conquer skyline approach that gets to O(n log^(d-1) n) for purely totally-ordered axes does not apply. The wins here are structural (less surface, fewer abstraction layers) rather than asymptotic.
+
+## What was tried and rolled back
+
+An initial follow-on optimisation maintained a lex-sorted invariant on `alts_` using the totally-ordered dims as a sort key, with the intent of letting the pruner skip those dim compares during dominance checks. The sort scaffolding was added (`LexLess`, `lex_compare`, `lex_step`, `has_totally_ordered_dim_v`, the `TotallyOrderedDim` concept, `std::inplace_merge` in `merge_in_place`) but never paid back: skipping the totally-ordered dim compares saves ~2 cycles out of ~100–1000 per pair-check (the partial-ordered set-merges dominate), which is sub-1% of prune time and well under 0.1% of overall planner time. The sort itself cost O(n log n) per public op plus the maintenance surface. `resolve()` still scans via `min_element`. No caller depended on a sorted `alts()`. The scaffolding was removed in a follow-up commit; the variadic-dims restructure stands on its own.
 
 ## Considered alternatives
 
@@ -24,8 +27,7 @@ The complexity stays O(n²) in pairs — the set-inclusion dims (`smaller_subset
 
 ## Consequences
 
-- `pareto_frontier.hpp` public surface shrinks: `DominanceRelation`, `pareto_compare`, `dim`, `lower_is_better`, `smaller_subset_is_better`, `larger_subset_is_better` are removed. New surface: `ParetoDimension`, `TotallyOrderedDim`, `Dim`, three comparator structs.
-- `alts()`'s iteration order is now part of the contract: lex-sorted by the totally-ordered dims in declaration order. No production caller depended on the previous unspecified order (`PickBest` is a linear scan; resolvers iterate without ordering assumptions); test snapshots that compared frontiers by exact element order may need updating.
-- `mutate_pruning_invariant_preserving`'s contract strengthens from "preserves dominance partial order" to "monotone on each totally-ordered dim". Both production call sites (uniform `cost += K`, same-value `cardinality = c`) already satisfy the stronger contract.
+- `pareto_frontier.hpp` public surface shrinks: `DominanceRelation`, `pareto_compare`, `dim`, `lower_is_better`, `smaller_subset_is_better`, `larger_subset_is_better` are removed. New surface: `ParetoDimension`, `Dim`, three comparator structs, `dominance_compare<Dims...>(a, b)` free function.
+- `alts()`'s iteration order remains implementation-defined. Callers use `PickBest` (linear scan) or iterate without ordering assumptions.
+- `mutate_pruning_invariant_preserving`'s contract is unchanged: "preserves the result of `dominance_compare<Dims...>(A, B)` for every pair (A, B)". Both production call sites (uniform `cost += K`, same-value `cardinality = c`) satisfy it.
 - `CostFrontier`, `TestFrontier`, `DemandFrontier` lose their dominance-wrapper structs; the per-axis docstrings move to comment blocks above the `using` aliases.
-- `resolve()` on `CostResultBase` is now O(1) — the min-cost alt is at the head of the sorted vector — instead of an O(n) `min_element` scan. Not a load-bearing change; resolvers don't call `resolve()` in tight loops.
