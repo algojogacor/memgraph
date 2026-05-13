@@ -88,7 +88,10 @@ template <CostResultType CostResult>
 struct FrontierBufferPool {
  private:
   auto internal_acquire() -> std::vector<CostResult const *> & {
-    if (depth == pool.size()) pool.emplace_back();
+    if (depth == pool_capacity) {
+      pool.emplace_back();
+      ++pool_capacity;
+    }
     auto &buf = pool[depth++];
     buf.clear();
     return buf;
@@ -121,6 +124,11 @@ struct FrontierBufferPool {
   // grows during a deeper recursive frame's acquire().  std::vector would
   // reallocate and dangle the outer caller's children_frontiers reference.
   std::deque<std::vector<CostResult const *>> pool;
+  // Cached copy of pool.size(): deque::size() is multi-op (block-pointer
+  // subtraction) and shows up at ~2% leaf time in profiles when called once
+  // per recursion frame.  We only ever grow `pool`, so the cache is a single
+  // monotonically-increasing counter.
+  size_t pool_capacity = 0;
   size_t depth = 0;
 };
 
