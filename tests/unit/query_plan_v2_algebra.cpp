@@ -34,7 +34,12 @@ using ENodeId = planner::core::ENodeId;
 using bind::MakeSet;
 using bind::SymbolSet;
 
-auto Cmp(Alternative const &a, Alternative const &b) { return AlternativeDominance{}(a, b); }
+auto Cmp(Alternative const &a, Alternative const &b) {
+  return planner::core::extract::dominance_compare<AlternativeDim_Cost,
+                                                   AlternativeDim_Cardinality,
+                                                   AlternativeDim_Required,
+                                                   AlternativeDim_Introduces>(a, b);
+}
 
 auto MakeAlt(double cost, double cardinality, std::initializer_list<uint32_t> required, uint32_t enode_id,
              AliveTag is_alive = AliveTag::Dead) -> Alternative {

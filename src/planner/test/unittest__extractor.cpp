@@ -614,17 +614,12 @@ struct TestDemandAlt {
   ENodeId enode_id;
 };
 
-struct TestDominance {
-  auto operator()(TestDemandAlt const &a, TestDemandAlt const &b) const -> std::partial_ordering {
-    return extract::pareto_compare(a,
-                                   b,
-                                   extract::dim<&TestDemandAlt::cost>(extract::lower_is_better),
-                                   extract::dim<&TestDemandAlt::required>(extract::smaller_subset_is_better));
-  }
-};
+/// TestDemandAlt's Pareto dims: lower cost, smaller required-set.
+using TestDim_Cost = extract::Dim<&TestDemandAlt::cost, extract::LowerIsBetter>;
+using TestDim_Required = extract::Dim<&TestDemandAlt::required, extract::SmallerSubsetIsBetter>;
 
 /// TestFrontier: ParetoFrontier with resolve/min_cost for the extraction contract.
-struct TestFrontier : CostResultBase<TestDemandAlt, TestDominance> {
+struct TestFrontier : CostResultBase<TestDemandAlt, TestDim_Cost, TestDim_Required> {
   using CostResultBase::CostResultBase;
 };
 
@@ -722,14 +717,14 @@ TEST(ParetoFrontier_Prune, AllDominatedByOne) {
 }
 
 TEST(ParetoFrontier_Prune, DuplicateAlternatives) {
-  // When two alts mutually dominate (identical cost and required), exactly one
-  // survives prune; the later index in iteration order is the survivor.
+  // When two alts are Pareto-equivalent (identical cost and required), exactly
+  // one survives prune.  Which one is implementation-defined.
   auto frontier = TestFrontier{{
       {.cost = 2.0, .required = {1}, .enode_id = ENodeId{0}},
       {.cost = 2.0, .required = {1}, .enode_id = ENodeId{1}},
   }};
   ASSERT_EQ(frontier.alts().size(), 1);
-  ASSERT_EQ(frontier.alts()[0].enode_id, ENodeId{1});
+  EXPECT_TRUE(frontier.alts()[0].enode_id == ENodeId{0} || frontier.alts()[0].enode_id == ENodeId{1});
 }
 
 TEST(ParetoFrontier_Prune, TransitiveDominance) {

@@ -54,15 +54,13 @@ struct DemandAlt {
   ENodeId enode_id;
 };
 
-struct DemandDominance {
-  static auto operator()(DemandAlt const &a, DemandAlt const &b) -> std::partial_ordering {
-    namespace x = memgraph::planner::core::extract;
-    return x::pareto_compare(
-        a, b, x::dim<&DemandAlt::cost>(x::lower_is_better), x::dim<&DemandAlt::required>(x::smaller_subset_is_better));
-  }
-};
+namespace x = memgraph::planner::core::extract;
 
-struct DemandFrontier : CostResultBase<DemandAlt, DemandDominance> {
+/// DemandAlt's Pareto dims: lower cost, smaller required-set.
+using DemandDim_Cost = x::Dim<&DemandAlt::cost, x::LowerIsBetter>;
+using DemandDim_Required = x::Dim<&DemandAlt::required, x::SmallerSubsetIsBetter>;
+
+struct DemandFrontier : CostResultBase<DemandAlt, DemandDim_Cost, DemandDim_Required> {
   using CostResultBase::CostResultBase;
 };
 

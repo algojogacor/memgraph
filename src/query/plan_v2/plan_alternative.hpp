@@ -58,7 +58,7 @@ struct Alternative {
   AliveTag is_alive = AliveTag::NotApplicable;
 };
 
-/// Pareto dominance with four axes:
+/// Pareto dimensions for Alternative — four axes:
 ///   - cost        : lower is better
 ///   - cardinality : lower is better (parents multiply per-row cost
 ///                   contributions by it, so a smaller row pipe wins
@@ -71,16 +71,12 @@ struct Alternative {
 ///
 /// is_alive intentionally does not participate: it is a per-alt build-side
 /// annotation, orthogonal to the optimisation problem the frontier solves.
-struct AlternativeDominance {
-  static auto operator()(Alternative const &a, Alternative const &b) -> std::partial_ordering {
-    namespace x = planner::core::extract;
-    return x::pareto_compare(a,
-                             b,
-                             x::dim<&Alternative::cost>(x::lower_is_better),
-                             x::dim<&Alternative::cardinality>(x::lower_is_better),
-                             x::dim<&Alternative::required>(x::smaller_subset_is_better),
-                             x::dim<&Alternative::introduces>(x::larger_subset_is_better));
-  }
-};
+using AlternativeDim_Cost = planner::core::extract::Dim<&Alternative::cost, planner::core::extract::LowerIsBetter>;
+using AlternativeDim_Cardinality =
+    planner::core::extract::Dim<&Alternative::cardinality, planner::core::extract::LowerIsBetter>;
+using AlternativeDim_Required =
+    planner::core::extract::Dim<&Alternative::required, planner::core::extract::SmallerSubsetIsBetter>;
+using AlternativeDim_Introduces =
+    planner::core::extract::Dim<&Alternative::introduces, planner::core::extract::LargerSubsetIsBetter>;
 
 }  // namespace memgraph::query::plan::v2

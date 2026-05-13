@@ -64,12 +64,14 @@ auto ExposedSymsFromChildren(std::span<planner::core::EClassId const> children_f
 }
 
 // --- Alternatives -----------------------------------------------------------
-// Alternative and AlternativeDominance live in plan_alternative.hpp so the
-// pure-algebra dominance can be unit-tested without the rest of this TU.
+// Alternative and its Pareto dims live in plan_alternative.hpp so the
+// pure-algebra dimensions can be unit-tested without the rest of this TU.
 
 /// CostFrontier: ParetoFrontier with resolve/min_cost for the extraction contract.
 /// merge is inherited from ParetoFrontier (union + prune).
-struct CostFrontier : planner::core::extract::CostResultBase<Alternative, AlternativeDominance> {
+struct CostFrontier
+    : planner::core::extract::CostResultBase<Alternative, AlternativeDim_Cost, AlternativeDim_Cardinality,
+                                             AlternativeDim_Required, AlternativeDim_Introduces> {
   using CostResultBase::CostResultBase;
 };
 
@@ -88,7 +90,7 @@ struct CostFrontier : planner::core::extract::CostResultBase<Alternative, Altern
 /// cardinality after combining or use a bespoke combine lambda.
 auto CombineAlts(CostFrontier const &lhs, CostFrontier const &rhs, double extra_cost, planner::core::ENodeId enode_id)
     -> CostFrontier {
-  return CostFrontier::combine(lhs, rhs, [&](Alternative const &l, Alternative const &r) {
+  return CostFrontier::cartesian_product(lhs, rhs, [&](Alternative const &l, Alternative const &r) {
     return Alternative{
         .cost = extra_cost + l.cost + r.cost, .required = l.required.set_union(r.required), .enode_id = enode_id};
   });
@@ -243,28 +245,29 @@ struct PlanCostModel {
       case symbol::Output: {
         auto result = MapAlts(*children[0], 0.0, enode_id);
         for (auto const *named_out : children.subspan(1)) {
-          result = CostFrontier::combine(result, *named_out, [enode_id](Alternative const &l, Alternative const &r) {
-            // l: input row pipe.  r: per-evaluation NamedOutput (scalar, 1
-            // pair per call).
-            // cost = l.cost (whole input pipeline) + l.cardinality * r.cost
-            //        (per-output-row evaluation of this NamedOutput).
-            // cardinality = l.cardinality.  Output produces exactly the
-            // input row count regardless of what value-shape each
-            // NamedOutput packages per row.
-            //
-            // required = l.required ∪ (r.required \ l.introduces).  The
-            // NamedOutput is evaluated INSIDE the input pipe's row scope,
-            // so any sym the input pipe binds (alive Bind / Unwind) covers
-            // matching demands in r without needing an ancestor to provide
-            // them.  This is what lets `WITH x AS y UNWIND ... RETURN y`
-            // satisfy y's demand from the Bind / Unwind below the Output.
-            auto const remaining = r.required.difference(l.introduces);
-            return Alternative{.cost = l.cost + l.cardinality * r.cost,
-                               .cardinality = l.cardinality,
-                               .required = l.required.set_union(remaining),
-                               .introduces = l.introduces,
-                               .enode_id = enode_id};
-          });
+          result = CostFrontier::cartesian_product(
+              result, *named_out, [enode_id](Alternative const &l, Alternative const &r) {
+                // l: input row pipe.  r: per-evaluation NamedOutput (scalar, 1
+                // pair per call).
+                // cost = l.cost (whole input pipeline) + l.cardinality * r.cost
+                //        (per-output-row evaluation of this NamedOutput).
+                // cardinality = l.cardinality.  Output produces exactly the
+                // input row count regardless of what value-shape each
+                // NamedOutput packages per row.
+                //
+                // required = l.required ∪ (r.required \ l.introduces).  The
+                // NamedOutput is evaluated INSIDE the input pipe's row scope,
+                // so any sym the input pipe binds (alive Bind / Unwind) covers
+                // matching demands in r without needing an ancestor to provide
+                // them.  This is what lets `WITH x AS y UNWIND ... RETURN y`
+                // satisfy y's demand from the Bind / Unwind below the Output.
+                auto const remaining = r.required.difference(l.introduces);
+                return Alternative{.cost = l.cost + l.cardinality * r.cost,
+                                   .cardinality = l.cardinality,
+                                   .required = l.required.set_union(remaining),
+                                   .introduces = l.introduces,
+                                   .enode_id = enode_id};
+              });
         }
         return result;
       }

@@ -24,6 +24,10 @@ _Avoid_: calling it "the resolver" — it is scaffolding a resolver uses, not a 
 Generic helper in `pareto_frontier.hpp`. Iterates `frontier.alts()` and returns a pointer to the min-cost alternative satisfying a caller-supplied predicate. Returns `nullptr` if none matches. Callers decide what a null result means (throw, skip, assert).
 _Avoid_: "pick compatible" as a generic term — `pick_compatible` is a `plan_v2`-specific wrapper around `PickBest`
 
+**Dim**:
+A single axis of a Pareto frontier, expressed as `Dim<MemPtr, Cmp>` where `MemPtr` projects an Alt to a comparable value and `Cmp` is a comparator struct (`LowerIsBetter`, `SmallerSubsetIsBetter`, `LargerSubsetIsBetter`). Totality is auto-detected from `Cmp::compare`'s `<=>` return type; totally-ordered dims contribute to the lex sort key the pruner maintains on `alts_`. `ParetoFrontier` is parameterised by `Alt` and a pack of `Dim`s; there is no separate "dominance functor" type. See [ADR 0007](../../docs/adr/0007-pareto-frontier-dims-as-type-parameter.md).
+_Avoid_: "dominance function", "axis comparator"
+
 **DefaultResolver**:
 A test-only resolver in `test_support/extract.hpp`. Wraps `DfsPostOrder` with min-cost alt selection (`CostResult::resolve()`) and unconditional child traversal. Not suitable for cost models whose chosen alt may exclude some children (e.g. alive/dead Bind semantics).
 _Avoid_: using `DefaultResolver` in production code

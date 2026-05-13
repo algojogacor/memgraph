@@ -16,124 +16,142 @@
 #include <compare>
 #include <concepts>
 #include <functional>
+#include <ranges>
 #include <span>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
-#include <boost/container/small_vector.hpp>
-
 namespace memgraph::planner::core::extract {
 
-/// A dominance relation over Alt: a default-constructible binary callable
-/// (Alt const&, Alt const&) -> std::partial_ordering with the convention:
-///   less       - lhs is dominated by rhs (rhs is at least as good in all dims)
-///   greater    - lhs dominates rhs
-///   equivalent - both dominate each other (Pareto-equal: same cost, same demand)
-///   unordered  - incomparable (neither dominates the other)
-/// The dominance relation MUST be transitive - if a >= b and b >= c then
-/// a >= c (with `>=` here meaning "dominates or is equivalent to"). prune()'s
-/// early break relies on this property.
-///
-/// Returning a 3-way ordering (rather than two separate bool calls for the two
-/// directions) lets each dominance functor compare the two alternatives in a
-/// single pass over their per-alt state - typically a sorted required-set,
-/// where the two-bool form would walk both sets twice.
-template <typename Fn, typename Alt>
-concept DominanceRelation =
-    std::invocable<Fn, Alt const &, Alt const &> &&
-    std::convertible_to<std::invoke_result_t<Fn, Alt const &, Alt const &>, std::partial_ordering> &&
-    std::default_initializable<Fn>;
-
 // ============================================================================
-// Compositional Pareto comparison
+// Comparators
 // ============================================================================
-// A dominance functor over Alt can be expressed as the Pareto-fold of one or
-// more per-dimension comparators.  Each comparator answers: "for this single
-// dimension, does a dominate b, get dominated by b, tie, or is the dim itself
-// incomparable?"  pareto_compare combines them: agreement on direction (with at
-// least one strict) means dominance; disagreement means incomparable.
-//
-// Convention (matches DominanceRelation):
-//   less        - lhs is dominated
-//   greater     - lhs dominates
-//   equivalent  - tied
-//   unordered   - incomparable
+// A comparator is a stateless struct exposing static `compare(a, b)` returning
+// some `<=>` ordering type.  Totality is detected at compile time from that
+// return type: `strong_ordering` / `weak_ordering` ⇒ totally ordered.
+// Comparators that need set-based reasoning return `partial_ordering`.
 
-/// "Lower is better" comparator for any three-way-comparable type.  The natural
-/// `<=>` says a < b ⇒ less, but in dominance terms "smaller" means "better"
-/// means a dominates b ⇒ greater.  Swapping operands inverts the ordering
-/// without an enum dance, and strong_ordering implicitly converts to
-/// partial_ordering on return.
-inline constexpr auto lower_is_better = [](auto const &a, auto const &b) -> std::partial_ordering { return b <=> a; };
+/// "Lower is better" for any three-way-comparable type.  Returns whatever the
+/// underlying `<=>` yields (typically `strong_ordering`) so the totally-ordered
+/// trait is detectable.  Swapping operands inverts the ordering so a < b ⇒
+/// "a dominates b" ⇒ `greater`.
+struct LowerIsBetter {
+  static constexpr auto compare(auto const &a, auto const &b) { return b <=> a; }
+};
 
-/// "Smaller-by-inclusion is better" comparator for two sorted ranges.
-/// Single forward merge over both ranges to determine the subset relations,
-/// with mid-pass early-exit once both subset flags are false (incomparable).
-inline constexpr auto smaller_subset_is_better = []<std::ranges::input_range R>(R const &a,
-                                                                                R const &b) -> std::partial_ordering {
-  auto it_a = std::ranges::begin(a);
-  auto const end_a = std::ranges::end(a);
-  auto it_b = std::ranges::begin(b);
-  auto const end_b = std::ranges::end(b);
-  bool a_subset_b = true;
-  bool b_subset_a = true;
-  while (it_a != end_a && it_b != end_b) {
-    auto const cmp = *it_a <=> *it_b;
-    if (std::is_lt(cmp)) {
-      a_subset_b = false;  // *it_a is in a but not in b
-      ++it_a;
-    } else if (std::is_gt(cmp)) {
-      b_subset_a = false;  // *it_b is in b but not in a
-      ++it_b;
-    } else {
-      ++it_a;
-      ++it_b;
+/// "Smaller-by-inclusion is better" for two sorted ranges.  Single forward
+/// merge with early-exit once both subset flags are false.  An inexpensive
+/// size-based prefilter rules out the impossible subset direction; the merge
+/// only runs when at least one direction is still plausible.
+struct SmallerSubsetIsBetter {
+  template <std::ranges::input_range R>
+  static auto compare(R const &a, R const &b) -> std::partial_ordering {
+    auto const size_a = std::ranges::size(a);
+    auto const size_b = std::ranges::size(b);
+    // Cardinality rules out subset directions cheaply.  a ⊆ b requires
+    // |a| ≤ |b|; b ⊆ a requires |b| ≤ |a|.
+    bool a_subset_b = size_a <= size_b;
+    bool b_subset_a = size_b <= size_a;
+    if (!a_subset_b && !b_subset_a) return std::partial_ordering::unordered;
+
+    auto it_a = std::ranges::begin(a);
+    auto const end_a = std::ranges::end(a);
+    auto it_b = std::ranges::begin(b);
+    auto const end_b = std::ranges::end(b);
+    while (it_a != end_a && it_b != end_b) {
+      auto const cmp = *it_a <=> *it_b;
+      if (std::is_lt(cmp)) {
+        a_subset_b = false;  // element in a but not in b
+        ++it_a;
+      } else if (std::is_gt(cmp)) {
+        b_subset_a = false;  // element in b but not in a
+        ++it_b;
+      } else {
+        ++it_a;
+        ++it_b;
+      }
+      if (!a_subset_b && !b_subset_a) break;
     }
-    if (!a_subset_b && !b_subset_a) break;
+    if (it_a != end_a) a_subset_b = false;
+    if (it_b != end_b) b_subset_a = false;
+    // a ⊆ b means a "needs less" → a is better → a dominates b → greater.
+    if (a_subset_b && b_subset_a) return std::partial_ordering::equivalent;
+    if (a_subset_b) return std::partial_ordering::greater;
+    if (b_subset_a) return std::partial_ordering::less;
+    return std::partial_ordering::unordered;
   }
-  if (it_a != end_a) a_subset_b = false;
-  if (it_b != end_b) b_subset_a = false;
-  // a ⊆ b means a "needs less" → a is better → a dominates b → greater.
-  if (a_subset_b && b_subset_a) return std::partial_ordering::equivalent;
-  if (a_subset_b) return std::partial_ordering::greater;
-  if (b_subset_a) return std::partial_ordering::less;
-  return std::partial_ordering::unordered;
 };
 
-/// "Larger-by-inclusion is better" - the dual of smaller_subset_is_better.
-/// Use for "introduces" / "provides" axes where having more is helpful
-/// (e.g. an alt that introduces more downstream-visible symbols dominates
-/// one with a strict subset, all else equal).  Implemented by swapping the
-/// arguments to smaller_subset_is_better so the inclusion direction flips.
-inline constexpr auto larger_subset_is_better = []<std::ranges::input_range R>(R const &a,
-                                                                               R const &b) -> std::partial_ordering {
-  return smaller_subset_is_better(b, a);
+/// "Larger-by-inclusion is better" - the dual of SmallerSubsetIsBetter.
+/// Use for "introduces" / "provides" axes where having more is helpful.
+struct LargerSubsetIsBetter {
+  template <std::ranges::input_range R>
+  static auto compare(R const &a, R const &b) -> std::partial_ordering {
+    return SmallerSubsetIsBetter::compare(b, a);
+  }
 };
 
-/// Lift a member-pointer + per-value comparator into a per-Alt dim function.
-/// Usage: `dim<&Alt::cost>(lower_is_better)` yields a callable
-/// `(Alt const&, Alt const&) -> std::partial_ordering`.
+// ============================================================================
+// Dim
+// ============================================================================
+// A dimension projects an `Alt` through a member pointer and ranks the
+// projected values with a comparator.  `Dim<MemPtr, Cmp>` is the only way to
+// spell a frontier dimension; `ParetoFrontier` is parameterised by a pack of
+// `Dim`s directly (no separate dominance-functor type).
+
 template <auto MemPtr, typename Cmp>
-[[nodiscard]] constexpr auto dim(Cmp cmp) {
-  return [cmp = std::move(cmp)](auto const &a, auto const &b) -> std::partial_ordering {
-    return cmp(a.*MemPtr, b.*MemPtr);
-  };
-}
+struct Dim {
+  template <typename Alt>
+  static constexpr auto compare(Alt const &a, Alt const &b) {
+    return Cmp::compare(a.*MemPtr, b.*MemPtr);
+  }
+};
 
-/// Compare two alts under Pareto with the given per-dimension comparators.
-///   - Any unordered dim → result is unordered.
-///   - Disagreement (one less, another greater) → unordered.
-///   - All equivalent → equivalent.
+// ============================================================================
+// Concepts
+// ============================================================================
+
+template <typename D, typename Alt>
+concept ParetoDimension = requires(Alt const &a, Alt const &b) {
+  { D::compare(a, b) } -> std::convertible_to<std::partial_ordering>;
+};
+
+namespace detail {
+template <typename O>
+concept IsTotalOrderingType = std::same_as<O, std::strong_ordering> || std::same_as<O, std::weak_ordering>;
+}  // namespace detail
+
+template <typename D, typename Alt>
+concept TotallyOrderedDim = ParetoDimension<D, Alt> && requires(Alt const &a, Alt const &b) {
+  requires detail::IsTotalOrderingType<std::remove_cvref_t<decltype(D::compare(a, b))>>;
+};
+
+/// A combine function for ParetoFrontier::cartesian_product: produces a new Alt
+/// from a pair of input Alts (one cartesian-product element).
+template <typename Fn, typename Alt>
+concept Combiner = std::invocable<Fn const &, Alt const &, Alt const &> &&
+                   std::convertible_to<std::invoke_result_t<Fn const &, Alt const &, Alt const &>, Alt>;
+
+// ============================================================================
+// Dominance / lex helpers
+// ============================================================================
+
+/// Pareto fold over all dims:
+///   - Any unordered dim ⇒ result is unordered.
+///   - Disagreement (one less, another greater) ⇒ unordered.
+///   - All equivalent ⇒ equivalent.
 ///   - Otherwise the agreed direction wins.
-template <typename Alt, typename... Dims>
-[[nodiscard]] auto pareto_compare(Alt const &a, Alt const &b, Dims const &...dims) -> std::partial_ordering {
+/// Short-circuits as soon as the running result hits unordered, saving
+/// remaining dim comparisons (e.g. the set-merge in SmallerSubsetIsBetter
+/// when an earlier scalar dim already conflicts).  Public so that callers
+/// can query dominance directly without constructing a ParetoFrontier (e.g.
+/// algebra-level tests).
+template <typename... Dims, typename Alt>
+auto dominance_compare(Alt const &a, Alt const &b) -> std::partial_ordering {
   using std::partial_ordering;
   auto acc = partial_ordering::equivalent;
   auto step = [&](partial_ordering next) -> bool {
-    // Precondition: acc != unordered (we return false the moment it would).
-    // - next == equivalent: tie, acc unchanged.
-    // - acc == equivalent: adopt next (which may itself be unordered).
-    // - both directional and disagreeing (incl. next == unordered): unordered.
     if (next == partial_ordering::equivalent) return true;
     if (acc == partial_ordering::equivalent) {
       acc = next;
@@ -142,76 +160,103 @@ template <typename Alt, typename... Dims>
     }
     return acc != partial_ordering::unordered;
   };
-  // Short-circuit fold: once step returns false, remaining dims aren't called.
-  // Saves the set-merge in smaller_subset_is_better when an earlier scalar dim
-  // already conflicts.
-  (void)(step(dims(a, b)) && ...);
+  (void)(step(static_cast<partial_ordering>(Dims::compare(a, b))) && ...);
   return acc;
 }
 
-/// A combine function for ParetoFrontier::combine: produces a new Alt from a
-/// pair of input Alts (one cartesian-product element).  Callable repeatedly
-/// over the n × m product, so the operator must be const-callable on whatever
-/// state the functor carries.
-template <typename Fn, typename Alt>
-concept Combiner = std::invocable<Fn const &, Alt const &, Alt const &> &&
-                   std::convertible_to<std::invoke_result_t<Fn const &, Alt const &, Alt const &>, Alt>;
+namespace detail {
 
-/// Generic Pareto frontier over alternatives of type Alt.
+/// Step one dim of the lex compare.  Returns true to continue folding, false
+/// to short-circuit because this dim already decided the order.
+template <typename D, typename Alt>
+constexpr bool lex_step(Alt const &a, Alt const &b, std::weak_ordering &result) {
+  if constexpr (TotallyOrderedDim<D, Alt>) {
+    auto const cmp = D::compare(a, b);
+    if (cmp == 0) return true;  // tied on this dim, look at the next
+    // cmp > 0 ⇒ a "dominates" b in this dim ⇒ a is better ⇒ a sorts first
+    // ⇒ a precedes b ⇒ less.
+    result = (cmp > 0) ? std::weak_ordering::less : std::weak_ordering::greater;
+    return false;
+  }
+  return true;  // non-totally-ordered dims don't participate in lex sort
+}
+
+/// Lex compare two alts using each totally-ordered dim's ranking.  Folds with
+/// `&&` so remaining dims aren't evaluated once one of them decides the order.
+template <typename Alt, typename... Dims>
+auto lex_compare(Alt const &a, Alt const &b) -> std::weak_ordering {
+  std::weak_ordering result = std::weak_ordering::equivalent;
+  (void)(lex_step<Dims, Alt>(a, b, result) && ...);
+  return result;
+}
+
+template <typename Alt, typename... Dims>
+constexpr bool has_totally_ordered_dim_v = (TotallyOrderedDim<Dims, Alt> || ...);
+
+}  // namespace detail
+
+// ============================================================================
+// ParetoFrontier
+// ============================================================================
+
+/// Generic Pareto frontier over alternatives of type `Alt` ranked by a pack of
+/// dimensions `Dims...`.  Each `Dims` must satisfy `ParetoDimension<D, Alt>`.
 ///
-/// DominanceFn must satisfy `DominanceRelation<DominanceFn, Alt>` - see the
-/// concept above for the transitivity contract.
+/// The dominance relation is the pareto-fold of all per-dim comparators (see
+/// `detail::dom_compare`).  Every comparator must be transitive on its own
+/// axis: a ≥ b and b ≥ c ⇒ a ≥ c (with `≥` here meaning "dominates or ties").
+/// The pruner's early-out on dominance relies on this property.
 ///
-/// CombineFn (used by combine/flat_map, not part of the type): (Alt, Alt) -> Alt
-///   Produces a new alternative from two parent alternatives (Cartesian product element).
+/// `alts_` is maintained in lex-sorted order by the sort keys of the totally-
+/// ordered dims (in declaration order).  Callers may rely on this:
+/// `alts().front()` is the lex-smallest survivor, which under the conventional
+/// `LowerIsBetter`-on-cost setup is the minimum-cost alternative.
 ///
 /// Example:
-///   struct MyDominance {
-///     static auto operator()(MyAlt const &a, MyAlt const &b) -> std::partial_ordering {
-///       return pareto_compare(a, b, dim<&MyAlt::cost>(lower_is_better),
-///                                   dim<&MyAlt::req>(smaller_subset_is_better));
-///     }
-///   };
-///   using Frontier = ParetoFrontier<MyAlt, MyDominance>;
-template <typename Alt, typename DominanceFn>
-  requires std::copyable<Alt> && DominanceRelation<DominanceFn, Alt>
+///   struct MyAlt { double cost; std::set<int> req; ENodeId id; };
+///   using Frontier = ParetoFrontier<MyAlt,
+///       Dim<&MyAlt::cost, LowerIsBetter>,
+///       Dim<&MyAlt::req,  SmallerSubsetIsBetter>>;
+template <typename Alt, typename... Dims>
+  requires std::copyable<Alt> && (ParetoDimension<Dims, Alt> && ...)
 struct ParetoFrontier {
   ParetoFrontier() = default;
 
-  /// Construct from an unpruned list of alternatives.  Prunes on construction
-  /// so the resulting frontier satisfies the Pareto invariant.  This is the
-  /// only way to seed a frontier from raw data; flat_map / combine /
+  /// Construct from an unpruned list of alternatives.  Sorts and prunes on
+  /// construction so the resulting frontier satisfies the Pareto invariant
+  /// and the lex-sorted-storage contract.  flat_map / cartesian_product /
   /// merge_in_place are the compositional alternatives.
-  explicit ParetoFrontier(std::vector<Alt> alts) : alts_(std::move(alts)) { prune(); }
+  explicit ParetoFrontier(std::vector<Alt> alts) : alts_(std::move(alts)) { sort_and_prune(); }
 
-  /// Read-only view over the (Pareto-pruned) alternatives.  Returning span keeps
-  /// the storage choice (currently std::vector) out of the public contract.
+  /// Read-only view over the (Pareto-pruned, lex-sorted) alternatives.
+  /// Returning span keeps the storage choice out of the public contract.
   [[nodiscard]] auto alts() const noexcept -> std::span<Alt const> { return alts_; }
 
-  /// In-place mutation that the caller promises preserves the Pareto invariant.
-  /// Calls fn(alt) on each surviving alt; no re-prune is performed.
+  /// In-place mutation that the caller promises preserves the Pareto invariant
+  /// AND the lex sort order.  Calls fn(alt) on each surviving alt; no re-prune
+  /// or re-sort is performed.
   ///
-  /// Contract: fn must not change relative ordering under DominanceFn - i.e.,
-  /// for any two alts A and B in the frontier, the truth value of
-  /// DominanceFn{}(A, B) must be the same after fn(A) and fn(B) as before.
-  /// Adding a uniform constant to a `cost` field, or rewriting a field that
-  /// dominance does not read (e.g., enode_id), both satisfy this contract.
-  /// Mutations that could flip dominance must go through flat_map / merge /
-  /// combine instead, which re-prune.
+  /// Contract: for every totally-ordered dim D and every pair (A, B) in the
+  /// frontier, the result of `D::compare(A, B)` must be unchanged by fn —
+  /// i.e., fn is monotone on each totally-ordered axis.  Adding a uniform
+  /// constant to a `cost` field, or rewriting a field that no dim reads
+  /// (e.g., enode_id), both satisfy this contract.  Mutations that could
+  /// flip ordering on any axis must go through flat_map / merge_in_place /
+  /// cartesian_product instead, which re-sort and re-prune.
   template <typename Fn>
     requires std::invocable<Fn, Alt &>
   void mutate_pruning_invariant_preserving(Fn &&fn) {
     for (auto &alt : alts_) fn(alt);
   }
 
-  /// Flat-map: for each alternative, produce zero or more new alternatives via a callback,
-  /// collect into a new frontier, then prune. This is the general pattern for
-  /// per-alt conditional emission.
-  /// @param fn  (Alt const&, auto emit) -> void - calls emit(Alt&&) to produce output alternatives.
+  /// Flat-map: for each alternative, produce zero or more new alternatives via
+  /// a callback, collect into a new frontier, then sort + prune.
+  /// @param fn  (Alt const&, auto emit) -> void - calls emit(Alt&&) to produce
+  ///            output alternatives.
   template <typename Fn>
   [[nodiscard]] static auto flat_map(ParetoFrontier const &input, Fn &&fn) -> ParetoFrontier {
     auto out = std::vector<Alt>{};
-    out.reserve(input.alts_.size());  // heuristic: at least one output per input
+    out.reserve(input.alts_.size());
     for (auto const &alt : input.alts_) {
       fn(alt, [&](Alt &&v) { out.push_back(std::move(v)); });
     }
@@ -219,22 +264,27 @@ struct ParetoFrontier {
   }
 
   /// Union another frontier into this one and re-prune.  Both `*this` and
-  /// `other` are already Pareto-pruned; only cross-pairs and within-suffix
-  /// pairs need checking (see prune_with_pruned_prefix).  `other`'s alts
-  /// are moved-from on return.
+  /// `other` are already lex-sorted and Pareto-pruned, so the concat is an
+  /// O(n) `inplace_merge`; only the dominance pass is quadratic.  `other`'s
+  /// alts are moved-from on return.
   void merge_in_place(ParetoFrontier &&other) {
-    auto const pruned_prefix = alts_.size();
-    alts_.reserve(pruned_prefix + other.alts_.size());
+    auto const pivot = alts_.size();
+    alts_.reserve(pivot + other.alts_.size());
     std::ranges::move(other.alts_, std::back_inserter(alts_));
-    prune_with_pruned_prefix(pruned_prefix);
+    if constexpr (detail::has_totally_ordered_dim_v<Alt, Dims...>) {
+      std::inplace_merge(alts_.begin(), alts_.begin() + pivot, alts_.end(), LexLess{});
+    }
+    prune_sorted();
   }
 
-  /// Cartesian product of two frontiers. For each (l, r) pair, calls combine_fn(l, r)
-  /// to produce a new alternative, then prunes the result.
+  /// Cartesian product of two frontiers.  For each (l, r) pair, calls
+  /// combine_fn(l, r) to produce a new alternative, then sorts and prunes the
+  /// result.  Output size before pruning is lhs.size() * rhs.size(); callers
+  /// paying that cost should expect it.
   template <typename CombineFn>
     requires Combiner<CombineFn, Alt>
-  [[nodiscard]] static auto combine(ParetoFrontier const &lhs, ParetoFrontier const &rhs, CombineFn &&combine_fn)
-      -> ParetoFrontier {
+  [[nodiscard]] static auto cartesian_product(ParetoFrontier const &lhs, ParetoFrontier const &rhs,
+                                              CombineFn &&combine_fn) -> ParetoFrontier {
     auto out = std::vector<Alt>{};
     out.reserve(lhs.alts_.size() * rhs.alts_.size());
     for (auto const &l : lhs.alts_) {
@@ -250,105 +300,64 @@ struct ParetoFrontier {
   // element-wise move dominates here because Alt is large with a non-trivial move.
   std::vector<Alt> alts_;
 
-  /// Remove alternatives dominated by any other alternative in the frontier.
-  /// Two-pass: first mark dominated indices, then erase. This avoids reading
-  /// moved-from elements (std::erase_if/remove_if moves elements during its pass).
-  /// Private - there is no path to seed an unpruned frontier from outside, so
-  /// external prune() calls would always be no-ops.
-  void prune() { prune_with_pruned_prefix(0); }
+  struct LexLess {
+    auto operator()(Alt const &a, Alt const &b) const -> bool { return detail::lex_compare<Alt, Dims...>(a, b) < 0; }
+  };
 
-  /// Prune assuming `alts_[0..pruned_prefix)` is already Pareto-pruned: skip
-  /// pair checks that lie entirely within the pruned prefix.  Used by
-  /// `merge_in_place` where two pre-pruned sets are concatenated; pruned_prefix
-  /// is 0 for a from-scratch prune.
-  ///
-  /// For each ordered pair (i, j) we need to check, j ranges over:
-  ///   - i in prefix [0, pruned_prefix):  j in suffix [pruned_prefix, n)   (cross-pairs)
-  ///   - i in suffix [pruned_prefix, n):  j in (i, n)                      (within-suffix)
-  /// That is `j_start(i) = max(pruned_prefix, i + 1)`, which collapses both
-  /// passes into one loop.
-  void prune_with_pruned_prefix(size_t pruned_prefix) {
-    auto const n = alts_.size();
-    if (n <= pruned_prefix) return;  // nothing newly added; no new pairs
-    if (n <= 1) return;              // 0 or 1 alt total: no pairs at all
-
-    // SBO buffer for the dominated-flag array.  Frontiers rarely exceed 64
-    // alternatives after pruning; larger ones fall back to heap.
-    boost::container::small_vector<bool, 64> dominated(n, false);
-
-    for (size_t i = 0; i < n; ++i) {
-      if (dominated[i]) continue;
-      auto const j_start = std::max(pruned_prefix, i + 1);
-      for (size_t j = j_start; j < n; ++j) {
-        if (dominated[j]) continue;
-        auto const cmp = DominanceFn{}(alts_[i], alts_[j]);
-        if (cmp == std::partial_ordering::less || cmp == std::partial_ordering::equivalent) {
-          // i dominated by j (or Pareto-equal: drop one, keep j by convention).
-          dominated[i] = true;
-          // Transitivity break - see prune() / DominanceRelation concept.
-          break;
-        }
-        if (cmp == std::partial_ordering::greater) {
-          dominated[j] = true;
-        }
-        // unordered: keep both, continue scanning.
-      }
+  void sort_and_prune() {
+    if constexpr (detail::has_totally_ordered_dim_v<Alt, Dims...>) {
+      std::ranges::sort(alts_, LexLess{});
     }
+    prune_sorted();
+  }
 
-    // Compact survivors in place.
+  /// Forward-sweep skyline maintenance.  Assumes `alts_` is in lex-sorted
+  /// order (or that no totally-ordered dim exists, in which case order is
+  /// irrelevant).  For each candidate, scans the running survivor list:
+  /// drops the candidate if any survivor dominates it; drops survivors that
+  /// the candidate dominates; keeps everything else.  Transitivity lets us
+  /// stop scanning the survivor list once the candidate itself has been
+  /// dominated (it can no longer dominate any survivor it hasn't already
+  /// inspected, because that would chain via the dominator).
+  void prune_sorted() {
+    auto const n = alts_.size();
+    if (n < 2) return;
     size_t write = 0;
     for (size_t read = 0; read < n; ++read) {
-      if (dominated[read]) continue;
-      if (write != read) alts_[write] = std::move(alts_[read]);
-      ++write;
+      auto candidate = std::move(alts_[read]);
+      bool dominated = false;
+      size_t kept = 0;
+      for (size_t j = 0; j < write; ++j) {
+        auto const cmp = dominance_compare<Dims...>(alts_[j], candidate);
+        if (cmp == std::partial_ordering::greater || cmp == std::partial_ordering::equivalent) {
+          // Survivor dominates or ties candidate: drop candidate, retain
+          // remaining survivors (transitivity guarantees candidate can no
+          // longer dominate any of them).
+          for (size_t k = j; k < write; ++k) {
+            if (kept != k) alts_[kept] = std::move(alts_[k]);
+            ++kept;
+          }
+          dominated = true;
+          break;
+        }
+        if (cmp == std::partial_ordering::less) {
+          // Candidate dominates this survivor: drop it (skip writing).
+          continue;
+        }
+        // Unordered: survivor stays.
+        if (kept != j) alts_[kept] = std::move(alts_[j]);
+        ++kept;
+      }
+      write = kept;
+      if (!dominated) alts_[write++] = std::move(candidate);
     }
     alts_.resize(write);
   }
 };
 
-/// Concept for alternatives usable with CostResultBase.  Beyond what
-/// `cost` must be a non-static data member (not a property/function);
-/// resolve projects via `&Alt::cost`.
-template <typename Alt>
-concept ParetoAlt = std::copyable<Alt> && requires(Alt const &a) {
-  { a.cost } -> std::totally_ordered;
-  { a.enode_id };
-};
-
-/// Base for ParetoFrontier types that use min-cost as their resolve/min_cost
-/// strategy.  Derived types get resolve(), min_cost(), and convenience
-/// constructors for free.  The Self type for the merge return / *this is
-/// deduced via C++23 explicit object parameters; derived classes do not pass
-/// themselves through a CRTP template parameter.  Alt must have `.cost`
-/// (double-compatible) and `.enode_id` fields.
-template <typename Alt, typename DominanceFn>
-  requires ParetoAlt<Alt>
-struct CostResultBase : ParetoFrontier<Alt, DominanceFn> {
-  using Base = ParetoFrontier<Alt, DominanceFn>;
-  using Base::Base;
-  using cost_t = decltype(Alt::cost);
-
-  CostResultBase() = default;
-
-  // NOLINTNEXTLINE(google-explicit-constructor)
-  CostResultBase(Base base) : Base(std::move(base)) {}
-
-  /// Initializer-list construction prunes on construction.
-  CostResultBase(std::initializer_list<Alt> init) : Base(std::vector<Alt>(init)) {}
-
-  /// Vector construction prunes on construction.  Sibling of the
-  /// initializer-list ctor for callers that build alts at runtime.
-  // NOLINTNEXTLINE(google-explicit-constructor)
-  CostResultBase(std::vector<Alt> alts) : Base(std::move(alts)) {}
-
-  template <typename Self>
-  auto resolve(this Self const &self) -> std::pair<decltype(Alt::enode_id), cost_t const &> {
-    auto const alts = self.alts();
-    auto it = std::ranges::min_element(alts, {}, &Alt::cost);
-    assert(it != alts.end() && "resolve called on empty frontier");
-    return {it->enode_id, it->cost};
-  }
-};
+// ============================================================================
+// PickBest
+// ============================================================================
 
 /// Returns a pointer to the minimum-cost alternative in `alts` satisfying
 /// `pred`, or nullptr if none match.  Caller decides what nullptr means.
@@ -363,5 +372,56 @@ template <std::ranges::range Alts, typename Pred>
   }
   return best;
 }
+
+// ============================================================================
+// CostResultBase
+// ============================================================================
+
+/// Concept for alternatives usable with CostResultBase.  `cost` must be a
+/// non-static data member (not a property/function); resolve projects via
+/// `&Alt::cost`.
+template <typename Alt>
+concept ParetoAlt = std::copyable<Alt> && requires(Alt const &a) {
+  { a.cost } -> std::totally_ordered;
+  { a.enode_id };
+};
+
+/// Base for ParetoFrontier types that use min-cost as their resolve / min_cost
+/// strategy.  Derived types get resolve() and convenience constructors for
+/// free.  The Self type for *this is deduced via C++23 explicit object
+/// parameters; derived classes do not pass themselves through a CRTP template
+/// parameter.  Alt must have `.cost` (totally ordered) and `.enode_id` fields.
+///
+/// resolve() is O(1) because the head of the lex-sorted `alts()` is the
+/// minimum-cost survivor under the conventional `Dim<&Alt::cost, LowerIsBetter>`
+/// setup.  We still assert the head matches the global min as a safety check
+/// against unconventional dim packs.
+template <typename Alt, typename... Dims>
+  requires ParetoAlt<Alt>
+struct CostResultBase : ParetoFrontier<Alt, Dims...> {
+  using Base = ParetoFrontier<Alt, Dims...>;
+  using Base::Base;
+  using cost_t = decltype(Alt::cost);
+
+  CostResultBase() = default;
+
+  // NOLINTNEXTLINE(google-explicit-constructor)
+  CostResultBase(Base base) : Base(std::move(base)) {}
+
+  /// Initializer-list construction sorts and prunes on construction.
+  CostResultBase(std::initializer_list<Alt> init) : Base(std::vector<Alt>(init)) {}
+
+  /// Vector construction sorts and prunes on construction.
+  // NOLINTNEXTLINE(google-explicit-constructor)
+  CostResultBase(std::vector<Alt> alts) : Base(std::vector<Alt>(std::move(alts))) {}
+
+  template <typename Self>
+  auto resolve(this Self const &self) -> std::pair<decltype(Alt::enode_id), cost_t const &> {
+    auto const alts = self.alts();
+    auto it = std::ranges::min_element(alts, {}, &Alt::cost);
+    assert(it != alts.end() && "resolve called on empty frontier");
+    return {it->enode_id, it->cost};
+  }
+};
 
 }  // namespace memgraph::planner::core::extract

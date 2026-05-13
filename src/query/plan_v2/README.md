@@ -63,7 +63,7 @@ V1 planner is **safe and unchanged**:
     through position-based lookup
 
 - **Cost Model** (`expression_cost.hpp`, `egraph_converter.cpp`)
-  - `PlanCostModel` emits `CostFrontier = ParetoFrontier<Alternative, AlternativeDominance>`
+  - `PlanCostModel` emits `CostFrontier = ParetoFrontier<Alternative, AlternativeDim_Cost, AlternativeDim_Cardinality, AlternativeDim_Required, AlternativeDim_Introduces>`
     per eclass, where each `Alternative` carries `cost`, the `required` demand
     set (symbols this plan needs from its environment), and `is_alive` for Bind
     pairings.
