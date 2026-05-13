@@ -141,8 +141,15 @@ struct FrontierContext {
 /// Returns a pointer into `frontier_map`. nullptr means the eclass is cyclic
 /// (either fully unreachable or in-progress on the current recursion path).
 /// The pointer is valid until the next mutation of `frontier_map` by the
-/// caller; ComputeFrontiers itself never invalidates the returned pointer
-/// across recursive calls, since each call re-finds before returning.
+/// caller.
+///
+/// On the top-level call (`frontier_map.empty()`) we reserve capacity to
+/// `egraph.num_classes()`.  That bounds the total entries ever inserted by
+/// this call (one per visited eclass), so no rehash happens during the
+/// recursion.  With iterators stable, every child-frontier pointer returned
+/// by a recursive call remains valid until this function returns, and the
+/// sentinel iterator we emplace for cycle detection is reusable at the end
+/// instead of being re-found.
 template <typename Symbol, typename Analysis, typename CostModel>
   requires CostResultType<typename CostModel::CostResult>
 [[nodiscard]] auto ComputeFrontiers(EGraph<Symbol, Analysis> const &egraph, CostModel const &cost_model,
@@ -154,6 +161,11 @@ template <typename Symbol, typename Analysis, typename CostModel>
 
   auto &out = ctx.frontier_map;
 
+  // Reserve once on the top-level call so no rehash invalidates iterators
+  // or pointers across the recursion.  reserve() is idempotent if the caller
+  // already reserved.
+  if (out.empty()) out.reserve(egraph.num_classes());
+
   if (auto const it = out.find(eclass_id); it != out.end()) {
     return it->second ? &*it->second : nullptr;
   }
@@ -161,9 +173,10 @@ template <typename Symbol, typename Analysis, typename CostModel>
   auto const &eclass = egraph.eclass(eclass_id);
 
   // Mark this e-class as "in progress" with nullopt frontier to detect cycles.
-  // Iterator from this emplace is not retained: recursive calls below may
-  // rehash frontier_map and invalidate it.
-  out.emplace(eclass_id, std::nullopt);
+  // Iterator is stable for the duration of this function: the upfront reserve
+  // prevents rehash, and erasure of unrelated entries leaves other buckets in
+  // place (open addressing).
+  auto sentinel_it = out.emplace(eclass_id, std::nullopt).first;
 
   auto merged_frontier = std::optional<CostResult>{};
 
@@ -174,30 +187,23 @@ template <typename Symbol, typename Analysis, typename CostModel>
   for (auto const &enode_id : eclass.nodes()) {
     auto const &enode = egraph.get_enode(enode_id);
 
-    // Phase 1: recurse to populate frontier_map.  We don't keep the returned
-    // pointers because subsequent recursive inserts may rehash and invalidate
-    // them (boost::unordered_flat_map uses open addressing).
-    for (auto child : enode.children()) {
-      (void)ComputeFrontiers(egraph, cost_model, child, ctx);
-    }
-
-    // Phase 2: look up each child's frontier now that no further inserts will
-    // happen in this enode's iteration.  Pointers obtained here remain valid
-    // until the next mutation of frontier_map - which only occurs at the end
-    // of this function (overwriting the sentinel for `eclass_id`), and that
-    // does not trigger a rehash since the key already exists.
+    // Single pass: recurse and capture the returned pointer in one go.  No
+    // rehash can happen (see reserve above), so the pointer stays valid for
+    // the remainder of this function.  We always recurse for *every* child
+    // even when one turns out cyclic: the recursion's side effect (caching
+    // a non-cyclic sibling's frontier) is observable by other enodes / the
+    // resolver.  Only the pointer collection stops once we know the cost
+    // model won't be called for this enode.
     children_frontiers.clear();
     children_frontiers.reserve(enode.children().size());
     auto has_uncomputable_child = false;
     for (auto child : enode.children()) {
-      auto it = out.find(child);
-      if (it == out.end() || !it->second) {
-        // Erased (fully cyclic) or in-progress sentinel (self/mutual cycle).
-        // Cost model won't be called, no need to gather remaining children.
+      auto const *child_frontier = ComputeFrontiers(egraph, cost_model, child, ctx);
+      if (!child_frontier) {
         has_uncomputable_child = true;
-        break;
+        continue;
       }
-      children_frontiers.push_back(&*it->second);
+      if (!has_uncomputable_child) children_frontiers.push_back(child_frontier);
     }
     if (has_uncomputable_child) continue;
 
@@ -210,10 +216,6 @@ template <typename Symbol, typename Analysis, typename CostModel>
     }
   }
 
-  // Re-find: the sentinel iterator from emplace above may have been
-  // invalidated by rehashes during recursion.
-  auto sentinel_it = out.find(eclass_id);
-  assert(sentinel_it != out.end());
   if (merged_frontier) {
     sentinel_it->second = std::move(merged_frontier);
     return &*sentinel_it->second;
