@@ -219,12 +219,15 @@ struct ParetoFrontier {
     return ParetoFrontier{std::move(out)};
   }
 
-  /// Union another frontier into this one and re-prune.  `other`'s alts are
+  /// Union another frontier into this one and re-prune.  Both `*this` and
+  /// `other` are already Pareto-pruned, so within-`*this` pairs need not be
+  /// re-checked; the prune scan starts at the boundary.  `other`'s alts are
   /// moved-from on return.
   void merge_in_place(ParetoFrontier &&other) {
-    alts_.reserve(alts_.size() + other.alts_.size());
+    auto const pruned_prefix = alts_.size();
+    alts_.reserve(pruned_prefix + other.alts_.size());
     std::ranges::move(other.alts_, std::back_inserter(alts_));
-    prune();
+    prune(pruned_prefix);
   }
 
   /// Cartesian product of two frontiers.  For each (l, r) pair, calls
@@ -256,11 +259,18 @@ struct ParetoFrontier {
   /// Transitivity lets us stop scanning the survivor list once the candidate
   /// itself has been dominated (it can no longer dominate any survivor it
   /// hasn't already inspected, because that would chain via the dominator).
-  void prune() {
+  ///
+  /// `pruned_prefix` is the count of leading `alts_` entries the caller
+  /// asserts are already mutually Pareto-pruned.  Those entries seed the
+  /// survivor list directly and are not pairwise re-checked against each
+  /// other; the sweep starts at `pruned_prefix`.  Used by `merge_in_place`,
+  /// where `*this` is known pruned before the suffix is appended.  Other
+  /// public ops pass 0 (the default).
+  void prune(size_t pruned_prefix = 0) {
     auto const n = alts_.size();
-    if (n < 2) return;
-    size_t write = 0;
-    for (size_t read = 0; read < n; ++read) {
+    if (n < 2 || n <= pruned_prefix) return;
+    size_t write = pruned_prefix;
+    for (size_t read = pruned_prefix; read < n; ++read) {
       auto candidate = std::move(alts_[read]);
       bool dominated = false;
       size_t kept = 0;
