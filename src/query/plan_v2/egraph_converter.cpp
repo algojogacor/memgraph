@@ -76,25 +76,179 @@ struct CostFrontier
   using CostResultBase::CostResultBase;
 };
 
-// --- Frontier ops -----------------------------------------------------------
+// ============================================================================
+// Cost-model algebra
+// ============================================================================
+// Named operations the per-symbol switch below composes.  Each helper describes
+// *what* the cost model does for a particular enode shape; the underlying
+// ParetoFrontier primitives (LazyMap / cartesian_product / flat_map) are an
+// implementation detail of these helpers.
+//
+// Cardinality defaults to 1.0 on per-evaluation operators (binary expressions,
+// NamedOutput): each invocation packages one value regardless of the per-value
+// shape.  Row-pipe operators (Output, Unwind, Subquery) override cardinality
+// inside their dedicated helper.
 
-/// Cartesian product of two frontiers with cost summation and required-set
-/// union.  Each (l, r) pair becomes one alternative in the result, re-stamped
-/// with `enode_id` and `extra_cost`.
-///
-/// Cardinality is set to the scalar default (1.0): every current caller is a
-/// per-evaluation operator (binary expressions, NamedOutput) whose result is
-/// one value per call.  Multiplying child cardinalities would be wrong here -
-/// e.g. NamedOutput(sym, range(0,5)) packages ONE named pair per call even
-/// though the value is a 6-element list, so its cardinality is 1, not 6.
-/// Callers that need a non-scalar result (Function, Output) override
-/// cardinality after combining or use a bespoke combine lambda.
-auto CombineAlts(CostFrontier const &lhs, CostFrontier const &rhs, double extra_cost, planner::core::ENodeId enode_id)
+/// Single-alt frontier with no demand.  Terminal cost-model leaves
+/// (Once, Literal, Symbol, ParamLookup).
+auto LeafAlt(double cost, planner::core::ENodeId enode_id) -> CostFrontier {
+  return CostFrontier{{{.cost = cost, .required = {}, .enode_id = enode_id}}};
+}
+
+/// Single-alt frontier demanding `sym_eclass`.  Identifier nodes use this.
+auto IdentifierAlt(double cost, planner::core::EClassId sym_eclass, planner::core::ENodeId enode_id) -> CostFrontier {
+  return CostFrontier{{{.cost = cost, .required = SymbolSet{{sym_eclass}}, .enode_id = enode_id}}};
+}
+
+/// Re-stamp source under `enode_id`, optionally bumping cost.  Used by unary
+/// expression operators and by the leading-child re-stamp in Output / Function
+/// chains.  View-style: no materialisation if downstream doesn't iterate.
+auto Restamp(CostFrontier const &source, double extra_cost, planner::core::ENodeId enode_id) -> CostFrontier {
+  return CostFrontier::LazyMap(source, extra_cost, enode_id);
+}
+
+/// Cartesian product with cost summation and required-set union.  Default
+/// shape for binary expressions and NamedOutput pairs.
+auto BinaryCombine(CostFrontier const &lhs, CostFrontier const &rhs, double extra_cost, planner::core::ENodeId enode_id)
     -> CostFrontier {
-  return CostFrontier::cartesian_product(lhs, rhs, [&](Alternative const &l, Alternative const &r) {
+  return CostFrontier::cartesian_product(lhs, rhs, [extra_cost, enode_id](Alternative const &l, Alternative const &r) {
     return Alternative{
         .cost = extra_cost + l.cost + r.cost, .required = l.required.set_union(r.required), .enode_id = enode_id};
   });
+}
+
+/// Output × NamedOutput combine.  The row pipe's per-output-row evaluation
+/// scales `named_out`'s scalar cost by the input pipe's cardinality.  The
+/// NamedOutput is evaluated INSIDE the input pipe's row scope, so demands
+/// satisfied by the input's bindings (alive Bind / Unwind) are subtracted
+/// from the residual `required`.  This is what lets `WITH x AS y UNWIND ...
+/// RETURN y` satisfy y's demand from the Bind/Unwind below the Output.
+auto OutputCombine(CostFrontier const &row_pipe, CostFrontier const &named_out, planner::core::ENodeId enode_id)
+    -> CostFrontier {
+  return CostFrontier::cartesian_product(row_pipe, named_out, [enode_id](Alternative const &l, Alternative const &r) {
+    auto const remaining = r.required.difference(l.introduces);
+    return Alternative{.cost = l.cost + l.cardinality * r.cost,
+                       .cardinality = l.cardinality,
+                       .required = l.required.set_union(remaining),
+                       .introduces = l.introduces,
+                       .enode_id = enode_id};
+  });
+}
+
+/// Bind flat-map: for each input alt, emit an alive variant when sym is
+/// demanded (locally or globally) and a dead variant when input doesn't
+/// already demand sym.  See the suppression comments inline for why each
+/// branch is conditional.
+auto BindFlatMap(CostFrontier const &input, CostFrontier const &expr, planner::core::EClassId sym_eclass,
+                 double sym_cost, SymbolSet const &referenced_syms, planner::core::ENodeId enode_id) -> CostFrontier {
+  return CostFrontier::flat_map(input, [&, enode_id](Alternative const &input_alt, auto emit) {
+    // Emit alive when there's a chance someone will demand sym:
+    //   - Input subtree directly demands it (classic case), or
+    //   - Some Identifier(sym) lives elsewhere in the e-graph and
+    //     might cross a sibling boundary at an enclosing Output.
+    // If neither holds, sym has no consumer and the alive alt would
+    // bloat the frontier unbounded - up to 2^N for an N-Bind chain.
+    bool const input_demands_sym = input_alt.required.is_alive(sym_eclass);
+    bool const should_emit_alive = input_demands_sym || referenced_syms.contains(sym_eclass);
+    if (should_emit_alive) {
+      for (auto const &expr_alt : expr.alts()) {
+        auto required = input_alt.required.alive_required(sym_eclass, expr_alt.required);
+        auto introduces = input_alt.introduces;
+        introduces.insert(sym_eclass);
+        // Bind is one-shot, not a row-pipe: passes input's cardinality
+        // through unchanged.  expr is evaluated once at bind-time.
+        emit({.cost = bind::AliveCost(input_alt.cost, sym_cost, expr_alt.cost),
+              .cardinality = input_alt.cardinality,
+              .required = std::move(required),
+              .introduces = std::move(introduces),
+              .enode_id = enode_id,
+              .is_alive = AliveTag::Alive});
+      }
+    }
+    // Emit dead only when input doesn't already demand sym.  When
+    // input_demands_sym is true, the dead alt has sym still in `required`,
+    // so it is only compatible with ancestors that already provide sym.  But
+    // sym is provided only when an ancestor Bind for it is alive - which is
+    // exactly the alive-alt condition.  A dead alt under that condition is
+    // therefore unreachable: no resolver context can pick it that couldn't
+    // also pick alive.  Suppressing it avoids bloating the frontier.
+    if (!input_demands_sym) {
+      emit({.cost = bind::DeadCost(input_alt.cost),
+            .cardinality = input_alt.cardinality,
+            .required = input_alt.required,
+            .introduces = input_alt.introduces,
+            .enode_id = enode_id,
+            .is_alive = AliveTag::Dead});
+    }
+  });
+}
+
+/// Unwind flat-map: row-generative.  Output cardinality is the product of
+/// input's and list's cardinalities; cost is input's pipeline plus per-row
+/// evaluation of the list expression with a structural overhead.  Always
+/// emits Alive because Unwind always introduces sym.
+auto UnwindFlatMap(CostFrontier const &input, CostFrontier const &list, planner::core::EClassId sym_eclass,
+                   double sym_cost, planner::core::ENodeId enode_id) -> CostFrontier {
+  return CostFrontier::flat_map(input, [&, enode_id](Alternative const &input_alt, auto emit) {
+    for (auto const &list_alt : list.alts()) {
+      // sym is always introduced by Unwind, so remove it from input's
+      // required and union list_expr's required (its needs become ours).
+      auto required = input_alt.required.alive_required(sym_eclass, list_alt.required);
+      auto introduces = input_alt.introduces;
+      introduces.insert(sym_eclass);
+      auto const cost = input_alt.cost + (list_alt.cost + kUnwindPerRowOverhead) * input_alt.cardinality + sym_cost;
+      auto const cardinality = input_alt.cardinality * list_alt.cardinality;
+      emit({.cost = cost,
+            .cardinality = cardinality,
+            .required = std::move(required),
+            .introduces = std::move(introduces),
+            .enode_id = enode_id,
+            .is_alive = AliveTag::Alive});
+    }
+  });
+}
+
+/// Subquery flat-map: scope-barrier row-pipe.  Inner alts with non-empty
+/// required are silently rejected (non-importing CALL only).  Inner
+/// introductions are STRIPPED at the boundary; only `exposed_syms`
+/// (children[2..]) cross into the outer scope, unioned with outer's own
+/// introductions.
+auto SubqueryFlatMap(CostFrontier const &outer, CostFrontier const &inner, SymbolSet exposed_syms,
+                     planner::core::ENodeId enode_id) -> CostFrontier {
+  return CostFrontier::flat_map(
+      outer, [&inner, exposed_syms = std::move(exposed_syms), enode_id](Alternative const &outer_alt, auto emit) {
+        for (auto const &inner_alt : inner.alts()) {
+          // Non-importing subquery: inner must be self-contained.
+          if (!inner_alt.required.empty()) continue;
+
+          // BARRIER: outer.introduces ∪ exposed_syms; inner.introduces is dropped.
+          emit({.cost = outer_alt.cost + outer_alt.cardinality * inner_alt.cost,
+                .cardinality = outer_alt.cardinality * inner_alt.cardinality,
+                .required = outer_alt.required,
+                .introduces = outer_alt.introduces.set_union(exposed_syms),
+                .enode_id = enode_id,
+                .is_alive = AliveTag::Alive});
+        }
+      });
+}
+
+/// Function combine: cartesian product over arg frontiers (cost-sum and
+/// required-union via BinaryCombine), then per-alt cardinality override
+/// because function cardinality is not the product of arg cardinalities -
+/// args are scalars by construction.  Structural +1 cost accounts for the
+/// function-call overhead.
+auto FunctionCombine(std::span<CostFrontier const *const> args, double cardinality, planner::core::ENodeId enode_id)
+    -> CostFrontier {
+  auto result = args.empty() ? LeafAlt(0.0, enode_id) : Restamp(*args[0], 0.0, enode_id);
+  for (auto const *arg : args.empty() ? args : args.subspan(1)) {
+    result = BinaryCombine(result, *arg, 0.0, enode_id);
+  }
+  result.mutate_pruning_invariant_preserving([&](Alternative &alt) {
+    alt.cost += 1.0;
+    alt.cardinality = cardinality;
+    alt.enode_id = enode_id;
+  });
+  return result;
 }
 
 // --- Policies ---------------------------------------------------------------
@@ -118,80 +272,33 @@ struct PlanCostModel {
   auto operator()(planner::core::ENode<symbol> const &current, planner::core::ENodeId enode_id,
                   std::span<CostResult const *const> children) const -> CostResult {
     switch (current.symbol()) {
-      // Leaf nodes: single alternative, no demand
+      // Leaf nodes: single alternative, no demand.
       case symbol::Once:
       case symbol::Literal:
       case symbol::Symbol:  // Leaf invariant - see bind::kSymbolCost.
       case symbol::ParamLookup:
-        return CostResult{{{.cost = bind::kSymbolCost, .required = {}, .enode_id = enode_id}}};
+        return LeafAlt(bind::kSymbolCost, enode_id);
 
-      // Identifier: demands its symbol child to be bound
+      // Identifier: demands its symbol child to be bound.
       case symbol::Identifier: {
         assert(!children.empty() && "Identifier must have its symbol child frontier");
-        auto sym_eclass = current.children()[0];
+        auto const sym_eclass = current.children()[0];
         auto const &[_, child_cost] = children[0]->resolve();
-        return CostResult{
-            {{.cost = expression_cost::kIdentifier + child_cost, .required = {sym_eclass}, .enode_id = enode_id}}};
+        return IdentifierAlt(expression_cost::kIdentifier + child_cost, sym_eclass, enode_id);
       }
 
-      // Bind: emits one alt per (input_alt, expr_alt) for alive input alts and
-      // one alt per dead input alt.  The is_alive tag rides on each alt so the
-      // resolver can dispatch alive/dead by reading the chosen alt rather than
-      // recomputing a comparison against a separate cost-bound estimate.
+      // Bind: alive/dead variants per input alt; is_alive tag rides on each
+      // alt so the resolver dispatches alive/dead by reading the chosen alt.
       case symbol::Bind: {
-        auto const &input_frontier = *children[0];
-        auto const &sym_frontier = *children[1];
-        auto const &expr_frontier = *children[2];
-        auto sym_eclass = current.children()[1];
-        auto const &[_, sym_cost] = sym_frontier.resolve();
-
-        return CostFrontier::flat_map(input_frontier, [&](auto const &input_alt, auto emit) {
-          // Emit alive when there's a chance someone will demand sym:
-          //   - Input subtree directly demands it (classic case), or
-          //   - Some Identifier(sym) lives elsewhere in the e-graph and
-          //     might cross a sibling boundary at an enclosing Output.
-          // If neither holds, sym has no consumer and the alive alt would
-          // bloat the frontier unbounded - up to 2^N for an N-Bind chain.
-          bool const input_demands_sym = input_alt.required.is_alive(sym_eclass);
-          bool const should_emit_alive = input_demands_sym || referenced_syms.contains(sym_eclass);
-          if (should_emit_alive) {
-            for (auto const &expr_alt : expr_frontier.alts()) {
-              auto required = input_alt.required.alive_required(sym_eclass, expr_alt.required);
-              auto introduces = input_alt.introduces;
-              introduces.insert(sym_eclass);
-              // Bind is one-shot, not a row-pipe: passes input's cardinality
-              // through unchanged.  expr is evaluated once at bind-time.
-              emit({.cost = bind::AliveCost(input_alt.cost, sym_cost, expr_alt.cost),
-                    .cardinality = input_alt.cardinality,
-                    .required = std::move(required),
-                    .introduces = std::move(introduces),
-                    .enode_id = enode_id,
-                    .is_alive = AliveTag::Alive});
-            }
-          }
-          // Emit dead only when input doesn't already demand sym.
-          // When input_demands_sym is true, the dead alt has sym still in
-          // `required`, so it is only compatible with ancestors that already
-          // provide sym.  But sym is provided only when an ancestor Bind for
-          // it is alive - which is exactly the alive-alt condition.  A dead
-          // alt under that condition is therefore unreachable: no resolver
-          // context can pick it that couldn't also pick alive.  Suppressing
-          // it avoids bloating the frontier with a semantically useless alt.
-          if (!input_demands_sym) {
-            emit({.cost = bind::DeadCost(input_alt.cost),
-                  .cardinality = input_alt.cardinality,
-                  .required = input_alt.required,
-                  .introduces = input_alt.introduces,
-                  .enode_id = enode_id,
-                  .is_alive = AliveTag::Dead});
-          }
-        });
+        auto const sym_eclass = current.children()[1];
+        auto const &[_, sym_cost] = children[1]->resolve();
+        return BindFlatMap(*children[0], *children[2], sym_eclass, sym_cost, referenced_syms, enode_id);
       }
 
       // Binary expression operators (arithmetic / comparison / boolean):
-      // lhs × rhs cartesian product, with the per-class cost looked up via the
-      // symbol's descriptor.  Adding a new binary operator is one descriptor
-      // specialisation in private_symbol.hpp - no new case arms here.
+      // cartesian product with per-class cost from the symbol's descriptor.
+      // Adding a new binary operator is one descriptor specialisation in
+      // private_symbol.hpp - no new case arms here.
       case symbol::Add:
       case symbol::Sub:
       case symbol::Mul:
@@ -206,174 +313,64 @@ struct PlanCostModel {
       case symbol::Gte:
       case symbol::And:
       case symbol::Or:
-      case symbol::Xor: {
-        auto const cost = expression_cost::FromClass(CostClassOf(current.symbol()));
-        return CombineAlts(*children[0], *children[1], cost, enode_id);
-      }
+      case symbol::Xor:
+        return BinaryCombine(
+            *children[0], *children[1], expression_cost::FromClass(CostClassOf(current.symbol())), enode_id);
 
-      // Unary expression operators: pass through child, +kUnary, re-stamp
-      // enode_id so the Builder dispatches *this* unary node via enode.symbol().
-      // Same dispatch story as binary: cost via descriptor.
-      //
-      // Uses LazyMap (view-style): no materialisation; chains of unary
-      // operators collapse to a single materialisation at the eventual
-      // iteration point.  is_alive is left untouched - children of unary
-      // expressions never come from Bind/Unwind (those are row-pipe shapes,
-      // and unary operators only run inside per-row expression evaluation),
-      // so is_alive is already NotApplicable on every alt of children[0].
+      // Unary expression operators: re-stamp child with per-class cost.
+      // View-style; chains of unary ops collapse into one materialisation.
       case symbol::Not:
       case symbol::UnaryMinus:
-      case symbol::UnaryPlus: {
-        auto const cost = expression_cost::FromClass(CostClassOf(current.symbol()));
-        return CostFrontier::LazyMap(*children[0], cost, enode_id);
-      }
+      case symbol::UnaryPlus:
+        return Restamp(*children[0], expression_cost::FromClass(CostClassOf(current.symbol())), enode_id);
 
-      // Output: row-pipe.  Re-stamp child[0]'s frontier (no extra cost) so
-      // all alternatives dispatch through this Output enode in the Builder,
-      // then fold in each NamedOutput child with its per-eval cost scaled
-      // by the input row pipe's cardinality.  Per-row scaling is what lets
-      // the planner prefer a one-shot Bind over an inlined alternative
+      // Output: row-pipe.  Re-stamp child[0]'s row pipe, then fold each
+      // NamedOutput in with per-row-scaled evaluation cost.  Per-row scaling
+      // lets the planner prefer a one-shot Bind over an inlined alternative
       // when the row pipe is wide (e.g. UNWIND range(0, 100)).
       case symbol::Output: {
-        CostFrontier result = CostFrontier::LazyMap(*children[0], 0.0, enode_id);
+        auto result = Restamp(*children[0], 0.0, enode_id);
         for (auto const *named_out : children.subspan(1)) {
-          result = CostFrontier::cartesian_product(
-              result, *named_out, [enode_id](Alternative const &l, Alternative const &r) {
-                // l: input row pipe.  r: per-evaluation NamedOutput (scalar, 1
-                // pair per call).
-                // cost = l.cost (whole input pipeline) + l.cardinality * r.cost
-                //        (per-output-row evaluation of this NamedOutput).
-                // cardinality = l.cardinality.  Output produces exactly the
-                // input row count regardless of what value-shape each
-                // NamedOutput packages per row.
-                //
-                // required = l.required ∪ (r.required \ l.introduces).  The
-                // NamedOutput is evaluated INSIDE the input pipe's row scope,
-                // so any sym the input pipe binds (alive Bind / Unwind) covers
-                // matching demands in r without needing an ancestor to provide
-                // them.  This is what lets `WITH x AS y UNWIND ... RETURN y`
-                // satisfy y's demand from the Bind / Unwind below the Output.
-                auto const remaining = r.required.difference(l.introduces);
-                return Alternative{.cost = l.cost + l.cardinality * r.cost,
-                                   .cardinality = l.cardinality,
-                                   .required = l.required.set_union(remaining),
-                                   .introduces = l.introduces,
-                                   .enode_id = enode_id};
-              });
+          result = OutputCombine(result, *named_out, enode_id);
         }
         return result;
       }
 
       // NamedOutput: sym × expr cartesian product, +1 per pair.  Structural
-      // (not an expression operator), so kept at a fixed cost rather than
-      // sourced from expression_cost.
+      // (not an expression operator), so a fixed cost rather than expression_cost.
       case symbol::NamedOutput:
-        return CombineAlts(*children[0], *children[1], 1.0, enode_id);
+        return BinaryCombine(*children[0], *children[1], 1.0, enode_id);
 
-      // Unwind: row-generative.  Output cardinality = input.cardinality *
-      // list_expr.cardinality (e.g. range(0, 100) over a 1-row input emits
-      // 101 rows).  Cost composition mirrors a per-row evaluation of the
-      // list expression, with kUnwindPerRowOverhead structural overhead per
-      // produced row.  Alive/dead variable-introduction matches Bind:
-      // Unwind always introduces sym, so input always sees `provided + sym`
-      // in the resolver - we tag every Unwind alt with is_alive = true so
-      // ResolveChildren dispatches like alive Bind.
+      // Unwind: row-generative.  Cardinality is input × list; cost mirrors
+      // per-row evaluation of the list expression.  Always Alive (Unwind
+      // always introduces sym), so ResolveChildren dispatches like alive Bind.
       case symbol::Unwind: {
-        auto const &input_frontier = *children[0];
-        auto const &sym_frontier = *children[1];
-        auto const &list_frontier = *children[2];
-        auto sym_eclass = current.children()[1];
-        auto const &[_, sym_cost] = sym_frontier.resolve();
-
-        return CostFrontier::flat_map(input_frontier, [&](auto const &input_alt, auto emit) {
-          for (auto const &list_alt : list_frontier.alts()) {
-            // sym is always introduced by Unwind, so remove it from input's
-            // required and union list_expr's required (its needs become
-            // ours).  Same algebra as alive_required.
-            auto required = input_alt.required.alive_required(sym_eclass, list_alt.required);
-            auto introduces = input_alt.introduces;
-            introduces.insert(sym_eclass);
-            auto const cost =
-                input_alt.cost + (list_alt.cost + kUnwindPerRowOverhead) * input_alt.cardinality + sym_cost;
-            auto const cardinality = input_alt.cardinality * list_alt.cardinality;
-            emit({.cost = cost,
-                  .cardinality = cardinality,
-                  .required = std::move(required),
-                  .introduces = std::move(introduces),
-                  .enode_id = enode_id,
-                  .is_alive = AliveTag::Alive});
-          }
-        });
+        auto const sym_eclass = current.children()[1];
+        auto const &[_, sym_cost] = children[1]->resolve();
+        return UnwindFlatMap(*children[0], *children[2], sym_eclass, sym_cost, enode_id);
       }
 
       // Subquery (CALL block): scope-barrier row-pipe.  Children layout is
-      // [outer_input, inner_root, exposed_sym_1, ...]; cost is per-row
-      // evaluation of the inner plan; cardinality is the product; introduces
-      // is `outer.introduces ∪ exposed_syms` - the inner's own introduces
-      // are STRIPPED at the boundary, which is the (B) "available downstream"
-      // semantic in action.  required is just the outer pipe's; for
-      // non-importing subqueries the inner's required must be empty (any
-      // alt the inner produces with non-empty required is rejected here).
+      // [outer_input, inner_root, exposed_sym_1, ...].  Inner's introduces
+      // are STRIPPED at the barrier; only `exposed_syms` cross into the
+      // outer scope.  Importing-CALL is unsupported - guard up front so a
+      // failing query surfaces the real cause instead of a downstream
+      // "no self-contained alternative".
       case symbol::Subquery: {
-        auto const &outer_frontier = *children[0];
-        auto const &inner_frontier = *children[1];
-
-        // Importing-CALL guard: every inner alt with non-empty `required`
-        // is silently rejected below.  If no inner alt is self-contained,
-        // the Subquery eclass would emit an empty frontier and the root
-        // satisfiability check would later throw an opaque "no self-
-        // contained alternative".  Surface the actual cause here.
         bool const has_self_contained_inner =
-            std::ranges::any_of(inner_frontier.alts(), [](Alternative const &a) { return a.required.empty(); });
+            std::ranges::any_of(children[1]->alts(), [](Alternative const &a) { return a.required.empty(); });
         if (!has_self_contained_inner) {
           throw NotYetImplemented{"importing CALL subqueries"};
         }
-
-        auto const exposed_syms = ExposedSymsFromChildren(current.children().subspan(2));
-
-        return CostFrontier::flat_map(outer_frontier, [&](auto const &outer_alt, auto emit) {
-          for (auto const &inner_alt : inner_frontier.alts()) {
-            // Non-importing subquery: inner must be self-contained.
-            if (!inner_alt.required.empty()) continue;
-
-            // BARRIER: outer.introduces ∪ exposed_syms; inner.introduces is dropped.
-            emit({.cost = outer_alt.cost + outer_alt.cardinality * inner_alt.cost,
-                  .cardinality = outer_alt.cardinality * inner_alt.cardinality,
-                  .required = outer_alt.required,
-                  .introduces = outer_alt.introduces.set_union(exposed_syms),
-                  .enode_id = enode_id,
-                  .is_alive = AliveTag::Alive});
-          }
-        });
+        return SubqueryFlatMap(
+            *children[0], *children[1], ExposedSymsFromChildren(current.children().subspan(2)), enode_id);
       }
 
-      // Function call: cartesian product over arg frontiers (cost-sum and
-      // required-union via the standard CombineAlts chain), then override
-      // cardinality with the estimator's output for this function id.
-      // Cardinality of a function call is *not* the product of its arg
-      // cardinalities (those are scalars by construction), so the
-      // CombineAlts product is replaced uniformly per-alt.
-      case symbol::Function: {
-        CostResult result;
-        if (children.empty()) {
-          result = CostResult{{{.cost = 0.0, .required = {}, .enode_id = enode_id}}};
-        } else {
-          result = CostFrontier::LazyMap(*children[0], 0.0, enode_id);
-          for (auto const *arg : children.subspan(1)) {
-            result = CombineAlts(result, *arg, 0.0, enode_id);
-          }
-        }
-        auto const cardinality = estimator.Estimate(current, current.children(), egraph);
-        // Uniform per-alt edit: structural +1 cost and cardinality from
-        // estimator.  Same value across alts -> dominance ordering
-        // preserved, mutate_pruning_invariant_preserving holds.
-        result.mutate_pruning_invariant_preserving([&](Alternative &alt) {
-          alt.cost += 1.0;
-          alt.cardinality = cardinality;
-          alt.enode_id = enode_id;
-        });
-        return result;
-      }
+      // Function call: per-class cost-sum chain over args, then override
+      // cardinality with the estimator's output.  Function cardinality is
+      // *not* the product of arg cardinalities (args are scalars).
+      case symbol::Function:
+        return FunctionCombine(children, estimator.Estimate(current, current.children(), egraph), enode_id);
     }
     std::unreachable();
   }

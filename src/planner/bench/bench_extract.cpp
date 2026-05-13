@@ -79,17 +79,13 @@ struct CostModel {
       return CostResult::LazyMap(*children[0], 1.0, enode_id);
     }
     // Two-child: cartesian product, +1 per pair.
-    std::vector<DemandAlt> out;
-    out.reserve(children[0]->alts().size() * children[1]->alts().size());
-    for (auto const &l : children[0]->alts()) {
-      for (auto const &r : children[1]->alts()) {
-        DemandSet req;
-        req.insert(l.required.begin(), l.required.end());
-        req.insert(r.required.begin(), r.required.end());
-        out.push_back({.cost = 1.0 + l.cost + r.cost, .required = std::move(req), .enode_id = enode_id});
-      }
-    }
-    return CostResult{std::move(out)};
+    return CostResult::cartesian_product(
+        *children[0], *children[1], [enode_id](DemandAlt const &l, DemandAlt const &r) {
+          DemandSet req;
+          req.insert(l.required.begin(), l.required.end());
+          req.insert(r.required.begin(), r.required.end());
+          return DemandAlt{.cost = 1.0 + l.cost + r.cost, .required = std::move(req), .enode_id = enode_id};
+        });
   }
 };
 
