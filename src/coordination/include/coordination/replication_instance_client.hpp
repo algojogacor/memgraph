@@ -21,6 +21,7 @@
 #include "utils/event_counter.hpp"
 #include "utils/metrics_timer.hpp"
 #include "utils/scheduler.hpp"
+#include "utils/tls.hpp"
 
 namespace memgraph::metrics {
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
@@ -57,7 +58,8 @@ class ReplicationInstanceClient {
  public:
   explicit ReplicationInstanceClient(std::string instance_name, io::network::Endpoint mgt_server,
                                      CoordinatorInstance *coord_instance,
-                                     std::chrono::seconds instance_health_check_frequency_sec);
+                                     std::chrono::seconds instance_health_check_frequency_sec,
+                                     std::optional<utils::TlsConfig> const &tls_config);
 
   ~ReplicationInstanceClient() = default;
 
