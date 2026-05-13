@@ -441,8 +441,7 @@ struct TopoEntry {
 // arm - they carry no scope context and their children all get provided=unchanged,
 // demanded={}.
 
-template <typename Visit>
-void ResolveBindUnwindAlive(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, Visit visit) {
+void ResolveBindUnwindAlive(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, auto visit) {
   auto const &children = enode.children();
   auto const sym_eclass = children[1];
   auto alive_provided = parent_key.provided;
@@ -453,14 +452,12 @@ void ResolveBindUnwindAlive(planner::core::ENode<symbol> const &enode, ResolvedK
   visit(ResolvedKey{children[2], parent_key.provided, {}});
 }
 
-template <typename Visit>
-void ResolveBindDead(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, Visit visit) {
+void ResolveBindDead(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, auto visit) {
   visit(ResolvedKey{enode.children()[0], parent_key.provided, parent_key.demanded_introduces});
 }
 
-template <typename Visit>
 void ResolveSubqueryChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key,
-                             SymbolSet const &exposed_syms, Visit visit) {
+                             SymbolSet const &exposed_syms, auto visit) {
   auto const &children = enode.children();
   auto outer_demand = parent_key.demanded_introduces.difference(exposed_syms);
   visit(ResolvedKey{children[0], parent_key.provided, std::move(outer_demand)});
@@ -470,9 +467,8 @@ void ResolveSubqueryChildren(planner::core::ENode<symbol> const &enode, Resolved
   }
 }
 
-template <typename Visit>
 void ResolveOutputChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key,
-                           SymbolSet const &chosen_introduces, Visit visit) {
+                           SymbolSet const &chosen_introduces, auto visit) {
   auto const &children = enode.children();
   visit(ResolvedKey{children[0], parent_key.provided, chosen_introduces});
   auto enriched_provided = parent_key.provided;
@@ -482,8 +478,7 @@ void ResolveOutputChildren(planner::core::ENode<symbol> const &enode, ResolvedKe
   }
 }
 
-template <typename Visit>
-void ResolveGenericChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, Visit visit) {
+void ResolveGenericChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, auto visit) {
   for (auto child : enode.children()) {
     visit(ResolvedKey{child, parent_key.provided, {}});
   }
@@ -497,9 +492,8 @@ void ResolveGenericChildren(planner::core::ENode<symbol> const &enode, ResolvedK
 ///
 /// `exposed_syms` must be pre-computed by the caller for Subquery enodes
 /// (pass nullptr for all other enode types).
-template <typename Visit>
 void ResolveChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, AliveTag is_alive,
-                     SymbolSet const &chosen_introduces, SymbolSet const *exposed_syms, Visit visit) {
+                     SymbolSet const &chosen_introduces, SymbolSet const *exposed_syms, auto visit) {
   auto const sym_op = enode.symbol();
   auto const &children = enode.children();
   bool const is_bind_or_unwind = (sym_op == symbol::Bind || sym_op == symbol::Unwind) && children.size() == 3;
