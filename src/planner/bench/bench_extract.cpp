@@ -73,15 +73,10 @@ struct CostModel {
     if (children.empty()) {
       return CostResult{{{.cost = 1.0, .required = {}, .enode_id = enode_id}}};
     }
-    // Single child: pass-through with +1.
+    // Single child: pass-through with +1.  Lazy view; no materialisation
+    // until something iterates the result.
     if (children.size() == 1) {
-      auto const &child = *children[0];
-      std::vector<DemandAlt> out;
-      out.reserve(child.alts().size());
-      for (auto const &a : child.alts()) {
-        out.push_back({.cost = a.cost + 1.0, .required = a.required, .enode_id = enode_id});
-      }
-      return CostResult{std::move(out)};
+      return CostResult::LazyMap(*children[0], 1.0, enode_id);
     }
     // Two-child: cartesian product, +1 per pair.
     std::vector<DemandAlt> out;

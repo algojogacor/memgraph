@@ -181,13 +181,57 @@ struct ParetoFrontier {
 
   /// Construct from an unpruned list of alternatives.  Prunes on construction
   /// so the resulting frontier satisfies the Pareto invariant.  flat_map /
-  /// cartesian_product / merge_in_place are the compositional alternatives.
+  /// cartesian_product / merge_in_place / LazyMap are the compositional
+  /// alternatives.
   explicit ParetoFrontier(std::vector<Alt> alts) : alts_(std::move(alts)) { prune(); }
+
+  /// Returns a lazy "view" frontier whose alts are `source.alts()` with each
+  /// `cost` bumped by `cost_delta` and each `enode_id` replaced by
+  /// `enode_id_override`.  No materialisation until the view is iterated
+  /// (`alts()` / `merge_in_place` / `cartesian_product` / `flat_map`) or
+  /// mutated.  The returned frontier holds a non-owning pointer to `source`;
+  /// the caller is responsible for ensuring `source` outlives the view.
+  ///
+  /// Chains collapse on construction: `LazyMap(LazyMap(s, d1, e1), d2, e2)`
+  /// is equivalent to `LazyMap(s, d1+d2, e2)`, so the source pointer always
+  /// targets a materialised frontier.  This bounds materialisation cost to
+  /// a single pass over the original source's alts no matter how deep the
+  /// view chain has been threaded through cost-model recursion.
+  ///
+  /// Pareto invariant: `cost_delta` is uniform across alts, so relative
+  /// dominance under `Dim<&Alt::cost, LowerIsBetter>` is preserved.
+  /// `enode_id_override` is uniform too; if any dim reads `enode_id`, that
+  /// is also order-preserving (all alts get the same value).  Other dims
+  /// (e.g. SymbolSet-based) are unchanged because source's alts are
+  /// untouched.  Net: the view satisfies the same prune invariant as the
+  /// source, so no re-prune is needed at materialisation.
+  template <typename EnodeId>
+  [[nodiscard]] static auto LazyMap(ParetoFrontier const &source, double cost_delta, EnodeId enode_id_override)
+      -> ParetoFrontier
+    requires requires(Alt &a, double d, EnodeId e) {
+      { a.cost += d };
+      { a.enode_id = e };
+    }
+  {
+    ParetoFrontier result;
+    if (source.lazy_source_ != nullptr) {
+      result.lazy_source_ = source.lazy_source_;
+      result.lazy_cost_delta_ = source.lazy_cost_delta_ + cost_delta;
+    } else {
+      result.lazy_source_ = &source;
+      result.lazy_cost_delta_ = cost_delta;
+    }
+    result.lazy_enode_id_override_ = enode_id_override;
+    return result;
+  }
 
   /// Read-only view over the (Pareto-pruned) alternatives.  Order is
   /// implementation-defined.  Returning span keeps the storage choice out of
-  /// the public contract.
-  [[nodiscard]] auto alts() const noexcept -> std::span<Alt const> { return alts_; }
+  /// the public contract.  Triggers materialisation of any pending lazy view.
+  [[nodiscard]] auto alts() const -> std::span<Alt const> {
+    if (lazy_source_ != nullptr) materialise();
+    return alts_;
+  }
 
   /// In-place mutation that the caller promises preserves the Pareto invariant.
   /// Calls fn(alt) on each surviving alt; no re-prune is performed.
@@ -202,6 +246,7 @@ struct ParetoFrontier {
   template <typename Fn>
     requires std::invocable<Fn, Alt &>
   void mutate_pruning_invariant_preserving(Fn &&fn) {
+    if (lazy_source_ != nullptr) materialise();
     for (auto &alt : alts_) fn(alt);
   }
 
@@ -211,9 +256,10 @@ struct ParetoFrontier {
   ///            output alternatives.
   template <typename Fn>
   [[nodiscard]] static auto flat_map(ParetoFrontier const &input, Fn &&fn) -> ParetoFrontier {
+    auto const input_alts = input.alts();
     auto out = std::vector<Alt>{};
-    out.reserve(input.alts_.size());
-    for (auto const &alt : input.alts_) {
+    out.reserve(input_alts.size());
+    for (auto const &alt : input_alts) {
       fn(alt, [&](Alt &&v) { out.push_back(std::move(v)); });
     }
     return ParetoFrontier{std::move(out)};
@@ -222,10 +268,12 @@ struct ParetoFrontier {
   /// Union another frontier into this one and re-prune.  Both `*this` and
   /// `other` are already Pareto-pruned, so within-`*this` pairs need not be
   /// re-checked; the prune scan starts at the boundary.  `other`'s alts are
-  /// moved-from on return.
+  /// moved-from on return.  Materialises both sides if they're lazy views.
   void merge_in_place(ParetoFrontier &&other) {
+    if (lazy_source_ != nullptr) materialise();
+    auto const other_alts = other.alts();  // forces materialisation of `other`
     auto const pruned_prefix = alts_.size();
-    alts_.reserve(pruned_prefix + other.alts_.size());
+    alts_.reserve(pruned_prefix + other_alts.size());
     std::ranges::move(other.alts_, std::back_inserter(alts_));
     prune(pruned_prefix);
   }
@@ -238,10 +286,12 @@ struct ParetoFrontier {
     requires Combiner<CombineFn, Alt>
   [[nodiscard]] static auto cartesian_product(ParetoFrontier const &lhs, ParetoFrontier const &rhs,
                                               CombineFn &&combine_fn) -> ParetoFrontier {
+    auto const lhs_alts = lhs.alts();
+    auto const rhs_alts = rhs.alts();
     auto out = std::vector<Alt>{};
-    out.reserve(lhs.alts_.size() * rhs.alts_.size());
-    for (auto const &l : lhs.alts_) {
-      for (auto const &r : rhs.alts_) {
+    out.reserve(lhs_alts.size() * rhs_alts.size());
+    for (auto const &l : lhs_alts) {
+      for (auto const &r : rhs_alts) {
         out.push_back(combine_fn(l, r));
       }
     }
@@ -251,7 +301,31 @@ struct ParetoFrontier {
  private:
   // std::vector chosen so ParetoFrontier moves stay pointer-swap; small_vector's
   // element-wise move dominates here because Alt is large with a non-trivial move.
-  std::vector<Alt> alts_;
+  mutable std::vector<Alt> alts_;
+  // Lazy view state.  Non-null `lazy_source_` means this frontier represents
+  // `source.alts()` with cost_delta and enode_id_override applied; `alts_` is
+  // empty until materialise() runs.  See LazyMap for the chain-collapse
+  // invariant.
+  mutable ParetoFrontier const *lazy_source_ = nullptr;
+  mutable double lazy_cost_delta_ = 0;
+  mutable std::remove_cvref_t<decltype(std::declval<Alt>().enode_id)> lazy_enode_id_override_{};
+
+  /// Realise the lazy view into `alts_`.  Source is guaranteed non-lazy by the
+  /// chain-collapse done in LazyMap, so this is a single pass over the source.
+  void materialise() const {
+    assert(lazy_source_ != nullptr);
+    auto const &source_alts = lazy_source_->alts_;  // source is non-lazy: read directly
+    alts_.clear();
+    alts_.reserve(source_alts.size());
+    for (auto const &a : source_alts) {
+      Alt copy = a;
+      copy.cost += lazy_cost_delta_;
+      copy.enode_id = lazy_enode_id_override_;
+      alts_.push_back(std::move(copy));
+    }
+    lazy_source_ = nullptr;
+    lazy_cost_delta_ = 0;
+  }
 
   /// Forward-sweep skyline maintenance.  For each candidate, scans the
   /// running survivor list: drops the candidate if any survivor dominates it;
