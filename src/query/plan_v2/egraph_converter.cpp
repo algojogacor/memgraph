@@ -456,10 +456,12 @@ void ResolveBindDead(planner::core::ENode<symbol> const &enode, ResolvedKey cons
   visit(ResolvedKey{enode.children()[0], parent_key.provided, parent_key.demanded_introduces});
 }
 
-void ResolveSubqueryChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key,
-                             SymbolSet const &exposed_syms, auto visit) {
+void ResolveSubqueryChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, auto visit) {
   auto const &children = enode.children();
-  auto outer_demand = parent_key.demanded_introduces.difference(exposed_syms);
+  // Subquery children[2..] are the Symbol e-classes the subquery exposes to
+  // the outer scope.  Symbols demanded above that this subquery satisfies are
+  // subtracted from the outer pipeline's `demanded_introduces` before recursion.
+  auto outer_demand = parent_key.demanded_introduces.difference(SymbolSet{children.subspan(2)});
   visit(ResolvedKey{children[0], parent_key.provided, std::move(outer_demand)});
   visit(ResolvedKey{children[1], SymbolSet{}, SymbolSet{}});
   for (auto sym_child : children.subspan(2)) {
@@ -489,11 +491,8 @@ void ResolveGenericChildren(planner::core::ENode<symbol> const &enode, ResolvedK
 /// Called only by `PlanResolver`.  The builder reads forward child indices the
 /// resolver recorded into `child_indices`, so the child-key derivation rule
 /// lives in exactly one place.
-///
-/// `exposed_syms` must be pre-computed by the caller for Subquery enodes
-/// (pass nullptr for all other enode types).
 void ResolveChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, AliveTag is_alive,
-                     SymbolSet const &chosen_introduces, SymbolSet const *exposed_syms, auto visit) {
+                     SymbolSet const &chosen_introduces, auto visit) {
   auto const sym_op = enode.symbol();
   auto const &children = enode.children();
   bool const is_bind_or_unwind = (sym_op == symbol::Bind || sym_op == symbol::Unwind) && children.size() == 3;
@@ -503,8 +502,7 @@ void ResolveChildren(planner::core::ENode<symbol> const &enode, ResolvedKey cons
   } else if (is_bind_or_unwind) {
     ResolveBindDead(enode, parent_key, visit);
   } else if (sym_op == symbol::Subquery && children.size() >= 2) {
-    assert(exposed_syms && "caller must precompute exposed_syms for Subquery enodes");
-    ResolveSubqueryChildren(enode, parent_key, *exposed_syms, visit);
+    ResolveSubqueryChildren(enode, parent_key, visit);
   } else if (sym_op == symbol::Output && !children.empty()) {
     ResolveOutputChildren(enode, parent_key, chosen_introduces, visit);
   } else {
@@ -563,20 +561,13 @@ struct PlanResolver {
           if (!best) ThrowPlannerBug("no compatible alternative at this node.");
           auto const &chosen = *best;
           auto const &enode = egraph.get_enode(chosen.enode_id);
-          auto const &enode_children = enode.children();
-          auto const exposed = (enode.symbol() == symbol::Subquery && enode_children.size() >= 2)
-                                   ? std::make_optional(ExposedSymsFromChildren(enode_children.subspan(2)))
-                                   : std::nullopt;
           // Per-frame scratch: collect this entry's child indices contiguously
           // here, then bulk-append to the shared CSR at emit time.  Direct
           // append-on-visit would interleave with grandchildren's appends.
           boost::container::small_vector<std::uint32_t, 4> scratch;
-          ResolveChildren(enode,
-                          key,
-                          chosen.is_alive,
-                          chosen.introduces,
-                          exposed ? &*exposed : nullptr,
-                          [&](ResolvedKey child_key) { scratch.push_back(visit_child(std::move(child_key))); });
+          ResolveChildren(enode, key, chosen.is_alive, chosen.introduces, [&](ResolvedKey child_key) {
+            scratch.push_back(visit_child(std::move(child_key)));
+          });
           auto const begin = static_cast<std::uint32_t>(child_indices.size());
           child_indices.insert(child_indices.end(), scratch.begin(), scratch.end());
           auto const end = static_cast<std::uint32_t>(child_indices.size());
