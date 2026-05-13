@@ -569,10 +569,11 @@ struct PlanResolver {
             scratch.push_back(visit_child(std::move(child_key)));
           });
           auto const begin = static_cast<std::uint32_t>(child_indices.size());
-          child_indices.insert(child_indices.end(), scratch.begin(), scratch.end());
-          auto const end = static_cast<std::uint32_t>(child_indices.size());
-          return TopoEntry{
-              .enode_id = chosen.enode_id, .is_alive = chosen.is_alive, .child_begin = begin, .child_end = end};
+          child_indices.append_range(scratch);
+          return TopoEntry{.enode_id = chosen.enode_id,
+                           .is_alive = chosen.is_alive,
+                           .child_begin = begin,
+                           .child_end = static_cast<std::uint32_t>(child_indices.size())};
         });
   }
 };
