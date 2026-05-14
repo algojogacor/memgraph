@@ -45,6 +45,8 @@ struct BuiltinEstimator final : CardinalityEstimator {
   auto operator=(BuiltinEstimator const &) -> BuiltinEstimator & = delete;
   auto operator=(BuiltinEstimator &&) -> BuiltinEstimator & = delete;
 
+  // TODO: design issue, we have both `egraph const &facade;` and `EGraph const &eg` surely one will do (it can all be
+  // reached by `egraph const &facade`)?
   auto Estimate(planner::core::ENode<symbol> const &enode, std::span<planner::core::EClassId const> arg_eclasses,
                 EGraph const &eg) const -> double override;
 };

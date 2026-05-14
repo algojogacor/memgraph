@@ -173,6 +173,7 @@ template <typename Symbol, typename Analysis, typename CostModel>
   // Reserve once on the top-level call so no rehash invalidates iterators
   // or pointers across the recursion.  reserve() is idempotent if the caller
   // already reserved.
+  // TODO: double check, will emplace ever rehash, is this reserve good enough.
   if (out.empty()) out.reserve(egraph.num_classes());
 
   if (auto const it = out.find(eclass_id); it != out.end()) {

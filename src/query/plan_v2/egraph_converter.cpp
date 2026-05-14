@@ -148,6 +148,10 @@ auto BindFlatMap(CostFrontier const &input, CostFrontier const &expr, planner::c
     //     might cross a sibling boundary at an enclosing Output.
     // If neither holds, sym has no consumer and the alive alt would
     // bloat the frontier unbounded - up to 2^N for an N-Bind chain.
+    // TODO: ATM I'm confused, operatators discover what is provided from the input, for bind, if the expression child
+    // requires some symbols AND can be satisified by the symbols provided by the input, then BIND can evaluate that
+    // expression and IT can provide its symbol along with the input provided symbols to any parent operator of THIS
+    // BIND
     bool const input_demands_sym = input_alt.required.is_alive(sym_eclass);
     bool const should_emit_alive = input_demands_sym || referenced_syms.contains(sym_eclass);
     if (should_emit_alive) {
@@ -277,6 +281,10 @@ struct PlanCostModel {
       case symbol::Literal:
       case symbol::Symbol:  // Leaf invariant - see bind::kSymbolCost.
       case symbol::ParamLookup:
+        // TODO: why all 4 using bind::kSymbolCost?
+        // TODO: `Once` can later on require certain symbols if it is on an inner branch (expecting symbols to be set
+        // from an outer branch)
+        //       We should come back to this when we have Apply/Cartesian
         return LeafAlt(bind::kSymbolCost, enode_id);
 
       // Identifier: demands its symbol child to be bound.
@@ -824,6 +832,7 @@ struct QueryPlannerContext::Impl {
   boost::unordered_flat_map<ResolvedKey, std::uint32_t, ResolvedKeyHash> resolver_seen;
   /// User-provided estimator override.  null -> ConvertToLogicalOperator
   /// builds a BuiltinEstimator over the current egraph for this call.
+  // TODO: why override? Can we not just have a canonacle CardinalityEstimator?
   std::unique_ptr<CardinalityEstimator> estimator_override;
   /// Cardinality of the root alt picked by the most recent
   /// ConvertToLogicalOperator call.  NaN before the first call.
@@ -867,6 +876,7 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   // BuiltinEstimator over the current egraph for this call.  BuiltinEstimator
   // is per-call-stateful (binds to one egraph) so it can't be the long-lived
   // QueryPlannerContext default.
+  // TODO: why do we need estimator_override? Can we just provide the Estimator we intend to use?
   auto const builtin = BuiltinEstimator{e};
   auto const *override_est = ctx.estimator_override.get();
   CardinalityEstimator const &active_estimator = override_est ? *override_est : builtin;
@@ -875,6 +885,8 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   // Identifier e-node anywhere in the e-graph.  This is the demand signal
   // Bind's cost case uses to decide whether to emit an alive alt (see
   // PlanCostModel::referenced_syms).  O(num_enodes) one-time scan.
+  // TODO: do we care about globally referenced_syms? Or do we need to make additional consideration for what is
+  // referenced by the top level outputs?
   SymbolSet referenced_syms = [&] {
     boost::container::small_vector<planner::core::EClassId, 32> buf;
     for (auto eclass_id : impl.egraph_.canonical_eclass_ids()) {
@@ -981,6 +993,8 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   auto self_contained =
       root_frontier.alts() | std::views::filter([](Alternative const &a) { return a.required.empty(); });
   auto const &best = *std::ranges::min_element(self_contained, std::less<>{}, &Alternative::cost);
+  // TODO: last_root_cardinality should be removed, and ExtractionResult should be able to relay this cardinality
+  // estimate...just like we did for cost
   ctx.last_root_cardinality = best.cardinality;
   return ExtractionResult{.plan = std::move(unique_result),
                           .cost = best.cost,

@@ -68,6 +68,7 @@ class QueryPlannerContext {
   /// call selected (NaN if no plan has been extracted yet).  Surfaces the
   /// per-query result so tests can pin cardinality semantics directly,
   /// without round-tripping through cost arithmetic.
+  // TODO: this should be removed, in favour of using ExtractionResult for cardinality estimate
   double last_root_cardinality() const;
 
  private:

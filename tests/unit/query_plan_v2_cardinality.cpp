@@ -135,6 +135,7 @@ TEST(UnwindCostShape, ProducesUnwindOperator) {
   auto named_output = eg.MakeNamedOutput("r", r_sym, one);
   auto root = eg.MakeOutputs(unwind, {named_output});
 
+  // TODO: this is fake the estimator should be real so we can actully get size from the list
   auto ctx = QueryPlannerContext{std::make_unique<FixedEstimator>(6.0)};
   auto [plan, root_cost, ast, sym_table] = ConvertToLogicalOperator(eg, root, ctx);
 

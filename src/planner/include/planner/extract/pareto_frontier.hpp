@@ -53,7 +53,6 @@ struct SmallerSubsetIsBetter {
     // |a| ≤ |b|; b ⊆ a requires |b| ≤ |a|.
     bool a_subset_b = size_a <= size_b;
     bool b_subset_a = size_b <= size_a;
-    if (!a_subset_b && !b_subset_a) return std::partial_ordering::unordered;
 
     auto it_a = std::ranges::begin(a);
     auto const end_a = std::ranges::end(a);
@@ -208,6 +207,9 @@ struct ParetoFrontier {
   template <typename EnodeId>
   [[nodiscard]] static auto LazyMap(ParetoFrontier const &source, double cost_delta, EnodeId enode_id_override)
       -> ParetoFrontier
+      // TODO: I'd rather have a base class or something that captured this minimal requirement of an Alt,
+      //       this Lazy optimisation is to avoid the cost of copying other parts of the full Alt
+      //       we should `grill` to work out what would be the best alternative design here
     requires requires(Alt &a, double d, EnodeId e) {
       { a.cost += d };
       { a.enode_id = e };
@@ -401,6 +403,7 @@ template <std::ranges::range Alts, typename Pred>
 /// Concept for alternatives usable with CostResultBase.  `cost` must be a
 /// non-static data member (not a property/function); resolve projects via
 /// `&Alt::cost`.
+// TODO: LazyMap could use this concept?
 template <typename Alt>
 concept ParetoAlt = std::copyable<Alt> && requires(Alt const &a) {
   { a.cost } -> std::totally_ordered;

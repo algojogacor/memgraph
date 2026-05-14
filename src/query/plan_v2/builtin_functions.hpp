@@ -45,6 +45,7 @@ inline auto BuiltinKindFor(std::string_view name) -> BuiltinKind {
     }
     return true;
   };
+  // TODO: we know candidate is lower case eg, "range" no need to do per charater lowercase
   if (eq_ci("range")) return BuiltinKind::Range;
   return BuiltinKind::Unknown;
 }
