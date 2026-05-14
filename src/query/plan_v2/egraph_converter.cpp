@@ -127,11 +127,14 @@ auto OutputCombine(CostFrontier const &row_pipe, CostFrontier const &named_out, 
     -> CostFrontier {
   return CostFrontier::cartesian_product(row_pipe, named_out, [enode_id](Alternative const &l, Alternative const &r) {
     auto const remaining = r.required.difference(l.introduces);
-    return Alternative{.cost = l.cost + l.cardinality * r.cost,
-                       .cardinality = l.cardinality,
-                       .required = l.required.set_union(remaining),
-                       .introduces = l.introduces,
-                       .enode_id = enode_id};
+    return Alternative{
+        .cost = l.cost + l.cardinality * r.cost,
+        .cardinality = l.cardinality,
+        .required = l.required.set_union(
+            remaining),  // TODO: in my opinion an operator can not require anything, it can only provide/introduce
+                         //       if we need to maintain a set of `was_used` that should be a different set
+        .introduces = l.introduces,
+        .enode_id = enode_id};
   });
 }
 
@@ -337,6 +340,7 @@ struct PlanCostModel {
       // lets the planner prefer a one-shot Bind over an inlined alternative
       // when the row pipe is wide (e.g. UNWIND range(0, 100)).
       case symbol::Output: {
+        // TODO: each named output has its requirements, which should already be introduced by the input (child 0)
         auto result = Restamp(*children[0], 0.0, enode_id);
         for (auto const *named_out : children.subspan(1)) {
           result = OutputCombine(result, *named_out, enode_id);

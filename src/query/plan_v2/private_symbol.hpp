@@ -368,13 +368,14 @@ namespace detail {
 template <symbol... Ss>
 constexpr auto CostClassOfImpl(symbol s, symbol_sequence<Ss...>) -> CostClass {
   CostClass result{};
+  // TODO: can we do lookup table?
   bool const found = (((s == Ss) && ((result = symbol_descriptor<Ss>::cost_class), true)) || ...);
   // `found` should always be true - AllSymbolsSeq is exhaustive over the enum.
   // If a symbol is added to the enum but not to AllSymbolsSeq, this returns the
   // default-initialised CostClass; the static_assert above wouldn't fire (it
   // checks descriptors, not sequence membership).  Belt-and-braces:
   assert(found && "CostClassOf: symbol missing from AllSymbolsSeq - see private_symbol.hpp");
-  if (!found) std::unreachable();
+  if (!found) std::unreachable();  // TODO: throw
   return result;
 }
 
