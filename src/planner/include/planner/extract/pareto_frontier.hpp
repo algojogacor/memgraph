@@ -173,6 +173,25 @@ auto dominance_compare(Alt const &a, Alt const &b) -> std::partial_ordering {
 ///   using Frontier = ParetoFrontier<MyAlt,
 ///       Dim<&MyAlt::cost, LowerIsBetter>,
 ///       Dim<&MyAlt::req,  SmallerSubsetIsBetter>>;
+
+/// Concept for alternatives usable with CostResultBase.  `cost` must be a
+/// non-static data member (not a property/function); resolve projects via
+/// `&Alt::cost`.
+template <typename Alt>
+concept ParetoAlt = std::copyable<Alt> && requires(Alt const &a) {
+  { a.cost } -> std::totally_ordered;
+  { a.enode_id };
+};
+
+/// Refinement of `ParetoAlt` for alternatives that additionally support the
+/// in-place mutations LazyMap applies when materialising a view: bumping
+/// `cost` by a delta and overwriting `enode_id`.
+template <typename Alt, typename EnodeId>
+concept MutableParetoAlt = ParetoAlt<Alt> && requires(Alt &a, double d, EnodeId e) {
+  { a.cost += d };
+  { a.enode_id = e };
+};
+
 template <typename Alt, typename... Dims>
   requires std::copyable<Alt> && (ParetoDimension<Dims, Alt> && ...)
 struct ParetoFrontier {
@@ -207,13 +226,7 @@ struct ParetoFrontier {
   template <typename EnodeId>
   [[nodiscard]] static auto LazyMap(ParetoFrontier const &source, double cost_delta, EnodeId enode_id_override)
       -> ParetoFrontier
-      // TODO: I'd rather have a base class or something that captured this minimal requirement of an Alt,
-      //       this Lazy optimisation is to avoid the cost of copying other parts of the full Alt
-      //       we should `grill` to work out what would be the best alternative design here
-    requires requires(Alt &a, double d, EnodeId e) {
-      { a.cost += d };
-      { a.enode_id = e };
-    }
+    requires MutableParetoAlt<Alt, EnodeId>
   {
     ParetoFrontier result;
     if (source.lazy_source_ != nullptr) {
@@ -399,16 +412,6 @@ template <std::ranges::range Alts, typename Pred>
 // ============================================================================
 // CostResultBase
 // ============================================================================
-
-/// Concept for alternatives usable with CostResultBase.  `cost` must be a
-/// non-static data member (not a property/function); resolve projects via
-/// `&Alt::cost`.
-// TODO: LazyMap could use this concept?
-template <typename Alt>
-concept ParetoAlt = std::copyable<Alt> && requires(Alt const &a) {
-  { a.cost } -> std::totally_ordered;
-  { a.enode_id };
-};
 
 /// Base for ParetoFrontier types that use min-cost as their resolve / min_cost
 /// strategy.  Derived types get resolve() and convenience constructors for

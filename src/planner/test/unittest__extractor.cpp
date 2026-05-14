@@ -623,6 +623,26 @@ struct TestFrontier : CostResultBase<TestDemandAlt, TestDim_Cost, TestDim_Requir
   using CostResultBase::CostResultBase;
 };
 
+// TestDemandAlt has public mutable fields and so satisfies the LazyMap
+// refinement.  An alt with a const `enode_id` data member still satisfies
+// ParetoAlt (only the read expression is required) but fails MutableParetoAlt
+// because the member cannot be assigned to - the named diagnostic LazyMap
+// surfaces at instantiation.
+struct ReadOnlyEnodeIdAlt {
+  struct EnodeIdHolder {
+    ENodeId value{};
+    auto operator=(ENodeId) -> EnodeIdHolder & = delete;
+  };
+
+  double cost;
+  EnodeIdHolder enode_id;
+};
+
+static_assert(extract::ParetoAlt<TestDemandAlt>);
+static_assert(extract::MutableParetoAlt<TestDemandAlt, ENodeId>);
+static_assert(extract::ParetoAlt<ReadOnlyEnodeIdAlt>);
+static_assert(!extract::MutableParetoAlt<ReadOnlyEnodeIdAlt, ENodeId>);
+
 /// Pick the cheapest alt whose required set is a subset of `provided`. Returns
 /// nullptr when no compatible alt exists. Shared by the DAG-resolution tests
 /// below - extracted once because each test re-implementing this lambda hides
