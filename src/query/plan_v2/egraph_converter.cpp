@@ -282,14 +282,16 @@ struct PlanCostModel {
     switch (current.symbol()) {
       // Leaf nodes: single alternative, no demand.
       case symbol::Once:
-      case symbol::Literal:
-      case symbol::Symbol:  // Leaf invariant - see bind::kSymbolCost.
-      case symbol::ParamLookup:
-        // TODO: why all 4 using bind::kSymbolCost?
         // TODO: `Once` can later on require certain symbols if it is on an inner branch (expecting symbols to be set
         // from an outer branch)
         //       We should come back to this when we have Apply/Cartesian
-        return LeafAlt(bind::kSymbolCost, enode_id);
+        return LeafAlt(leaf::kOnce, enode_id);
+      case symbol::Literal:
+        return LeafAlt(leaf::kLiteral, enode_id);
+      case symbol::Symbol:
+        return LeafAlt(leaf::kSymbol, enode_id);
+      case symbol::ParamLookup:
+        return LeafAlt(leaf::kParamLookup, enode_id);
 
       // Identifier: demands its symbol child to be bound.
       case symbol::Identifier: {

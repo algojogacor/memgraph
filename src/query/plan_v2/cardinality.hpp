@@ -28,4 +28,24 @@ inline constexpr double kDefaultRowEstimate = 1000.0;
 /// the cost model today.
 inline constexpr double kUnwindPerRowOverhead = 1.0;
 
+namespace leaf {
+
+/// Cost of an Once leaf alternative.  Structural placeholder, 1.0 until
+/// measured data justifies a value.
+inline constexpr double kOnce = 1.0;
+
+/// Cost of a Symbol leaf alternative.  Structural placeholder, 1.0 until
+/// measured data justifies a value.
+inline constexpr double kSymbol = 1.0;
+
+/// Cost of a Literal leaf alternative.  Structural placeholder, 1.0 until
+/// measured data justifies a value.
+inline constexpr double kLiteral = 1.0;
+
+/// Cost of a ParamLookup leaf alternative.  Structural placeholder, 1.0
+/// until measured data justifies a value.
+inline constexpr double kParamLookup = 1.0;
+
+}  // namespace leaf
+
 }  // namespace memgraph::query::plan::v2

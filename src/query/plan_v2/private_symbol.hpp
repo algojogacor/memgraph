@@ -123,7 +123,7 @@ enum class CostClass : std::uint8_t {
   Unary,       ///< Not, UnaryMinus, UnaryPlus - expression_cost::kUnary.
   Identifier,  ///< Identifier - expression_cost::kIdentifier (+ child cost).
   Structural,  ///< Bind, Output, NamedOutput - scored by PlanCostModel directly.
-  Leaf,        ///< Once, Symbol, Literal, ParamLookup - bind::kSymbolCost.
+  Leaf,        ///< Once, Symbol, Literal, ParamLookup - leaf::k<Kind>.
 };
 
 /// Per-symbol descriptor.  Each enum value MUST have a specialisation; missing

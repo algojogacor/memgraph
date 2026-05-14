@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include "query/plan_v2/bind_semantics.hpp"
+#include "query/plan_v2/cardinality.hpp"
 #include "query/plan_v2/plan_alternative.hpp"
 #include "query/plan_v2/test_support/sym_sets.hpp"
 
@@ -89,17 +90,17 @@ TEST(BindAlgebra_IsAlive, EmptyRequiredIsAlwaysDead) {
 
 TEST(BindAlgebra_Cost, AliveSumsAllThreeOneShot) {
   // cardinality=1 is the standalone-Bind case (above Once); expr_cost scales as-is.
-  EXPECT_DOUBLE_EQ(bind::AliveCost(2.5, bind::kSymbolCost, 3.5, 1.0), 2.5 + bind::kSymbolCost + 3.5);
+  EXPECT_DOUBLE_EQ(bind::AliveCost(2.5, leaf::kSymbol, 3.5, 1.0), 2.5 + leaf::kSymbol + 3.5);
 }
 
 TEST(BindAlgebra_Cost, AliveScalesExprByInputCardinality) {
   // In-pipeline Bind (above row-generative input): expr_cost amortises per row.
-  EXPECT_DOUBLE_EQ(bind::AliveCost(2.5, bind::kSymbolCost, 3.5, 10.0), 2.5 + bind::kSymbolCost + 10.0 * 3.5);
+  EXPECT_DOUBLE_EQ(bind::AliveCost(2.5, leaf::kSymbol, 3.5, 10.0), 2.5 + leaf::kSymbol + 10.0 * 3.5);
 }
 
 TEST(BindAlgebra_Cost, DeadIgnoresSymAndExpr) { EXPECT_DOUBLE_EQ(bind::DeadCost(7.5), 7.5); }
 
-TEST(BindAlgebra_Cost, kSymbolCostIsOne) { EXPECT_DOUBLE_EQ(bind::kSymbolCost, 1.0); }
+TEST(LeafCost, SymbolIsOne) { EXPECT_DOUBLE_EQ(leaf::kSymbol, 1.0); }
 
 // ============================================================================
 // Bind algebra: AliveRequired set algebra

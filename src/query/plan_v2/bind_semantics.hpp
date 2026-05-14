@@ -23,8 +23,8 @@
 // `required` / `in_scope` / `must_introduce`, the construction-time
 // absorption rule and the resolver's threading rule) lives in
 // `src/query/plan_v2/CONTEXT.md`.  This header keeps only the data types
-// (`SymbolSet`) and the small cost helpers (`AliveCost`, `DeadCost`,
-// `kSymbolCost`) used by `egraph_converter.cpp`.
+// (`SymbolSet`) and the small cost helpers (`AliveCost`, `DeadCost`) used
+// by `egraph_converter.cpp`.
 
 #include <algorithm>
 #include <ranges>
@@ -144,14 +144,6 @@ class SymbolSet {
  private:
   set_type set_;
 };
-
-/// Cost of a Symbol leaf alternative.
-///
-/// Invariant: every Symbol eclass has exactly one alternative
-/// `{cost = kSymbolCost, required = ∅}`.  Cost-model and resolver collapse
-/// the sym child to a scalar on this assumption; the resolver asserts the
-/// leaf shape on entry as the canary if the invariant ever weakens.
-inline constexpr double kSymbolCost = 1.0;
 
 /// Cost of the alive branch.  Bind preserves input cardinality but evaluates
 /// `expr` once per input row (Produce semantics in v1), so `expr_cost` is
