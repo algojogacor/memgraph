@@ -36,19 +36,10 @@ struct BuiltinEstimator final : CardinalityEstimator {
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   egraph const &facade;
 
-  explicit BuiltinEstimator(egraph const &f) : facade(f) {}
+  explicit BuiltinEstimator(egraph const &f);
 
-  // Pinned: the egraph reference makes a moved-from estimator dangerous; the
-  // type is per-query and constructed in-place on QueryPlannerContext.
-  BuiltinEstimator(BuiltinEstimator const &) = delete;
-  BuiltinEstimator(BuiltinEstimator &&) = delete;
-  auto operator=(BuiltinEstimator const &) -> BuiltinEstimator & = delete;
-  auto operator=(BuiltinEstimator &&) -> BuiltinEstimator & = delete;
-
-  // TODO: design issue, we have both `egraph const &facade;` and `EGraph const &eg` surely one will do (it can all be
-  // reached by `egraph const &facade`)?
-  auto Estimate(planner::core::ENode<symbol> const &enode, std::span<planner::core::EClassId const> arg_eclasses,
-                EGraph const &eg) const -> double override;
+  auto Estimate(planner::core::ENode<symbol> const &enode, std::span<planner::core::EClassId const> arg_eclasses) const
+      -> double override;
 };
 
 }  // namespace memgraph::query::plan::v2

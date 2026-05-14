@@ -35,10 +35,20 @@ using EGraph = planner::core::EGraph<symbol, analysis>;
 ///                         → 6); falls back to kDefaultRowEstimate otherwise.
 ///                         Production default.
 struct CardinalityEstimator {
+  explicit CardinalityEstimator(EGraph const &eg) : eg_(eg) {}
+
+  CardinalityEstimator(CardinalityEstimator const &) = delete;
+  CardinalityEstimator(CardinalityEstimator &&) = delete;
+  auto operator=(CardinalityEstimator const &) -> CardinalityEstimator & = delete;
+  auto operator=(CardinalityEstimator &&) -> CardinalityEstimator & = delete;
   virtual ~CardinalityEstimator() = default;
 
   virtual auto Estimate(planner::core::ENode<symbol> const &enode,
-                        std::span<planner::core::EClassId const> arg_eclasses, EGraph const &eg) const -> double = 0;
+                        std::span<planner::core::EClassId const> arg_eclasses) const -> double = 0;
+
+ protected:
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
+  EGraph const &eg_;
 };
 
 }  // namespace memgraph::query::plan::v2

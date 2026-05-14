@@ -410,7 +410,7 @@ struct PlanCostModel {
       // cardinality with the estimator's output.  Function cardinality is
       // *not* the product of arg cardinalities (args are scalars).
       case symbol::Function:
-        return FunctionCombine(children, estimator.Estimate(current, current.children(), egraph), enode_id);
+        return FunctionCombine(children, estimator.Estimate(current, current.children()), enode_id);
     }
     std::unreachable();
   }

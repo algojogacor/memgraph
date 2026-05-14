@@ -60,11 +60,13 @@ auto TryReadIntLiteral(EGraph const &eg, egraph const &facade, planner::core::EC
 
 }  // namespace
 
+BuiltinEstimator::BuiltinEstimator(egraph const &f) : CardinalityEstimator(internal::get_impl(f).egraph_), facade(f) {}
+
 auto BuiltinEstimator::Estimate(planner::core::ENode<symbol> const &enode,
-                                std::span<planner::core::EClassId const> arg_eclasses, EGraph const &eg) const
-    -> double {
+                                std::span<planner::core::EClassId const> arg_eclasses) const -> double {
   if (enode.symbol() != symbol::Function) return kDefaultRowEstimate;
 
+  auto const &eg = eg_;
   auto const *info = facade.FunctionInfoById(enode.disambiguator());
   if (info == nullptr) return kDefaultRowEstimate;
 

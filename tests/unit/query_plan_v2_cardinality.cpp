@@ -43,7 +43,7 @@ auto EstimateBuiltin(egraph &eg, eclass fn, std::vector<EClassId> args) -> doubl
   auto const fn_eclass = core_eg.find(EClassId{fn.value_of()});
   auto const fn_enode_id = core_eg.eclass(fn_eclass).nodes()[0];
   auto const &fn_enode = core_eg.get_enode(fn_enode_id);
-  return estimator.Estimate(fn_enode, args, core_eg);
+  return estimator.Estimate(fn_enode, args);
 }
 
 // ============================================================================
@@ -103,7 +103,7 @@ TEST(BuiltinEstimator, UnknownFunctionIdReturnsDefault) {
   auto const fn_enode_id = core_eg.eclass(fn_eclass).nodes()[0];
   auto fn_enode = core_eg.get_enode(fn_enode_id);
   fn_enode = planner::core::ENode{fn_enode.symbol(), fn_enode.children(), 0};
-  EXPECT_DOUBLE_EQ(estimator.Estimate(fn_enode, {}, core_eg), kDefaultRowEstimate);
+  EXPECT_DOUBLE_EQ(estimator.Estimate(fn_enode, {}), kDefaultRowEstimate);
 }
 
 // ============================================================================
