@@ -38,8 +38,8 @@ namespace memgraph::query::plan::v2 {
 // Plan extraction cost model - Pareto frontier with symbol demand tracking
 // ----------------------------------------------------------------------------
 // The TU is structured bottom-up; each section depends on the ones above:
-//   1. Alternatives    : the (cost, required, enode_id, is_alive) tuple, its
-//                        dominance relation, and the Pareto frontier type.
+//   1. Alternatives    : the (cost, cardinality, required, introduces, enode_id)
+//                        tuple, its dominance relation, and the Pareto frontier type.
 //   2. Frontier ops    : Cartesian product (CombineAlts) and view-style
 //                        re-stamping (CostFrontier::LazyMap) used by the
 //                        cost model.
@@ -175,20 +175,19 @@ auto BindFlatMap(CostFrontier const &input, CostFrontier const &expr, planner::c
               .cardinality = input_alt.cardinality,
               .required = std::move(required),
               .introduces = std::move(introduces),
-              .enode_id = enode_id,
-              .is_alive = AliveTag::Alive});
+              .enode_id = enode_id});
       }
     }
     // Dead: expr is not evaluated; pass input through unchanged.  Always
     // emitted - the previous "suppress when input_demands_sym" rule relied on
     // operator Alts carrying expression demand upward, which the kind
-    // dichotomy retires.
+    // dichotomy retires.  Alive vs dead is now derived at read sites from
+    // `sym ∈ chosen.introduces`.
     emit({.cost = bind::DeadCost(input_alt.cost),
           .cardinality = input_alt.cardinality,
           .required = input_alt.required,
           .introduces = input_alt.introduces,
-          .enode_id = enode_id,
-          .is_alive = AliveTag::Dead});
+          .enode_id = enode_id});
   });
 }
 
@@ -213,8 +212,7 @@ auto UnwindFlatMap(CostFrontier const &input, CostFrontier const &list, planner:
             .cardinality = cardinality,
             .required = std::move(required),
             .introduces = std::move(introduces),
-            .enode_id = enode_id,
-            .is_alive = AliveTag::Alive});
+            .enode_id = enode_id});
     }
   });
 }
@@ -237,8 +235,7 @@ auto SubqueryFlatMap(CostFrontier const &outer, CostFrontier const &inner, Symbo
                 .cardinality = outer_alt.cardinality * inner_alt.cardinality,
                 .required = outer_alt.required,
                 .introduces = outer_alt.introduces.set_union(exposed_syms),
-                .enode_id = enode_id,
-                .is_alive = AliveTag::Alive});
+                .enode_id = enode_id});
         }
       });
 }
@@ -302,8 +299,8 @@ struct PlanCostModel {
         return IdentifierAlt(expression_cost::kIdentifier + child_cost, sym_eclass, enode_id);
       }
 
-      // Bind: alive/dead variants per input alt; is_alive tag rides on each
-      // alt so the resolver dispatches alive/dead by reading the chosen alt.
+      // Bind: alive/dead variants per input alt.  Alive vs dead is derived
+      // at read sites from `sym ∈ chosen.introduces` (kind dichotomy).
       case symbol::Bind: {
         auto const sym_eclass = current.children()[1];
         auto const &[_, sym_cost] = children[1]->resolve();
@@ -453,19 +450,19 @@ struct ResolvedKeyHash {
 };
 
 /// One entry in the resolver's topological output: this key resolved to
-/// `enode_id`.  `is_alive` is meaningful only for Bind enodes; the builder
-/// reads it to decide whether sym/expr children participate.
+/// `enode_id`.  The builder distinguishes alive vs dead Bind by inspecting
+/// the resolver-emitted child count (`child_end − child_begin`): alive Bind
+/// emits 3 children (input, sym, expr); dead Bind emits 1 (input only).
 ///
 /// `child_begin`/`child_end` index into the shared `child_indices` CSR
 /// buffer on `QueryPlannerContext::impl()`.  Each slot holds the
 /// `build_order` index of one child the resolver visited - in resolver-visit
 /// order, which matches enode-children order for the dispatch arms in
 /// `ResolveChildren` (alive Bind/Unwind: [input, sym, expr];
-/// dead Bind/Unwind: [input]; Subquery: [outer, inner, syms...];
+/// dead Bind: [input]; Subquery: [outer, inner, syms...];
 /// Output: [pipe, named_outs...]; generic: enode children).
 struct TopoEntry {
   planner::core::ENodeId enode_id;
-  AliveTag is_alive = AliveTag::NotApplicable;
   std::uint32_t child_begin = 0;
   std::uint32_t child_end = 0;
 };
@@ -572,14 +569,18 @@ void ResolveGenericChildren(planner::core::ENode<symbol> const &enode, ResolvedK
 /// Called only by `PlanResolver`.  The builder reads forward child indices the
 /// resolver recorded into `child_indices`, so the child-key derivation rule
 /// lives in exactly one place.
-void ResolveChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, AliveTag is_alive,
+void ResolveChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key,
                      SymbolSet const &chosen_introduces, planner::core::EGraph<symbol, analysis> const &egraph,
                      auto visit) {
   auto const sym_op = enode.symbol();
   auto const &children = enode.children();
   bool const is_bind_or_unwind = (sym_op == symbol::Bind || sym_op == symbol::Unwind) && children.size() == 3;
+  // Alive vs dead derived from `sym ∈ chosen.introduces` (kind dichotomy).
+  // For Unwind this is always true (Unwind always binds); for Bind it depends
+  // on whether the cost model emitted the alive variant.
+  bool const is_alive = is_bind_or_unwind && chosen_introduces.contains(children[1]);
 
-  if (is_bind_or_unwind && is_alive == AliveTag::Alive) {
+  if (is_bind_or_unwind && is_alive) {
     ResolveBindUnwindAlive(enode, parent_key, chosen_introduces, visit);
   } else if (is_bind_or_unwind) {
     ResolveBindDead(enode, parent_key, visit);
@@ -647,13 +648,12 @@ struct PlanResolver {
           // here, then bulk-append to the shared CSR at emit time.  Direct
           // append-on-visit would interleave with grandchildren's appends.
           boost::container::small_vector<std::uint32_t, 4> scratch;
-          ResolveChildren(enode, key, chosen.is_alive, chosen.introduces, egraph, [&](ResolvedKey child_key) {
+          ResolveChildren(enode, key, chosen.introduces, egraph, [&](ResolvedKey child_key) {
             scratch.push_back(visit_child(std::move(child_key)));
           });
           auto const begin = static_cast<std::uint32_t>(child_indices.size());
           child_indices.append_range(scratch);
           return TopoEntry{.enode_id = chosen.enode_id,
-                           .is_alive = chosen.is_alive,
                            .child_begin = begin,
                            .child_end = static_cast<std::uint32_t>(child_indices.size())};
         });
@@ -908,9 +908,6 @@ struct QueryPlannerContext::Impl {
   /// builds a BuiltinEstimator over the current egraph for this call.
   // TODO: why override? Can we not just have a canonacle CardinalityEstimator?
   std::unique_ptr<CardinalityEstimator> estimator_override;
-  /// Cardinality of the root alt picked by the most recent
-  /// ConvertToLogicalOperator call.  NaN before the first call.
-  double last_root_cardinality = std::numeric_limits<double>::quiet_NaN();
 
   void clear() {
     frontier_context.clear();
@@ -928,8 +925,6 @@ QueryPlannerContext::QueryPlannerContext(std::unique_ptr<CardinalityEstimator> e
 QueryPlannerContext::~QueryPlannerContext() = default;
 QueryPlannerContext::QueryPlannerContext(QueryPlannerContext &&) noexcept = default;
 QueryPlannerContext &QueryPlannerContext::operator=(QueryPlannerContext &&) noexcept = default;
-
-auto QueryPlannerContext::last_root_cardinality() const -> double { return impl_->last_root_cardinality; }
 
 auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext &planner_context) -> ExtractionResult {
   auto const &impl = internal::get_impl(e);
@@ -1037,10 +1032,11 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
     auto const &enode = impl.egraph_.get_enode(entry.enode_id);
     bool const is_bind = enode.symbol() == symbol::Bind && enode.children().size() == 3;
 
-    // Dead Bind: forward the input child's BuildResult.  sym/expr were never
-    // resolved; the resolver emitted exactly one child (the input).
-    if (is_bind && entry.is_alive != AliveTag::Alive) {
-      DMG_ASSERT(entry.child_end - entry.child_begin == 1, "dead Bind must have one resolver-emitted child");
+    // Dead Bind: forward the input child's BuildResult.  Alive Bind emits 3
+    // children (input, sym, expr); dead Bind emits 1 (input only).  Dispatch
+    // on child count rather than a separate `is_alive` tag - alive vs dead is
+    // derivable, the resolver's emitted-child-count is the canonical signal.
+    if (is_bind && (entry.child_end - entry.child_begin) == 1) {
       built[i] = std::move(built[ctx.child_indices[entry.child_begin]]);
       continue;
     }
@@ -1067,11 +1063,9 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   auto self_contained =
       root_frontier.alts() | std::views::filter([](Alternative const &a) { return a.required.empty(); });
   auto const &best = *std::ranges::min_element(self_contained, std::less<>{}, &Alternative::cost);
-  // TODO: last_root_cardinality should be removed, and ExtractionResult should be able to relay this cardinality
-  // estimate...just like we did for cost
-  ctx.last_root_cardinality = best.cardinality;
   return ExtractionResult{.plan = std::move(unique_result),
                           .cost = best.cost,
+                          .cardinality = best.cardinality,
                           .ast_storage = std::move(builder.ast_storage_),
                           .symbol_table = std::move(builder.symbol_table_)};
 }

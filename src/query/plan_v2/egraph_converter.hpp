@@ -30,6 +30,10 @@ struct CardinalityEstimator;
 struct ExtractionResult {
   std::unique_ptr<LogicalOperator> plan;
   double cost;
+  /// Cardinality of the root alt selected by extraction.  Surfaces the
+  /// per-query result so callers / tests can pin cardinality semantics
+  /// directly, without round-tripping through cost arithmetic.
+  double cardinality;
   AstStorage ast_storage;
   SymbolTable symbol_table;
 };
@@ -63,13 +67,6 @@ class QueryPlannerContext {
   QueryPlannerContext &operator=(QueryPlannerContext const &) = delete;
 
   struct Impl;
-
-  /// Cardinality of the root alt the most recent ConvertToLogicalOperator
-  /// call selected (NaN if no plan has been extracted yet).  Surfaces the
-  /// per-query result so tests can pin cardinality semantics directly,
-  /// without round-tripping through cost arithmetic.
-  // TODO: this should be removed, in favour of using ExtractionResult for cardinality estimate
-  double last_root_cardinality() const;
 
  private:
   Impl &impl() { return *impl_; }

@@ -22,32 +22,32 @@ namespace memgraph::query::plan::v2 {
 
 /// One candidate plan reachable at an e-class.
 ///
-/// Liveness tag for Bind/Unwind alternatives.
-/// - Alive:          alive Bind branch or any Unwind alt (sym is introduced).
-/// - Dead:           dead Bind branch (sym is not introduced).
-/// - NotApplicable:  all other enodes (field is meaningless; do not read).
-enum class AliveTag : uint8_t { Alive, Dead, NotApplicable };
-
 /// `cardinality` is the number of values flowing through this point in the
 /// plan: 1 for scalar expressions, list length for list-producing
 /// expressions, output rows for row-pipe operators (Output, future Unwind /
 /// scans).  Composition at row-pipe operators multiplies child cardinalities.
+///
+/// `introduces` / `required` participate in the kind dichotomy described in
+/// `src/query/plan_v2/CONTEXT.md`: operator Alts populate `introduces`;
+/// expression Alts populate `required`.  Whether a Bind is "alive" or "dead"
+/// is derived at read time from `sym ∈ chosen.introduces` where
+/// `sym = enode.children()[1]`.
 struct Alternative {
   double cost;
   /// Number of values flowing through this point in the plan.  Defaults to 1
   /// (scalar): leaves, identifiers, and per-evaluation expression operators
   /// all sit at cardinality 1; row-pipe operators inherit / multiply.
   double cardinality = 1.0;
-  /// Symbols that MUST be bound by ancestors.
+  /// Symbols that MUST be bound by ancestors.  Operator Alts: always empty
+  /// (residual demand is absorbed at the operator's construction-time
+  /// validation against `input.introduces`).  Expression Alts: free `Identifier`
+  /// references this expression demands from scope.
   bind::SymbolSet required;
   /// Symbols this subtree's row pipe makes AVAILABLE TO OPERATORS THAT PULL
-  /// ROWS FROM IT - the (B) "available downstream" reading, not the
-  /// "set-anywhere-in-the-subtree" reading.  Used by Output's cost case to
-  /// subtract demand satisfied by the input pipe (so a NamedOutput
-  /// referencing an Unwind variable sees that demand absorbed) and by the
-  /// resolver to demand the same introductions when picking the input
-  /// subtree alt.  Empty for per-evaluation operators (binary expressions,
-  /// NamedOutput, Function).
+  /// ROWS FROM IT.  Operator Alts: `input.introduces ∪ own_syms` where
+  /// own_syms is the operator's own bindings (Bind/Unwind sym, Output's
+  /// NamedOutput syms, Subquery's exposed_syms).  Expression Alts: always
+  /// empty.
   ///
   /// Scope barriers strip introductions: see symbol::Subquery's cost case
   /// for the canonical pattern - inner.introduces is dropped at the
@@ -55,7 +55,6 @@ struct Alternative {
   /// cross into the outer scope.
   bind::SymbolSet introduces;
   planner::core::ENodeId enode_id;  ///< Which enode achieves this alternative
-  AliveTag is_alive = AliveTag::NotApplicable;
 };
 
 /// Pareto dimensions for Alternative — four axes:
@@ -68,9 +67,6 @@ struct Alternative {
 ///                   absorb its required-set demand; without this axis a
 ///                   cheap dead-Bind alt would dominate the alive-Bind
 ///                   alt that downstream Outputs actually depend on).
-///
-/// is_alive intentionally does not participate: it is a per-alt build-side
-/// annotation, orthogonal to the optimisation problem the frontier solves.
 using AlternativeDim_Cost = planner::core::extract::Dim<&Alternative::cost, planner::core::extract::LowerIsBetter>;
 using AlternativeDim_Cardinality =
     planner::core::extract::Dim<&Alternative::cardinality, planner::core::extract::LowerIsBetter>;

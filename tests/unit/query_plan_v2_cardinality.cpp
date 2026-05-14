@@ -137,11 +137,11 @@ TEST(UnwindCostShape, ProducesUnwindOperator) {
 
   // TODO: this is fake the estimator should be real so we can actully get size from the list
   auto ctx = QueryPlannerContext{std::make_unique<FixedEstimator>(6.0)};
-  auto [plan, root_cost, ast, sym_table] = ConvertToLogicalOperator(eg, root, ctx);
+  auto result = ConvertToLogicalOperator(eg, root, ctx);
 
-  ASSERT_NE(plan, nullptr);
+  ASSERT_NE(result.plan, nullptr);
 
-  auto const &produce = dynamic_cast<plan::Produce const &>(*plan);
+  auto const &produce = dynamic_cast<plan::Produce const &>(*result.plan);
   ASSERT_NE(produce.input(), nullptr);
   auto const *unwind_op = dynamic_cast<plan::Unwind const *>(produce.input().get());
   ASSERT_NE(unwind_op, nullptr) << "Top input must be a v1 Unwind";
@@ -149,9 +149,9 @@ TEST(UnwindCostShape, ProducesUnwindOperator) {
   ASSERT_NE(unwind_op->input(), nullptr);
   EXPECT_NE(dynamic_cast<plan::Once const *>(unwind_op->input().get()), nullptr);
 
-  EXPECT_GT(root_cost, 0.0);
-  EXPECT_LT(root_cost, 1e9);
-  EXPECT_DOUBLE_EQ(ctx.last_root_cardinality(), 6.0);
+  EXPECT_GT(result.cost, 0.0);
+  EXPECT_LT(result.cost, 1e9);
+  EXPECT_DOUBLE_EQ(result.cardinality, 6.0);
 }
 
 // ============================================================================
@@ -178,7 +178,7 @@ TEST(SubqueryBarrier, InnerBindingsStripped) {
   auto outer_root_ok = eg.MakeOutputs(subq, {outer_named_ok});
 
   QueryPlannerContext ctx;
-  auto [plan_ok, _cost, _ast, _sym] = ConvertToLogicalOperator(eg, outer_root_ok, ctx);
+  auto [plan_ok, _cost, _card, _ast, _sym] = ConvertToLogicalOperator(eg, outer_root_ok, ctx);
   ASSERT_NE(plan_ok, nullptr);
 
   auto col_x_sym = eg.MakeSymbol(3, "x");
@@ -228,10 +228,10 @@ TEST(OutputCardinality, ScalarReturnIsOneRowEvenWhenValueIsList) {
   auto root = eg.MakeOutputs(once, {named_output});
 
   auto ctx = QueryPlannerContext{std::make_unique<FixedEstimator>(6.0)};
-  auto [plan, cost, ast, sym_table] = ConvertToLogicalOperator(eg, root, ctx);
+  auto result = ConvertToLogicalOperator(eg, root, ctx);
 
-  ASSERT_NE(plan, nullptr);
-  EXPECT_DOUBLE_EQ(ctx.last_root_cardinality(), 1.0);
+  ASSERT_NE(result.plan, nullptr);
+  EXPECT_DOUBLE_EQ(result.cardinality, 1.0);
 }
 
 // ============================================================================
@@ -262,7 +262,7 @@ TEST(OutputIntroduces, IncludesNamedOutputSyms) {
   // fail when the resolver computes `chosen.introduces − own_syms` and finds
   // own_syms not contained in chosen.introduces (DMG_ASSERT in debug).
   // Plain check: a valid plan is produced.
-  auto [plan, _cost, _ast, _sym] = ConvertToLogicalOperator(eg, root, ctx);
+  auto [plan, _cost, _card, _ast, _sym] = ConvertToLogicalOperator(eg, root, ctx);
   ASSERT_NE(plan, nullptr);
 }
 
@@ -287,7 +287,7 @@ TEST(BindAbsorption, ExprRequiredAbsorbedByInputIntroduces) {
   auto root = eg.MakeOutputs(bind_b, {named_c});
 
   QueryPlannerContext ctx;
-  auto [plan, _cost, _ast, _sym] = ConvertToLogicalOperator(eg, root, ctx);
+  auto [plan, _cost, _card, _ast, _sym] = ConvertToLogicalOperator(eg, root, ctx);
   ASSERT_NE(plan, nullptr);
 }
 

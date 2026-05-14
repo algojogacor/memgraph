@@ -41,13 +41,9 @@ auto Cmp(Alternative const &a, Alternative const &b) {
                                                    AlternativeDim_Introduces>(a, b);
 }
 
-auto MakeAlt(double cost, double cardinality, std::initializer_list<uint32_t> required, uint32_t enode_id,
-             AliveTag is_alive = AliveTag::Dead) -> Alternative {
-  return {.cost = cost,
-          .cardinality = cardinality,
-          .required = MakeSet(required),
-          .enode_id = ENodeId{enode_id},
-          .is_alive = is_alive};
+auto MakeAlt(double cost, double cardinality, std::initializer_list<uint32_t> required, uint32_t enode_id)
+    -> Alternative {
+  return {.cost = cost, .cardinality = cardinality, .required = MakeSet(required), .enode_id = ENodeId{enode_id}};
 }
 
 struct AltDominanceCase {
@@ -175,11 +171,7 @@ INSTANTIATE_TEST_SUITE_P(AltDominance, AltDominanceTest,
                                          AltDominanceCase{"LowerCardinalityDominates_Reverse",
                                                           MakeAlt(5.0, 1000.0, {1}, 0),
                                                           MakeAlt(5.0, 6.0, {1}, 1),
-                                                          std::partial_ordering::less},
-                                         AltDominanceCase{"IsAliveDoesNotParticipate",
-                                                          MakeAlt(5.0, 6.0, {1}, 0, AliveTag::Alive),
-                                                          MakeAlt(5.0, 6.0, {1}, 1, AliveTag::Dead),
-                                                          std::partial_ordering::equivalent}),
+                                                          std::partial_ordering::less}),
                          AltDominanceCaseName);
 
 }  // namespace

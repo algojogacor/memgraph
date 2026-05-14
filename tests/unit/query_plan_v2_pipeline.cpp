@@ -213,7 +213,8 @@ class PlannerV2PipelineTest : public ::testing::TestWithParam<PipelineTestCase> 
     // The plan references AST nodes owned by plan_ast_storage_, and the compact
     // SymbolTable owns only the symbols surviving extraction. Replace the
     // parse-time symbol_table_ so downstream lookups see the authoritative table.
-    auto [plan, cost, new_ast_storage, new_symbol_table] = ConvertToLogicalOperator(eg, root, planner_context_);
+    auto [plan, cost, cardinality, new_ast_storage, new_symbol_table] =
+        ConvertToLogicalOperator(eg, root, planner_context_);
     plan_ast_storage_ = std::move(new_ast_storage);
     symbol_table_ = std::move(new_symbol_table);
 
@@ -887,7 +888,7 @@ TEST_F(PlannerV2PipelineTest, PickCompatibleDemandedIntroducesFiltersDeadBind) {
   auto named_out = eg.MakeNamedOutput("r", sym_r, eg.MakeIdentifier(sym_a));
   auto root = eg.MakeOutputs(bind, {named_out});
 
-  auto [plan, cost, ast_storage, symbol_table] = ConvertToLogicalOperator(eg, root, planner_context_);
+  auto [plan, cost, cardinality, ast_storage, symbol_table] = ConvertToLogicalOperator(eg, root, planner_context_);
   ASSERT_NE(plan, nullptr);
 
   auto details = GetOperatorDetails(plan.get());
