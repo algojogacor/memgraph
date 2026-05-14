@@ -167,14 +167,22 @@ template <typename Symbol, typename Analysis, typename CostModel>
   using CostResult = CostModel::CostResult;
 
   assert(!egraph.needs_rebuild() && "egraph must be rebuilt before extraction");
+  assert(egraph.find(eclass_id) == eclass_id &&
+         "ComputeFrontiers requires canonical eclass_id; recursive children are canonical "
+         "post-rebuild, so the top-level caller must canonicalize the root");
 
   auto &out = ctx.frontier_map;
 
   // Reserve once on the top-level call so no rehash invalidates iterators
-  // or pointers across the recursion.  reserve() is idempotent if the caller
-  // already reserved.
-  // TODO: double check, will emplace ever rehash, is this reserve good enough.
+  // or pointers across the recursion.  boost::unordered_flat_map has a fixed
+  // max_load_factor of 0.875 and rehashes only when size >= max_load at insert
+  // time; reserve(N) on an empty map sets max_load >= N, so the next ≤ N
+  // emplaces are guaranteed not to rehash.  Total emplaces are bounded by
+  // num_classes() because every key is a canonical EClassId (recursive
+  // descents read enode.children() which is canonical post-rebuild; the
+  // top-level root is asserted canonical above).
   if (out.empty()) out.reserve(egraph.num_classes());
+  [[maybe_unused]] auto const initial_bucket_count = out.bucket_count();
 
   if (auto const it = out.find(eclass_id); it != out.end()) {
     return it->second ? &*it->second : nullptr;
@@ -187,6 +195,7 @@ template <typename Symbol, typename Analysis, typename CostModel>
   // prevents rehash, and erasure of unrelated entries leaves other buckets in
   // place (open addressing).
   auto sentinel_it = out.emplace(eclass_id, std::nullopt).first;
+  assert(out.bucket_count() == initial_bucket_count && "sentinel emplace triggered rehash");
 
   auto merged_frontier = std::optional<CostResult>{};
 
@@ -225,6 +234,11 @@ template <typename Symbol, typename Analysis, typename CostModel>
       merged_frontier->merge_in_place(std::move(enode_frontier));
     }
   }
+
+  // Each recursive child also asserts bucket_count stability at its own emplace
+  // site, so a rehash anywhere in the subtree fires the assertion at the source.
+  // Re-checking here makes the iterator-stability invariant locally evident.
+  assert(out.bucket_count() == initial_bucket_count && "rehash during child recursion invalidated sentinel_it");
 
   if (merged_frontier) {
     sentinel_it->second = std::move(merged_frontier);
