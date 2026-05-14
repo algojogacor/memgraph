@@ -234,5 +234,62 @@ TEST(OutputCardinality, ScalarReturnIsOneRowEvenWhenValueIsList) {
   EXPECT_DOUBLE_EQ(ctx.last_root_cardinality(), 1.0);
 }
 
+// ============================================================================
+// Kind dichotomy: construction-time validation and Output own_syms injection.
+// See `src/query/plan_v2/CONTEXT.md` and ADR 0009.
+// ============================================================================
+
+// Output's `introduces` must include each NamedOutput's sym (own_syms rule).
+// Pre-fix, OutputCombine set `introduces = pipe.introduces`, dropping the
+// NamedOutput syms entirely.  Post-fix, the dispatch arm injects them.
+TEST(OutputIntroduces, IncludesNamedOutputSyms) {
+  egraph eg;
+  auto once = eg.MakeOnce();
+  auto a_sym = eg.MakeSymbol(0, "a");
+  auto one = eg.MakeLiteral(storage::ExternalPropertyValue{int64_t{1}});
+  auto bind_a = eg.MakeBind(once, a_sym, one);
+
+  auto c_sym = eg.MakeSymbol(1, "c");
+  auto id_a = eg.MakeIdentifier(a_sym);
+  auto named_c = eg.MakeNamedOutput("c", c_sym, id_a);
+  auto root = eg.MakeOutputs(bind_a, {named_c});
+
+  QueryPlannerContext ctx;
+  // If Output's introduces missed the NamedOutput sym `c`, parent-frame
+  // resolution would still pass at the root (parent demands nothing).  But a
+  // round-trip through ConvertToLogicalOperator exercises the resolver's
+  // chosen.introduces fully: an Output Alt that doesn't introduce `c` would
+  // fail when the resolver computes `chosen.introduces − own_syms` and finds
+  // own_syms not contained in chosen.introduces (DMG_ASSERT in debug).
+  // Plain check: a valid plan is produced.
+  auto [plan, _cost, _ast, _sym] = ConvertToLogicalOperator(eg, root, ctx);
+  ASSERT_NE(plan, nullptr);
+}
+
+// The chained-Bind regression at the cost-model level: outer Bind's expr
+// references inner Bind's sym.  Pre-fix, BindFlatMap propagated expr.required
+// upward without absorbing against input.introduces, leaving `a` falsely in
+// the outer Bind's required.
+TEST(BindAbsorption, ExprRequiredAbsorbedByInputIntroduces) {
+  egraph eg;
+  auto once = eg.MakeOnce();
+  auto a_sym = eg.MakeSymbol(0, "a");
+  auto one = eg.MakeLiteral(storage::ExternalPropertyValue{int64_t{1}});
+  auto bind_a = eg.MakeBind(once, a_sym, one);
+
+  auto b_sym = eg.MakeSymbol(1, "b");
+  auto id_a = eg.MakeIdentifier(a_sym);
+  auto bind_b = eg.MakeBind(bind_a, b_sym, id_a);  // b = a, expr references a
+
+  auto c_sym = eg.MakeSymbol(2, "c");
+  auto id_b = eg.MakeIdentifier(b_sym);
+  auto named_c = eg.MakeNamedOutput("c", c_sym, id_b);
+  auto root = eg.MakeOutputs(bind_b, {named_c});
+
+  QueryPlannerContext ctx;
+  auto [plan, _cost, _ast, _sym] = ConvertToLogicalOperator(eg, root, ctx);
+  ASSERT_NE(plan, nullptr);
+}
+
 }  // namespace
 }  // namespace memgraph::query::plan::v2

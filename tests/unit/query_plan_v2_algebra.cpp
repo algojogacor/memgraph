@@ -91,8 +91,14 @@ TEST(BindAlgebra_IsAlive, EmptyRequiredIsAlwaysDead) {
 // Bind algebra: cost formulas
 // ============================================================================
 
-TEST(BindAlgebra_Cost, AliveSumsAllThree) {
-  EXPECT_DOUBLE_EQ(bind::AliveCost(2.5, bind::kSymbolCost, 3.5), 2.5 + bind::kSymbolCost + 3.5);
+TEST(BindAlgebra_Cost, AliveSumsAllThreeOneShot) {
+  // cardinality=1 is the standalone-Bind case (above Once); expr_cost scales as-is.
+  EXPECT_DOUBLE_EQ(bind::AliveCost(2.5, bind::kSymbolCost, 3.5, 1.0), 2.5 + bind::kSymbolCost + 3.5);
+}
+
+TEST(BindAlgebra_Cost, AliveScalesExprByInputCardinality) {
+  // In-pipeline Bind (above row-generative input): expr_cost amortises per row.
+  EXPECT_DOUBLE_EQ(bind::AliveCost(2.5, bind::kSymbolCost, 3.5, 10.0), 2.5 + bind::kSymbolCost + 10.0 * 3.5);
 }
 
 TEST(BindAlgebra_Cost, DeadIgnoresSymAndExpr) { EXPECT_DOUBLE_EQ(bind::DeadCost(7.5), 7.5); }

@@ -19,28 +19,12 @@
 // via Identifier; some Bind has to introduce it; otherwise the plan refers
 // to a name that doesn't exist.
 //
-// We track this with two sets, both stored as SymbolSet:
-//
-//   `required`  - "what variables does this part of the plan still NEED
-//                  someone to introduce?"  Built bottom-up by the cost
-//                  model.  Identifier(x) starts {x}.  Expressions union
-//                  what their children need.  An alive Bind for `x`
-//                  takes `x` off the list because it introduces `x`.
-//
-//   `provided`  - "what variables ARE currently in scope?"  Tracked
-//                  top-down by the resolver as it walks the plan.  Each
-//                  alive Bind adds its variable when going into the
-//                  input below it.
-//
-// At every node, the resolver checks: are all variables this node needs
-// already in scope?  i.e. `required` ⊆ `provided`.  If yes, use it.  If
-// no, the plan is broken at that node.
-//
-// A Bind is "alive" if the input below it actually uses the variable.
-// "Dead" if the input doesn't use it - the Bind is just dead weight, and
-// the resolver/builder skip it entirely.  Whether a Bind is alive is
-// decided once, by the cost model, when it computes `required` and sees
-// whether `sym` shows up in the input's needs.
+// Full vocabulary (operator vs expression Alt kinds, `introduces` /
+// `required` / `in_scope` / `must_introduce`, the construction-time
+// absorption rule and the resolver's threading rule) lives in
+// `src/query/plan_v2/CONTEXT.md`.  This header keeps only the data types
+// (`SymbolSet`) and the small cost helpers (`AliveCost`, `DeadCost`,
+// `kSymbolCost`) used by `egraph_converter.cpp`.
 
 #include <algorithm>
 #include <ranges>
@@ -169,9 +153,14 @@ class SymbolSet {
 /// leaf shape on entry as the canary if the invariant ever weakens.
 inline constexpr double kSymbolCost = 1.0;
 
-/// Cost of the alive branch.  Pay for input, sym evaluation, and expr.
-[[nodiscard]] inline auto AliveCost(double input_cost, double sym_cost, double expr_cost) -> double {
-  return input_cost + sym_cost + expr_cost;
+/// Cost of the alive branch.  Bind preserves input cardinality but evaluates
+/// `expr` once per input row (Produce semantics in v1), so `expr_cost` is
+/// scaled by `input_cardinality`.  For standalone Binds above Once
+/// (cardinality 1) this collapses to `expr_cost`; for Binds inside a row
+/// pipeline (above Unwind, scans) it correctly amortises per-row.
+[[nodiscard]] inline auto AliveCost(double input_cost, double sym_cost, double expr_cost, double input_cardinality)
+    -> double {
+  return input_cost + sym_cost + input_cardinality * expr_cost;
 }
 
 /// Cost of the dead branch.  Only the input runs; sym and expr are skipped.

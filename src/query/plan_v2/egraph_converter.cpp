@@ -119,52 +119,59 @@ auto BinaryCombine(CostFrontier const &lhs, CostFrontier const &rhs, double extr
 
 /// Output × NamedOutput combine.  The row pipe's per-output-row evaluation
 /// scales `named_out`'s scalar cost by the input pipe's cardinality.  The
-/// NamedOutput is evaluated INSIDE the input pipe's row scope, so demands
-/// satisfied by the input's bindings (alive Bind / Unwind) are subtracted
-/// from the residual `required`.  This is what lets `WITH x AS y UNWIND ...
-/// RETURN y` satisfy y's demand from the Bind/Unwind below the Output.
+/// NamedOutput is evaluated INSIDE the input pipe's row scope, so its
+/// `required` is absorbed against `l.introduces` at construction; the residual
+/// stays in this Alt's `required`.  Under the kind dichotomy (see
+/// `src/query/plan_v2/CONTEXT.md`) an operator Alt's `required` is ∅; the
+/// residual being non-empty here means the query is ill-formed and the Alt is
+/// unreachable at the root (where `parent.in_scope = ∅` and the resolver's
+/// compatibility check would reject it anyway).
+///
+/// NamedOutput sym injection is done in the dispatching `case symbol::Output`
+/// arm after all NamedOutputs are folded in; `OutputCombine` itself only
+/// touches `required` so it stays composable with the fold.
 auto OutputCombine(CostFrontier const &row_pipe, CostFrontier const &named_out, planner::core::ENodeId enode_id)
     -> CostFrontier {
   return CostFrontier::cartesian_product(row_pipe, named_out, [enode_id](Alternative const &l, Alternative const &r) {
     auto const remaining = r.required.difference(l.introduces);
-    return Alternative{
-        .cost = l.cost + l.cardinality * r.cost,
-        .cardinality = l.cardinality,
-        .required = l.required.set_union(
-            remaining),  // TODO: in my opinion an operator can not require anything, it can only provide/introduce
-                         //       if we need to maintain a set of `was_used` that should be a different set
-        .introduces = l.introduces,
-        .enode_id = enode_id};
+    return Alternative{.cost = l.cost + l.cardinality * r.cost,
+                       .cardinality = l.cardinality,
+                       .required = l.required.set_union(remaining),
+                       .introduces = l.introduces,
+                       .enode_id = enode_id};
   });
 }
 
-/// Bind flat-map: for each input alt, emit an alive variant when sym is
-/// demanded (locally or globally) and a dead variant when input doesn't
-/// already demand sym.  See the suppression comments inline for why each
-/// branch is conditional.
+/// Bind flat-map: for each input alt, emit an alive variant when sym has a
+/// consumer (the egraph-wide `referenced_syms` filter) and a dead variant
+/// always.  See `src/query/plan_v2/CONTEXT.md` for the kind dichotomy: Bind's
+/// alive Alt is an operator Alt with `introduces = input.introduces ∪ {sym}`
+/// and `required = ∅`.  The bottom-up absorption of `expr.required` against
+/// `input.introduces` lives here: anything `expr` demands that `input`
+/// already provides is satisfied at this Bind boundary and does not
+/// propagate upward.  Before the dichotomy fix this absorption was
+/// missing - `expr_alt.required` was unioned into Bind's required unchanged,
+/// causing chained-Bind queries (`WITH 1 AS a WITH a+1 AS b RETURN b`) to
+/// be rejected at the resolver because `a` falsely appeared in Bind_outer's
+/// required.  See [ADR 0009].
 auto BindFlatMap(CostFrontier const &input, CostFrontier const &expr, planner::core::EClassId sym_eclass,
                  double sym_cost, SymbolSet const &referenced_syms, planner::core::ENodeId enode_id) -> CostFrontier {
   return CostFrontier::flat_map(input, [&, enode_id](Alternative const &input_alt, auto emit) {
-    // Emit alive when there's a chance someone will demand sym:
-    //   - Input subtree directly demands it (classic case), or
-    //   - Some Identifier(sym) lives elsewhere in the e-graph and
-    //     might cross a sibling boundary at an enclosing Output.
-    // If neither holds, sym has no consumer and the alive alt would
-    // bloat the frontier unbounded - up to 2^N for an N-Bind chain.
-    // TODO: ATM I'm confused, operatators discover what is provided from the input, for bind, if the expression child
-    // requires some symbols AND can be satisified by the symbols provided by the input, then BIND can evaluate that
-    // expression and IT can provide its symbol along with the input provided symbols to any parent operator of THIS
-    // BIND
-    bool const input_demands_sym = input_alt.required.is_alive(sym_eclass);
-    bool const should_emit_alive = input_demands_sym || referenced_syms.contains(sym_eclass);
-    if (should_emit_alive) {
+    // Alive: sym has at least one Identifier reference somewhere in the e-graph.
+    // `input.required` is always empty on operator Alts under the dichotomy;
+    // the only signal that determines emission is the global filter.
+    if (referenced_syms.contains(sym_eclass)) {
       for (auto const &expr_alt : expr.alts()) {
-        auto required = input_alt.required.alive_required(sym_eclass, expr_alt.required);
+        // Absorption: subtract input.introduces from expr.required before
+        // folding into Bind's required.  This is the symmetric companion to
+        // `r.required.difference(l.introduces)` in OutputCombine.
+        auto const expr_residual = expr_alt.required.difference(input_alt.introduces);
+        auto required = input_alt.required.alive_required(sym_eclass, expr_residual);
         auto introduces = input_alt.introduces;
         introduces.insert(sym_eclass);
         // Bind is one-shot, not a row-pipe: passes input's cardinality
         // through unchanged.  expr is evaluated once at bind-time.
-        emit({.cost = bind::AliveCost(input_alt.cost, sym_cost, expr_alt.cost),
+        emit({.cost = bind::AliveCost(input_alt.cost, sym_cost, expr_alt.cost, input_alt.cardinality),
               .cardinality = input_alt.cardinality,
               .required = std::move(required),
               .introduces = std::move(introduces),
@@ -172,35 +179,32 @@ auto BindFlatMap(CostFrontier const &input, CostFrontier const &expr, planner::c
               .is_alive = AliveTag::Alive});
       }
     }
-    // Emit dead only when input doesn't already demand sym.  When
-    // input_demands_sym is true, the dead alt has sym still in `required`,
-    // so it is only compatible with ancestors that already provide sym.  But
-    // sym is provided only when an ancestor Bind for it is alive - which is
-    // exactly the alive-alt condition.  A dead alt under that condition is
-    // therefore unreachable: no resolver context can pick it that couldn't
-    // also pick alive.  Suppressing it avoids bloating the frontier.
-    if (!input_demands_sym) {
-      emit({.cost = bind::DeadCost(input_alt.cost),
-            .cardinality = input_alt.cardinality,
-            .required = input_alt.required,
-            .introduces = input_alt.introduces,
-            .enode_id = enode_id,
-            .is_alive = AliveTag::Dead});
-    }
+    // Dead: expr is not evaluated; pass input through unchanged.  Always
+    // emitted - the previous "suppress when input_demands_sym" rule relied on
+    // operator Alts carrying expression demand upward, which the kind
+    // dichotomy retires.
+    emit({.cost = bind::DeadCost(input_alt.cost),
+          .cardinality = input_alt.cardinality,
+          .required = input_alt.required,
+          .introduces = input_alt.introduces,
+          .enode_id = enode_id,
+          .is_alive = AliveTag::Dead});
   });
 }
 
 /// Unwind flat-map: row-generative.  Output cardinality is the product of
 /// input's and list's cardinalities; cost is input's pipeline plus per-row
 /// evaluation of the list expression with a structural overhead.  Always
-/// emits Alive because Unwind always introduces sym.
+/// emits Alive because Unwind always introduces sym.  Like BindFlatMap, the
+/// list expression is evaluated in input's row scope, so `list.required` is
+/// absorbed against `input.introduces` before being folded into Unwind's
+/// required.  See `src/query/plan_v2/CONTEXT.md`.
 auto UnwindFlatMap(CostFrontier const &input, CostFrontier const &list, planner::core::EClassId sym_eclass,
                    double sym_cost, planner::core::ENodeId enode_id) -> CostFrontier {
   return CostFrontier::flat_map(input, [&, enode_id](Alternative const &input_alt, auto emit) {
     for (auto const &list_alt : list.alts()) {
-      // sym is always introduced by Unwind, so remove it from input's
-      // required and union list_expr's required (its needs become ours).
-      auto required = input_alt.required.alive_required(sym_eclass, list_alt.required);
+      auto const list_residual = list_alt.required.difference(input_alt.introduces);
+      auto required = input_alt.required.alive_required(sym_eclass, list_residual);
       auto introduces = input_alt.introduces;
       introduces.insert(sym_eclass);
       auto const cost = input_alt.cost + (list_alt.cost + kUnwindPerRowOverhead) * input_alt.cardinality + sym_cost;
@@ -339,11 +343,38 @@ struct PlanCostModel {
       // NamedOutput in with per-row-scaled evaluation cost.  Per-row scaling
       // lets the planner prefer a one-shot Bind over an inlined alternative
       // when the row pipe is wide (e.g. UNWIND range(0, 100)).
+      //
+      // Output's `own_syms` are the syms each NamedOutput child binds (the
+      // first child of each NamedOutput enode).  Under the uniform `own_syms`
+      // rule (see `src/query/plan_v2/CONTEXT.md`) every operator's
+      // `introduces = input.introduces ∪ own_syms`; Output's NamedOutput syms
+      // are exposed to the resolver's `in_scope` at Output's position and
+      // become part of the `chosen.introduces` it commits upward.
       case symbol::Output: {
-        // TODO: each named output has its requirements, which should already be introduced by the input (child 0)
+        // Collect NamedOutput sym e-classes from the enode's structural children.
+        // Each NamedOutput enode has the shape `(sym_leaf, expr)`; the sym leaf
+        // sits at children()[0] of the NamedOutput enode.
+        boost::container::small_vector<planner::core::EClassId, 8> own_syms_buf;
+        for (auto const no_eclass : current.children().subspan(1)) {
+          auto const &cls = egraph.eclass(no_eclass);
+          DMG_ASSERT(!cls.nodes().empty(), "NamedOutput e-class must have at least one enode");
+          auto const &no_enode = egraph.get_enode(cls.nodes().front());
+          DMG_ASSERT(!no_enode.children().empty(), "NamedOutput enode must have at least one child (sym leaf)");
+          own_syms_buf.push_back(no_enode.children()[0]);
+        }
+        SymbolSet const own_syms{own_syms_buf};
+
         auto result = Restamp(*children[0], 0.0, enode_id);
         for (auto const *named_out : children.subspan(1)) {
           result = OutputCombine(result, *named_out, enode_id);
+        }
+        // Inject Output's own_syms into every Alt's introduces.  Larger
+        // introduces is "better" on the Pareto dim, so this preserves the
+        // pruning invariant.
+        if (!own_syms.empty()) {
+          result.mutate_pruning_invariant_preserving([&own_syms](Alternative &alt) {
+            for (auto sym : own_syms) alt.introduces.insert(sym);
+          });
         }
         return result;
       }
@@ -393,14 +424,18 @@ struct PlanCostModel {
 /// get different ResolvedKeys, so each picks its own optimal alternative.
 /// Without this, a parent path with a richer scope could be forced to
 /// reuse an earlier path's pick that doesn't lean on the extra bindings.
+///
+/// See `src/query/plan_v2/CONTEXT.md` for the terminology:
+///   - `in_scope`      : top-down "what's currently visible here" (resolver context).
+///   - `must_introduce`: top-down "what this subtree must establish" (resolver obligation).
 struct ResolvedKey {
   planner::core::EClassId eclass;
-  SymbolSet provided;
+  SymbolSet in_scope;
   /// Symbols this subtree's chosen alt must introduce.  Set non-empty by
   /// Output (when its NamedOutputs reference symbols the input row pipe
   /// must bind) and propagated down through Bind/Unwind.  Empty means "no
   /// additional demand from above" - the picker chooses on cost alone.
-  SymbolSet demanded_introduces;
+  SymbolSet must_introduce;
 
   bool operator==(ResolvedKey const &) const = default;
 };
@@ -411,8 +446,8 @@ struct ResolvedKeyHash {
     auto hash_set = [&](SymbolSet const &s) {
       for (auto const &id : s) boost::hash_combine(h, boost::hash<planner::core::EClassId>{}(id));
     };
-    hash_set(k.provided);
-    hash_set(k.demanded_introduces);
+    hash_set(k.in_scope);
+    hash_set(k.must_introduce);
     return h;
   }
 };
@@ -450,51 +485,85 @@ struct TopoEntry {
 //   3. Call the new function from ResolveChildren()
 //
 // Generic expression operators (Leaf, Unary, Binary) fall through to the generic
-// arm - they carry no scope context and their children all get provided=unchanged,
-// demanded={}.
+// arm - they carry no scope context and their children all get in_scope=unchanged,
+// must_introduce={}.
 
-void ResolveBindUnwindAlive(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, auto visit) {
+// Alive Bind / Unwind child threading (kind dichotomy, see CONTEXT.md).
+// own_sym = enode.children()[1].  Pipe (operator child) gets:
+//   in_scope    = parent.in_scope                       (operators don't push scope down to their pipe)
+//   must_introduce = chosen.introduces − {own_sym}      (the pipe must deliver everything we promised, minus what we
+//   bind ourselves)
+// Expr (expression child) gets:
+//   in_scope    = parent.in_scope ∪ (chosen.introduces − {own_sym})  (scope at Bind/Unwind's position)
+//   must_introduce = ∅                                   (expressions never introduce)
+void ResolveBindUnwindAlive(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key,
+                            SymbolSet const &chosen_introduces, auto visit) {
   auto const &children = enode.children();
   auto const sym_eclass = children[1];
-  auto alive_provided = parent_key.provided;
-  alive_provided.insert(sym_eclass);
-  auto downstream_demand = parent_key.demanded_introduces.difference_one(sym_eclass);
-  visit(ResolvedKey{children[0], std::move(alive_provided), std::move(downstream_demand)});
-  visit(ResolvedKey{sym_eclass, parent_key.provided, {}});
-  visit(ResolvedKey{children[2], parent_key.provided, {}});
+  auto pipe_must_introduce = chosen_introduces.difference_one(sym_eclass);
+  auto expr_in_scope = parent_key.in_scope;
+  for (auto s : pipe_must_introduce) expr_in_scope.insert(s);
+  visit(ResolvedKey{children[0], parent_key.in_scope, pipe_must_introduce});
+  visit(ResolvedKey{sym_eclass, parent_key.in_scope, {}});
+  visit(ResolvedKey{children[2], std::move(expr_in_scope), {}});
 }
 
 void ResolveBindDead(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, auto visit) {
-  visit(ResolvedKey{enode.children()[0], parent_key.provided, parent_key.demanded_introduces});
+  visit(ResolvedKey{enode.children()[0], parent_key.in_scope, parent_key.must_introduce});
 }
 
 void ResolveSubqueryChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, auto visit) {
   auto const &children = enode.children();
-  // Subquery children[2..] are the Symbol e-classes the subquery exposes to
-  // the outer scope.  Symbols demanded above that this subquery satisfies are
-  // subtracted from the outer pipeline's `demanded_introduces` before recursion.
-  auto outer_demand = parent_key.demanded_introduces.difference(SymbolSet{children.subspan(2)});
-  visit(ResolvedKey{children[0], parent_key.provided, std::move(outer_demand)});
+  // Subquery's own_syms are the exposed-sym e-classes at children[2..].
+  // Outer pipe must introduce whatever demand was passed in, minus what the
+  // subquery itself exposes (those come from the inner side, not the outer).
+  auto outer_demand = parent_key.must_introduce.difference(SymbolSet{children.subspan(2)});
+  visit(ResolvedKey{children[0], parent_key.in_scope, std::move(outer_demand)});
+  // Inner is barrier-isolated: in_scope is empty (not parent.in_scope), only
+  // the exposed_syms cross outward via the cost-model's `introduces`.
   visit(ResolvedKey{children[1], SymbolSet{}, SymbolSet{}});
   for (auto sym_child : children.subspan(2)) {
-    visit(ResolvedKey{sym_child, parent_key.provided, {}});
+    visit(ResolvedKey{sym_child, parent_key.in_scope, {}});
   }
 }
 
+// Output child threading (kind dichotomy, see CONTEXT.md).
+// own_syms = {NamedOutput.children()[0] for each NamedOutput child}.  Pipe gets:
+//   in_scope    = parent.in_scope
+//   must_introduce = chosen.introduces − own_syms      (pipe delivers everything except the NamedOutput syms)
+// NamedOutput children get:
+//   in_scope    = parent.in_scope ∪ (chosen.introduces − own_syms)
+//   must_introduce = ∅
+//
+// `chosen.introduces − own_syms` is the row-pipe scope at Output's position -
+// everything the pipe established, but not the NamedOutputs' own LHS syms (a
+// NamedOutput's expr is not allowed to reference its own LHS - `RETURN c AS c`
+// can't mean "the value of c is c").
 void ResolveOutputChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key,
-                           SymbolSet const &chosen_introduces, auto visit) {
+                           SymbolSet const &chosen_introduces, EGraph const &egraph, auto visit) {
   auto const &children = enode.children();
-  visit(ResolvedKey{children[0], parent_key.provided, chosen_introduces});
-  auto enriched_provided = parent_key.provided;
-  for (auto sym : chosen_introduces) enriched_provided.insert(sym);
+  boost::container::small_vector<planner::core::EClassId, 8> own_syms_buf;
+  for (auto const no_eclass : children.subspan(1)) {
+    auto const &cls = egraph.eclass(no_eclass);
+    DMG_ASSERT(!cls.nodes().empty(), "NamedOutput e-class must have at least one enode");
+    auto const &no_enode = egraph.get_enode(cls.nodes().front());
+    DMG_ASSERT(!no_enode.children().empty(), "NamedOutput enode must have at least one child (sym leaf)");
+    own_syms_buf.push_back(no_enode.children()[0]);
+  }
+  SymbolSet const own_syms{own_syms_buf};
+  auto const pipe_must_introduce = chosen_introduces.difference(own_syms);
+  auto named_out_in_scope = parent_key.in_scope;
+  for (auto s : pipe_must_introduce) named_out_in_scope.insert(s);
+
+  visit(ResolvedKey{children[0], parent_key.in_scope, pipe_must_introduce});
   for (auto named_out : children.subspan(1)) {
-    visit(ResolvedKey{named_out, enriched_provided, {}});
+    visit(ResolvedKey{named_out, named_out_in_scope, {}});
   }
 }
 
 void ResolveGenericChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, auto visit) {
   for (auto child : enode.children()) {
-    visit(ResolvedKey{child, parent_key.provided, {}});
+    visit(ResolvedKey{child, parent_key.in_scope, {}});
   }
 }
 
@@ -504,19 +573,20 @@ void ResolveGenericChildren(planner::core::ENode<symbol> const &enode, ResolvedK
 /// resolver recorded into `child_indices`, so the child-key derivation rule
 /// lives in exactly one place.
 void ResolveChildren(planner::core::ENode<symbol> const &enode, ResolvedKey const &parent_key, AliveTag is_alive,
-                     SymbolSet const &chosen_introduces, auto visit) {
+                     SymbolSet const &chosen_introduces, planner::core::EGraph<symbol, analysis> const &egraph,
+                     auto visit) {
   auto const sym_op = enode.symbol();
   auto const &children = enode.children();
   bool const is_bind_or_unwind = (sym_op == symbol::Bind || sym_op == symbol::Unwind) && children.size() == 3;
 
   if (is_bind_or_unwind && is_alive == AliveTag::Alive) {
-    ResolveBindUnwindAlive(enode, parent_key, visit);
+    ResolveBindUnwindAlive(enode, parent_key, chosen_introduces, visit);
   } else if (is_bind_or_unwind) {
     ResolveBindDead(enode, parent_key, visit);
   } else if (sym_op == symbol::Subquery && children.size() >= 2) {
     ResolveSubqueryChildren(enode, parent_key, visit);
   } else if (sym_op == symbol::Output && !children.empty()) {
-    ResolveOutputChildren(enode, parent_key, chosen_introduces, visit);
+    ResolveOutputChildren(enode, parent_key, chosen_introduces, egraph, visit);
   } else {
     if (IsScopeThreadingOp(sym_op)) {
       throw QueryException{
@@ -535,10 +605,10 @@ void ResolveChildren(planner::core::ENode<symbol> const &enode, ResolvedKey cons
 
 /// Context-aware resolver with PER-PATH caching.
 ///
-/// Each (eclass, provided) pair is resolved exactly once.  Different parent
+/// Each (eclass, in_scope, must_introduce) tuple is resolved exactly once.  Different parent
 /// paths that visit the same eclass under different scopes get distinct
 /// selections - each path picks the cheapest alternative feasible under
-/// its own provided set, so no path is forced to settle for a sub-optimal
+/// its own in_scope set, so no path is forced to settle for a sub-optimal
 /// alt that another path's smaller scope already chose.
 ///
 /// Output is a topological order (children-before-parents) of TopoEntries
@@ -566,8 +636,8 @@ struct PlanResolver {
           auto const fr_it = frontier_map.find(key.eclass);
           if (fr_it == frontier_map.end() || !fr_it->second.has_value())
             ThrowPlannerBug("eclass has no frontier during resolution.");
-          auto valid_alt = [&provided = key.provided, &demanded = key.demanded_introduces](Alternative const &alt) {
-            return alt.required.is_compatible(provided) && std::ranges::includes(alt.introduces, demanded);
+          auto valid_alt = [&in_scope = key.in_scope, &demanded = key.must_introduce](Alternative const &alt) {
+            return alt.required.is_compatible(in_scope) && std::ranges::includes(alt.introduces, demanded);
           };
           auto const *best = planner::core::extract::PickBest(fr_it->second->alts(), valid_alt);
           if (!best) ThrowPlannerBug("no compatible alternative at this node.");
@@ -577,7 +647,7 @@ struct PlanResolver {
           // here, then bulk-append to the shared CSR at emit time.  Direct
           // append-on-visit would interleave with grandchildren's appends.
           boost::container::small_vector<std::uint32_t, 4> scratch;
-          ResolveChildren(enode, key, chosen.is_alive, chosen.introduces, [&](ResolvedKey child_key) {
+          ResolveChildren(enode, key, chosen.is_alive, chosen.introduces, egraph, [&](ResolvedKey child_key) {
             scratch.push_back(visit_child(std::move(child_key)));
           });
           auto const begin = static_cast<std::uint32_t>(child_indices.size());
@@ -938,7 +1008,7 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   }
 
   // Resolve produces a children-before-parents topological order of
-  // (eclass, provided) pairs - one entry per distinct path-context the
+  // (eclass, in_scope, must_introduce) tuples - one entry per distinct path-context the
   // resolver visited, so each path can pick the alt that's optimal under
   // its own scope.
   PlanResolver{}(impl.egraph_,
@@ -955,7 +1025,7 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
                          impl.storage<symbol::Function>().info};
 
   // Dense build cache indexed by `build_order` position.  The resolver's
-  // `seen` map guarantees each (eclass, provided) is emitted exactly once,
+  // `seen` map guarantees each ResolvedKey is emitted exactly once,
   // so a flat vector suffices - no hashing, no rehash-invalidation hazards.
   // The vector is sized once and never resized, so refs into it are stable
   // for the duration of the loop.
@@ -992,7 +1062,7 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
 
   auto unique_result = result->Clone(&builder.ast_storage_);
   // Root alt: cheapest self-contained (the one the resolver would pick
-  // under provided={}).  Existence is guaranteed by the root_satisfiable
+  // under in_scope={}).  Existence is guaranteed by the root_satisfiable
   // precondition checked above.
   auto self_contained =
       root_frontier.alts() | std::views::filter([](Alternative const &a) { return a.required.empty(); });

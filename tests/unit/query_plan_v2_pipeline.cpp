@@ -1061,6 +1061,31 @@ INSTANTIATE_TEST_SUITE_P(
                                  "Produce {a`0:(((((1 + 1) + 1) + 1) + 1) + 1)}", "Once"},
             .min_rewrites = 0,
             .should_saturate = true,
+        },
+        // Regression: chained Bind where the inner Bind's expr references the
+        // outer Bind's sym.  Before the kind-dichotomy fix (see ADR 0009 +
+        // `src/query/plan_v2/CONTEXT.md`), BindFlatMap unioned `expr.required`
+        // into the outer Bind's `required` without absorbing it against
+        // `input.introduces`.  That made `a` appear as an unresolved demand
+        // at the outer Bind alt's root, and the resolver rejected the only
+        // valid plan.  Both Binds inline into a single Produce.
+        PipelineTestCase{
+            .name = "ChainedBindExprUsesPriorBindSym",
+            .query = "WITH 1 AS a WITH a+1 AS b RETURN b;",
+            .expected_details = {"Produce {b`0:(1 + 1)}", "Once"},
+            .min_rewrites = 0,
+            .should_saturate = true,
+        },
+        // Worked example from ADR 0009 / CONTEXT.md: deeper chain with a
+        // multi-symbol expression at one level and a NamedOutput in the
+        // RETURN.  Exercises Output's NamedOutput-sym injection into
+        // `introduces` (the `own_syms` rule).
+        PipelineTestCase{
+            .name = "ChainedBindMultiSymWithNamedOutput",
+            .query = "WITH 1 AS a WITH a+a AS b RETURN b+200 AS c;",
+            .expected_details = {"Produce {c`0:((1 + 1) + 200)}", "Once"},
+            .min_rewrites = 0,
+            .should_saturate = true,
         }
     ),
     TestCaseName
