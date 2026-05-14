@@ -904,10 +904,6 @@ struct QueryPlannerContext::Impl {
   /// resolver in entry-emit order, so each entry's children are contiguous.
   std::vector<std::uint32_t> child_indices;
   boost::unordered_flat_map<ResolvedKey, std::uint32_t, ResolvedKeyHash> resolver_seen;
-  /// User-provided estimator override.  null -> ConvertToLogicalOperator
-  /// builds a BuiltinEstimator over the current egraph for this call.
-  // TODO: why override? Can we not just have a canonacle CardinalityEstimator?
-  std::unique_ptr<CardinalityEstimator> estimator_override;
 
   void clear() {
     frontier_context.clear();
@@ -918,9 +914,6 @@ struct QueryPlannerContext::Impl {
 };
 
 QueryPlannerContext::QueryPlannerContext() : impl_(std::make_unique<Impl>()) {}
-
-QueryPlannerContext::QueryPlannerContext(std::unique_ptr<CardinalityEstimator> estimator)
-    : impl_(std::make_unique<Impl>(Impl{.estimator_override = std::move(estimator)})) {}
 
 QueryPlannerContext::~QueryPlannerContext() = default;
 QueryPlannerContext::QueryPlannerContext(QueryPlannerContext &&) noexcept = default;
@@ -941,14 +934,8 @@ auto ConvertToLogicalOperator(egraph const &e, eclass root, QueryPlannerContext 
   // Root-satisfiability precondition: ComputeFrontiers must have produced at
   // least one self-contained alternative for the root (required == {}).
   // We compute frontiers eagerly here so we can validate before resolve.
-  // Estimator: user-provided override takes precedence; otherwise build a
-  // BuiltinEstimator over the current egraph for this call.  BuiltinEstimator
-  // is per-call-stateful (binds to one egraph) so it can't be the long-lived
-  // QueryPlannerContext default.
-  // TODO: why do we need estimator_override? Can we just provide the Estimator we intend to use?
-  auto const builtin = BuiltinEstimator{e};
-  auto const *override_est = ctx.estimator_override.get();
-  CardinalityEstimator const &active_estimator = override_est ? *override_est : builtin;
+  // BuiltinEstimator binds to the per-call egraph and is constructed in-place.
+  auto const active_estimator = BuiltinEstimator{e};
 
   // Pre-pass: collect the set of Symbol e-classes referenced by some
   // Identifier e-node anywhere in the e-graph.  This is the demand signal

@@ -830,44 +830,6 @@ INSTANTIATE_TEST_SUITE_P(
 );
 // clang-format on
 
-// Recording mock estimator: records every call and returns a fixed value.
-struct RecordingMockEstimator final : CardinalityEstimator {
-  struct Call {
-    uint64_t function_id;
-    std::size_t arg_count;
-  };
-
-  mutable std::vector<Call> calls;
-  double return_value;
-
-  explicit RecordingMockEstimator(double v) : return_value(v) {}
-
-  auto Estimate(planner::core::ENode<symbol> const &enode, std::span<planner::core::EClassId const> arg_eclasses,
-                EGraph const & /*eg*/) const -> double override {
-    calls.push_back({.function_id = enode.disambiguator(), .arg_count = arg_eclasses.size()});
-    return return_value;
-  }
-};
-
-TEST_F(PlannerV2PipelineTest, FunctionCostCaseInvokesEstimator) {
-  // Inject a recording mock through QueryPlannerContext; plan a query
-  // containing a function call; verify the cost case reaches the mock with
-  // the expected (function_id, arg_count) shape.
-  auto recorder = std::make_unique<RecordingMockEstimator>(6.0);
-  auto *raw = recorder.get();
-  planner_context_ = QueryPlannerContext{std::move(recorder)};
-
-  auto plan = PlanQuery("RETURN range(0, 5) AS r;");
-  ASSERT_NE(plan, nullptr);
-
-  // Cost-model walks every Function e-node in the e-graph; with no rewrites
-  // there is exactly one (range(0, 5)), so the mock must have been called
-  // at least once with arity 2.  No upper bound: ComputeFrontiers may visit
-  // shared subtrees more than once, which is fine for the contract.
-  ASSERT_GE(raw->calls.size(), 1U);
-  EXPECT_EQ(raw->calls.front().arg_count, 2U);
-}
-
 TEST_F(PlannerV2PipelineTest, PickCompatibleDemandedIntroducesFiltersDeadBind) {
   // demanded_introduces as the sole discriminator in pick_compatible:
   // build a minimal egraph directly (no rewrites) so both the alive and dead

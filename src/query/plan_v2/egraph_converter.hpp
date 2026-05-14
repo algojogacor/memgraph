@@ -24,8 +24,6 @@ class LogicalOperator;
 
 namespace memgraph::query::plan::v2 {
 
-struct CardinalityEstimator;
-
 /// Result of a successful ConvertToLogicalOperator call.
 struct ExtractionResult {
   std::unique_ptr<LogicalOperator> plan;
@@ -45,21 +43,9 @@ struct ExtractionResult {
 /// the planner v2 stabilises.  Hold one per Interpreter and pass it to
 /// ConvertToLogicalOperator.  Pimpl so callers don't see CostFrontier /
 /// Alternative.
-///
-/// Optionally holds a user-provided CardinalityEstimator override.  Default
-/// construction leaves the override empty: ConvertToLogicalOperator builds
-/// a BuiltinEstimator over the current egraph for that call.  Tests inject
-/// a mock by passing one to the estimator-taking constructor; the override
-/// then takes precedence over the per-call BuiltinEstimator.
-///
-/// The override cannot be the production estimator at construction time
-/// because BuiltinEstimator binds to a specific egraph (it walks e-classes
-/// for literal deduction), and a single QueryPlannerContext is reused
-/// across queries that each have their own egraph.
 class QueryPlannerContext {
  public:
   QueryPlannerContext();
-  explicit QueryPlannerContext(std::unique_ptr<CardinalityEstimator> estimator);
   ~QueryPlannerContext();
   QueryPlannerContext(QueryPlannerContext &&) noexcept;
   QueryPlannerContext &operator=(QueryPlannerContext &&) noexcept;

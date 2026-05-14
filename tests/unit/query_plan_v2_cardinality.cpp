@@ -110,17 +110,6 @@ TEST(BuiltinEstimator, UnknownFunctionIdReturnsDefault) {
 // Unwind cost composition end-to-end
 // ============================================================================
 
-struct FixedEstimator final : CardinalityEstimator {
-  double value;
-
-  explicit FixedEstimator(double v) : value(v) {}
-
-  auto Estimate(planner::core::ENode<symbol> const &, std::span<planner::core::EClassId const>, EGraph const &) const
-      -> double override {
-    return value;
-  }
-};
-
 TEST(UnwindCostShape, ProducesUnwindOperator) {
   egraph eg;
   auto once = eg.MakeOnce();
@@ -135,8 +124,8 @@ TEST(UnwindCostShape, ProducesUnwindOperator) {
   auto named_output = eg.MakeNamedOutput("r", r_sym, one);
   auto root = eg.MakeOutputs(unwind, {named_output});
 
-  // TODO: this is fake the estimator should be real so we can actully get size from the list
-  auto ctx = QueryPlannerContext{std::make_unique<FixedEstimator>(6.0)};
+  // BuiltinEstimator computes range(0, 5) cardinality as 6 from the int-literal args.
+  auto ctx = QueryPlannerContext{};
   auto result = ConvertToLogicalOperator(eg, root, ctx);
 
   ASSERT_NE(result.plan, nullptr);
@@ -227,7 +216,7 @@ TEST(OutputCardinality, ScalarReturnIsOneRowEvenWhenValueIsList) {
   auto named_output = eg.MakeNamedOutput("r", r_sym, range);
   auto root = eg.MakeOutputs(once, {named_output});
 
-  auto ctx = QueryPlannerContext{std::make_unique<FixedEstimator>(6.0)};
+  auto ctx = QueryPlannerContext{};
   auto result = ConvertToLogicalOperator(eg, root, ctx);
 
   ASSERT_NE(result.plan, nullptr);
