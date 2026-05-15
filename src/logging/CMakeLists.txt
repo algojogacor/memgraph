@@ -1,0 +1,20 @@
+add_library(mg-logging STATIC)
+add_library(mg::logging ALIAS mg-logging)
+
+target_sources(mg-logging
+        PUBLIC
+        FILE_SET HEADERS
+        BASE_DIRS ..
+        FILES
+        log.hpp
+
+        PRIVATE
+        log.cpp
+)
+
+find_package(spdlog REQUIRED)
+find_package(fmt REQUIRED)
+
+target_link_libraries(mg-logging
+        PUBLIC spdlog::spdlog fmt::fmt
+        PRIVATE mg-utils)
