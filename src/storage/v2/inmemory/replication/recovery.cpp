@@ -12,6 +12,7 @@
 #include "storage/v2/inmemory/replication/recovery.hpp"
 #include <algorithm>
 #include <cstdint>
+#include "logging/log.hpp"
 #include "storage/v2/durability/durability.hpp"
 #include "storage/v2/inmemory/storage.hpp"
 #include "storage/v2/replication/recovery.hpp"
@@ -100,7 +101,7 @@ std::optional<std::vector<RecoveryStep>> GetRecoverySteps(uint64_t replica_commi
   auto const add_snapshot = [&]() -> bool {
     // Handle snapshot step
     if (const auto lock_success = locker_acc.AddPath(latest_snapshot->path); !lock_success.has_value()) {
-      spdlog::error("Tried to lock a non-existent snapshot path while obtaining recovery steps.");
+      memgraph::logging::Error("Tried to lock a non-existent snapshot path while obtaining recovery steps.");
       return false;
     }
     recovery_steps.emplace_back(std::in_place_type_t<RecoverySnapshot>{}, latest_snapshot->path);
@@ -120,7 +121,7 @@ std::optional<std::vector<RecoveryStep>> GetRecoverySteps(uint64_t replica_commi
 
       if (!latest_snapshot) {
         if (wal.seq_num != 0) {
-          spdlog::error("Replication steps incomplete; missing data. Wal seq num is: {}", wal.seq_num);
+          memgraph::logging::Error("Replication steps incomplete; missing data. Wal seq num is: {}", wal.seq_num);
           return std::nullopt;
         }
       } else {
@@ -233,7 +234,7 @@ auto GetRecoveryWalFiles(utils::FileRetainer::FileLockerAccessor *locker_acc,
   for (; std::cmp_less(first_useful_wal, num_wal_files); ++first_useful_wal) {
     auto const &wal = wal_files[first_useful_wal];
     if (const auto lock_success = locker_acc->AddPath(wal.path); !lock_success.has_value()) {
-      spdlog::error("Tried to lock a nonexistent WAL path.");
+      memgraph::logging::Error("Tried to lock a nonexistent WAL path.");
       return std::nullopt;
     }
     rw.emplace_back(wal.path);

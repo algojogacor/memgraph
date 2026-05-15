@@ -43,6 +43,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include "logging/log.hpp"
 
 #include "coordination/constants.hpp"
 #include "coordination/coordination_observer.hpp"
@@ -73,59 +74,59 @@ void LogRaftResultCode(nuraft::cmd_result_code const raft_code) {
   switch (raft_code) {
     using enum nuraft::cmd_result_code;
     case OK: {
-      spdlog::info("Result is OK");
+      memgraph::logging::Info("Result is OK");
       break;
     }
     case CANCELLED: {
-      spdlog::error("The request was cancelled");
+      memgraph::logging::Error("The request was cancelled");
       break;
     }
     case TIMEOUT: {
-      spdlog::error("The request timeouted");
+      memgraph::logging::Error("The request timeouted");
       break;
     }
     case NOT_LEADER: {
-      spdlog::error("Request failed because the coordinator isn't the leader anymore");
+      memgraph::logging::Error("Request failed because the coordinator isn't the leader anymore");
       break;
     }
     case BAD_REQUEST: {
-      spdlog::error("Bad request was sent");
+      memgraph::logging::Error("Bad request was sent");
       break;
     }
     case SERVER_ALREADY_EXISTS: {
-      spdlog::error("Request failed because server already exists");
+      memgraph::logging::Error("Request failed because server already exists");
       break;
     }
     case CONFIG_CHANGING: {
-      spdlog::error("Request failed because config is changing");
+      memgraph::logging::Error("Request failed because config is changing");
       break;
     }
     case SERVER_IS_JOINING: {
-      spdlog::error("Request failed because server is joining");
+      memgraph::logging::Error("Request failed because server is joining");
       break;
     }
     case SERVER_NOT_FOUND: {
-      spdlog::error("Request failed because server is not found");
+      memgraph::logging::Error("Request failed because server is not found");
       break;
     }
     case CANNOT_REMOVE_LEADER: {
-      spdlog::error("Request failed because the leader cannot be removed");
+      memgraph::logging::Error("Request failed because the leader cannot be removed");
       break;
     }
     case SERVER_IS_LEAVING: {
-      spdlog::error("Request failed because server is leaving");
+      memgraph::logging::Error("Request failed because server is leaving");
       break;
     }
     case TERM_MISMATCH: {
-      spdlog::error("Request failed because of a term mismatch");
+      memgraph::logging::Error("Request failed because of a term mismatch");
       break;
     }
     case RESULT_NOT_EXIST_YET: {
-      spdlog::error("Request failed because the result doesn't exist yet");
+      memgraph::logging::Error("Request failed because the result doesn't exist yet");
       break;
     }
     case FAILED: {
-      spdlog::error("Generic request failure");
+      memgraph::logging::Error("Generic request failure");
       break;
     }
     default: {
@@ -258,9 +259,9 @@ RaftState::RaftState(CoordinatorInstanceInitConfig const &config, BecomeLeaderCb
   }();  // iile
 
   auto const last_committed_index_state_machine_{state_machine_->last_commit_index()};
-  spdlog::trace("Last commited index from snapshot: {}, last commited index in state machine: {}",
-                last_commit_index_snapshot,
-                last_committed_index_state_machine_);
+  memgraph::logging::Trace("Last commited index from snapshot: {}, last commited index in state machine: {}",
+                           last_commit_index_snapshot,
+                           last_committed_index_state_machine_);
 
   auto log_store = state_manager_->load_log_store();
   if (!log_store) {
@@ -272,10 +273,10 @@ RaftState::RaftState(CoordinatorInstanceInitConfig const &config, BecomeLeaderCb
 
   for (auto const &[log_id, log] : log_entries) {
     if (log == nullptr) {
-      spdlog::error("Log entry for id {} is nullptr", log_id);
+      memgraph::logging::Error("Log entry for id {} is nullptr", log_id);
       continue;
     }
-    spdlog::trace("Applying log entry from log store with index {}", log_id);
+    memgraph::logging::Trace("Applying log entry from log store with index {}", log_id);
     if (log->get_val_type() == nuraft::log_val_type::conf) {
       auto cluster_config = state_manager_->load_config();
       state_machine_->commit_config(log_id, cluster_config);
@@ -322,12 +323,12 @@ auto RaftState::InitRaftServer() -> void {
   init_opts.start_server_in_constructor_ = false;
   init_opts.raft_callback_ = [this](cb_func::Type event_type, cb_func::Param *param) -> nuraft::CbReturnCode {
     if (event_type == cb_func::BecomeLeader) {
-      spdlog::info("Node {} became leader", param->leaderId);
+      memgraph::logging::Info("Node {} became leader", param->leaderId);
       become_leader_cb_();
     } else if (event_type == cb_func::BecomeFollower) {
-      spdlog::trace("Got request to become follower");
+      memgraph::logging::Trace("Got request to become follower");
       become_follower_cb_();
-      spdlog::trace("Node {} became follower", param->myId);
+      memgraph::logging::Trace("Node {} became follower", param->myId);
     }
     return CbReturnCode::Ok;
   };
@@ -355,16 +356,16 @@ auto RaftState::InitRaftServer() -> void {
     throw RaftServerStartException("Failed to allocate coordinator server on port {}", coordinator_port_);
   }
 
-  spdlog::trace("Raft server allocated on port {}", coordinator_port_);
+  memgraph::logging::Trace("Raft server allocated on port {}", coordinator_port_);
 
   // If set to true, server won't be created and exception will be thrown.
   // By setting it to false, all coordinators are started as leaders.
   bool constexpr skip_initial_election_timeout{false};
   raft_server_->start_server(skip_initial_election_timeout);
-  spdlog::trace("Raft server started on port {}", coordinator_port_);
+  memgraph::logging::Trace("Raft server started on port {}", coordinator_port_);
 
   asio_listener_->listen(raft_server_);
-  spdlog::trace("Asio listener active on port {}", coordinator_port_);
+  memgraph::logging::Trace("Asio listener active on port {}", coordinator_port_);
 
   // If we don't get initialized in 2min, we throw an exception and abort coordinator initialization.
   // When the follower gets back, it waits for the leader to ping it.
@@ -386,14 +387,14 @@ auto RaftState::InitRaftServer() -> void {
 }
 
 RaftState::~RaftState() {
-  spdlog::trace("Shutting down RaftState for coordinator_{}", coordinator_id_);
+  memgraph::logging::Trace("Shutting down RaftState for coordinator_{}", coordinator_id_);
   // Destruction order is critical:
   // 1. Shutdown raft_server first - it holds references to state_machine and state_manager
   //    and may be executing callbacks on its threads
   if (raft_server_) {
     raft_server_->shutdown();
     raft_server_.reset();
-    spdlog::trace("Raft server closed");
+    memgraph::logging::Trace("Raft server closed");
   }
 
   // 2. Stop and shutdown asio_listener - it's listening for network connections
@@ -401,7 +402,7 @@ RaftState::~RaftState() {
     asio_listener_->stop();
     asio_listener_->shutdown();
     asio_listener_.reset();
-    spdlog::trace("Asio listener closed");
+    memgraph::logging::Trace("Asio listener closed");
   }
 
   // 3. Stop asio_service and wait for workers to finish
@@ -413,10 +414,10 @@ RaftState::~RaftState() {
       count++;
     }
     if (asio_service_->get_active_workers() > 0) {
-      spdlog::warn("Failed to shutdown raft server correctly for coordinator_{} in 5s", coordinator_id_);
+      memgraph::logging::Warn("Failed to shutdown raft server correctly for coordinator_{} in 5s", coordinator_id_);
     }
     asio_service_.reset();
-    spdlog::trace("Asio service closed");
+    memgraph::logging::Trace("Asio service closed");
   }
 
   // 4. Reset state_machine and state_manager after raft_server is gone
@@ -427,7 +428,7 @@ RaftState::~RaftState() {
   // 5. Reset logger last - other components may have logged during their destruction
   logger_.reset();
 
-  spdlog::trace("RaftState destruction complete for coordinator_{}", coordinator_id_);
+  memgraph::logging::Trace("RaftState destruction complete for coordinator_{}", coordinator_id_);
 }
 
 auto RaftState::InstanceName() const -> std::string { return fmt::format("coordinator_{}", coordinator_id_); }
@@ -454,7 +455,7 @@ auto RaftState::RemoveCoordinatorInstance(int32_t coordinator_id) const -> Remov
     return RaftResultToRemoveStatus(cmd_result->get_result_code());
   }
 
-  spdlog::info("Request for removing coordinator {} from the cluster accepted", coordinator_id);
+  memgraph::logging::Info("Request for removing coordinator {} from the cluster accepted", coordinator_id);
   // Waiting for server to join
   constexpr int max_tries{10};
   auto maybe_stop = utils::ResettableCounter(max_tries);
@@ -463,14 +464,14 @@ auto RaftState::RemoveCoordinatorInstance(int32_t coordinator_id) const -> Remov
   while (!maybe_stop()) {
     std::this_thread::sleep_for(waiting_period);
     if (const auto server_config = raft_server_->get_srv_config(coordinator_id); !server_config) {
-      spdlog::info("Coordinator with id {} removed from the cluster", coordinator_id);
+      memgraph::logging::Info("Coordinator with id {} removed from the cluster", coordinator_id);
       removed = true;
       break;
     }
   }
 
   if (!removed) {
-    spdlog::error(
+    memgraph::logging::Error(
         "Failed to remove coordinator {} from the cluster in {}ms", coordinator_id, max_tries * waiting_period);
     return RemoveCoordinatorInstanceStatus::LOCAL_TIMEOUT;
   }
@@ -478,7 +479,7 @@ auto RaftState::RemoveCoordinatorInstance(int32_t coordinator_id) const -> Remov
 }
 
 auto RaftState::AddCoordinatorInstance(CoordinatorInstanceConfig const &config) const -> AddCoordinatorInstanceStatus {
-  spdlog::trace(
+  memgraph::logging::Trace(
       "Adding coordinator instance {} start in RaftState for coordinator_{}", config.coordinator_id, coordinator_id_);
 
   // If I am not adding myself, I need to use add_srv and rely on NuRaft...
@@ -496,7 +497,7 @@ auto RaftState::AddCoordinatorInstance(CoordinatorInstanceConfig const &config) 
     return RaftResultToAddStatus(cmd_result->get_result_code());
   }
 
-  spdlog::info("Request to add server {} to the cluster accepted", coordinator_server);
+  memgraph::logging::Info("Request to add server {} to the cluster accepted", coordinator_server);
 
   // Waiting for server to join
   constexpr int max_tries{10};
@@ -505,11 +506,12 @@ auto RaftState::AddCoordinatorInstance(CoordinatorInstanceConfig const &config) 
   while (!maybe_stop()) {
     std::this_thread::sleep_for(waiting_period);
     if (const auto server_config = raft_server_->get_srv_config(config.coordinator_id)) {
-      spdlog::trace("Server with id {} added to cluster", config.coordinator_id);
+      memgraph::logging::Trace("Server with id {} added to cluster", config.coordinator_id);
       return AddCoordinatorInstanceStatus::SUCCESS;
     }
   }
-  spdlog::error("Failed to add server {} to the cluster in {}ms", coordinator_server, max_tries * waiting_period);
+  memgraph::logging::Error(
+      "Failed to add server {} to the cluster in {}ms", coordinator_server, max_tries * waiting_period);
   return AddCoordinatorInstanceStatus::LOCAL_TIMEOUT;
 }
 
@@ -530,7 +532,7 @@ auto RaftState::GetLeaderCoordinatorData() const -> std::optional<LeaderCoordina
       coordinator_contexts,
       [leader_id](CoordinatorInstanceContext const &coordinator) { return coordinator.id == leader_id; });
   if (leader_data == coordinator_contexts.end()) {
-    spdlog::trace("Couldn't find data for the current leader.");
+    memgraph::logging::Trace("Couldn't find data for the current leader.");
     return {};
   }
   return LeaderCoordinatorData{.id = leader_id, .bolt_server = leader_data->bolt_server};
@@ -547,21 +549,21 @@ auto RaftState::AppendLogAndWaitForCommit(CoordinatorClusterStateDelta const &de
   auto const res = raft_server_->append_entries({new_log});
   if (!res->get_accepted()) {
     // Most probable reason is that the coordinator is not the leader
-    spdlog::error("Failed to accept request for updating cluster state.");
+    memgraph::logging::Error("Failed to accept request for updating cluster state.");
     return false;
   }
-  spdlog::trace("Request for updating cluster state accepted.");
+  memgraph::logging::Trace("Request for updating cluster state accepted.");
 
   // blocking operation
   // leader will step down if cannot rach a majority
   [[maybe_unused]] auto blocked = res->get();
 
   if (res->get_result_code() != nuraft::cmd_result_code::OK) {
-    spdlog::warn("Failed to update cluster state. Error code {}", static_cast<int>(res->get_result_code()));
+    memgraph::logging::Warn("Failed to update cluster state. Error code {}", static_cast<int>(res->get_result_code()));
     return false;
   }
 
-  spdlog::trace("Log is committed");
+  memgraph::logging::Trace("Log is committed");
 
   return true;
 }

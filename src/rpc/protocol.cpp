@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "rpc/protocol.hpp"
+#include "logging/log.hpp"
 
 #include <utility>
 
@@ -142,7 +143,7 @@ void RpcMessageDeliverer::Execute() {
       // Propagate UnsupportedRpcVersion Exception
       return LoadMessageHeader(&req_reader);
     } catch (const std::exception &e) {
-      spdlog::error("Error occurred while loading message header: {}", e.what());
+      memgraph::logging::Error("Error occurred while loading message header: {}", e.what());
       return std::nullopt;
     }
   });
@@ -161,7 +162,8 @@ void RpcMessageDeliverer::Execute() {
                            static_cast<uint64_t>(maybe_message_header->message_id));
   }
 
-  spdlog::trace("[RpcServer] received {}, version {}", it->second.req_type.name, maybe_message_header->message_version);
+  memgraph::logging::Trace(
+      "[RpcServer] received {}, version {}", it->second.req_type.name, maybe_message_header->message_version);
 
   // FileReplicationHandler is per-request object
   auto const on_exit = utils::OnScopeExit{[&] {
@@ -178,7 +180,7 @@ void RpcMessageDeliverer::Execute() {
   catch (const slk::SlkReaderLeftoverDataException &) {
     // Skip, it may fail because not all data has been read, that's fine.
   } catch (const std::exception &e) {
-    spdlog::error("Error occurred in the callback: {}", e.what());
+    memgraph::logging::Error("Error occurred in the callback: {}", e.what());
     throw SlkRpcFailedException();
   }
 }

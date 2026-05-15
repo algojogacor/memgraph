@@ -12,6 +12,7 @@
 #include <optional>
 #include <regex>
 #include <vector>
+#include "logging/log.hpp"
 
 #include "auth/exceptions.hpp"
 #include "auth/models.hpp"
@@ -498,20 +499,22 @@ class Auth final {
   bool HasAuthModulePrerequisites(const std::string &scheme) const {
     const auto license_check_result = license::global_license_checker.IsEnterpriseValid();
     if (!license_check_result) {
-      spdlog::warn(license::LicenseCheckErrorToString(license_check_result.error(), "authentication modules"));
+      memgraph::logging::Warn(
+          license::LicenseCheckErrorToString(license_check_result.error(), "authentication modules"));
       return false;
     }
 
     if (modules_.empty()) {
-      spdlog::warn(
+      memgraph::logging::Warn(
           utils::MessageWithLink("Couldn't authenticate via SSO without an external module.", "https://memgr.ph/sso"));
       return false;
     }
 
     if (!modules_.contains(scheme)) {
-      spdlog::warn(utils::MessageWithLink("Couldn't authenticate user: no module is specified for the {} auth scheme.",
-                                          scheme,
-                                          "https://memgr.ph/sso"));
+      memgraph::logging::Warn(
+          utils::MessageWithLink("Couldn't authenticate user: no module is specified for the {} auth scheme.",
+                                 scheme,
+                                 "https://memgr.ph/sso"));
       return false;
     }
 

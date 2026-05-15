@@ -13,6 +13,7 @@
 #include <spdlog/spdlog.h>
 #include <cstdint>
 #include <limits>
+#include "logging/log.hpp"
 
 #include "utils/flag_validation.hpp"
 
@@ -30,7 +31,7 @@ DEFINE_int32(coordinator_id, 0, "Unique ID of the raft server.");
 // NOLINTNEXTLINE
 DEFINE_VALIDATED_HIDDEN_uint32(
     instance_down_timeout_sec, 5, "Time duration after which an instance is considered down.", {
-      spdlog::warn(
+      memgraph::logging::Warn(
           "The instance_down_timeout_sec flag is deprecated and its value is ignored. Please set this setting by "
           "running \"SET COORDINATOR SETTING 'instance_down_timeout_sec' TO <YOUR-VALUE>\" query on any coordinator.");
       return true;
@@ -38,7 +39,7 @@ DEFINE_VALIDATED_HIDDEN_uint32(
 // NOLINTNEXTLINE
 DEFINE_VALIDATED_HIDDEN_uint32(
     instance_health_check_frequency_sec, 1, "The time duration between two health checks/pings.", {
-      spdlog::warn(
+      memgraph::logging::Warn(
           "The instance_health_check_frequency_sec is deprecated and its value is ignored. Please set this setting by "
           "running \"SET COORDINATOR SETTING 'instance_health_check_frequency_sec' TO <YOUR-VALUE>\" query on any "
           "coordinator.");

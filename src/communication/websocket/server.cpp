@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "communication/websocket/server.hpp"
+#include "logging/log.hpp"
 
 #include <spdlog/pattern_formatter.h>
 #include <spdlog/spdlog.h>
@@ -24,7 +25,7 @@ Server::~Server() {
 void Server::Start() {
   MG_ASSERT(!background_thread_, "The server was already started!");
   if (listener_->HasErrorHappened()) {
-    spdlog::error("We have error on websocket listener already! Aborting server start.");
+    memgraph::logging::Error("We have error on websocket listener already! Aborting server start.");
     return;
   }
   listener_->Run();
@@ -33,7 +34,7 @@ void Server::Start() {
 
 void Server::Shutdown() {
   if (ioc_.stopped()) {
-    spdlog::trace("Websocket is already stopped!");
+    memgraph::logging::Trace("Websocket is already stopped!");
     return;
   }
   ioc_.stop();

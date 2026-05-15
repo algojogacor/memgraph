@@ -14,6 +14,7 @@
 #pragma once
 
 #include "coordination/coordinator_instance_client.hpp"
+#include "logging/log.hpp"
 
 namespace memgraph::coordination {
 
@@ -28,7 +29,7 @@ class CoordinatorInstanceConnector {
       auto stream{client_.RpcClient().Stream<Rpc>(std::forward<Args>(args)...)};
       return stream.SendAndWait().arg_;
     } catch (std::exception const &e) {
-      spdlog::error("Failed to receive response to {}: {}", Rpc::Request::kType.name, e.what());
+      memgraph::logging::Error("Failed to receive response to {}: {}", Rpc::Request::kType.name, e.what());
       return ReturnType{};
     }
   }

@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "dbms/tenant_profiles.hpp"
+#include "logging/log.hpp"
 
 #ifdef MG_ENTERPRISE
 
@@ -98,7 +99,7 @@ std::optional<TenantProfiles::Profile> TenantProfiles::Get(std::string_view name
   try {
     return FromJson(nlohmann::json::parse(*stored), name);
   } catch (const nlohmann::json::parse_error &e) {
-    spdlog::warn("Failed to parse tenant profile '{}': {}", name, e.what());
+    memgraph::logging::Warn("Failed to parse tenant profile '{}': {}", name, e.what());
     return std::nullopt;
   }
 }
@@ -112,7 +113,7 @@ std::vector<TenantProfiles::Profile> TenantProfiles::GetAll() const {
     try {
       result.push_back(FromJson(nlohmann::json::parse(value), name));
     } catch (const nlohmann::json::parse_error &e) {
-      spdlog::warn("Failed to parse tenant profile '{}': {}", name, e.what());
+      memgraph::logging::Warn("Failed to parse tenant profile '{}': {}", name, e.what());
     }
   }
   return result;

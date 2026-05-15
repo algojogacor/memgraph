@@ -17,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "logging/log.hpp"
 
 #include "communication/bolt/metrics.hpp"
 #include "communication/bolt/v1/codes.hpp"
@@ -90,7 +91,7 @@ inline std::pair<std::string, std::string> ExceptionToErrorMessage(const std::ex
   // All exceptions used in memgraph are derived from BasicException. Since
   // we caught some other exception we don't know what is going on. Return
   // DatabaseError, log real message and return generic string.
-  spdlog::error(utils::MessageWithLink(
+  memgraph::logging::Error(utils::MessageWithLink(
       "Unknown exception occurred during query execution {}.", e.what(), "https://memgr.ph/unknown"));
   return {"Memgraph.DatabaseError.MemgraphError.MemgraphError",
           "An unknown exception occurred, this is unexpected. Real message "
@@ -111,7 +112,7 @@ State HandlePullDiscard(TSession &session, std::optional<int> n, std::optional<i
     }
 
     if (!session.encoder_.MessageSuccess(summary)) {
-      spdlog::trace("Couldn't send query summary!");
+      memgraph::logging::Trace("Couldn't send query summary!");
       return State::Close;
     }
 
@@ -130,15 +131,15 @@ template <bool is_pull, typename TSession>
 State HandlePullDiscardV1(TSession &session, const State state, const Marker marker) {
   const auto expected_marker = Marker::TinyStruct;
   if (marker != expected_marker) {
-    spdlog::trace("Expected TinyStruct marker, but received 0x{:02X}!", std::to_underlying(marker));
+    memgraph::logging::Trace("Expected TinyStruct marker, but received 0x{:02X}!", std::to_underlying(marker));
     return State::Close;
   }
 
   if (state != State::Result) {
     if constexpr (is_pull) {
-      spdlog::trace("Unexpected PULL!");
+      memgraph::logging::Trace("Unexpected PULL!");
     } else {
-      spdlog::trace("Unexpected DISCARD!");
+      memgraph::logging::Trace("Unexpected DISCARD!");
     }
     // Same as `unexpected RUN` case.
     return State::Close;
@@ -151,15 +152,15 @@ template <bool is_pull, typename TSession>
 State HandlePullDiscardV4(TSession &session, const State state, const Marker marker) {
   const auto expected_marker = Marker::TinyStruct1;
   if (marker != expected_marker) {
-    spdlog::trace("Expected TinyStruct1 marker, but received 0x{:02X}!", std::to_underlying(marker));
+    memgraph::logging::Trace("Expected TinyStruct1 marker, but received 0x{:02X}!", std::to_underlying(marker));
     return State::Close;
   }
 
   if (state != State::Result) {
     if constexpr (is_pull) {
-      spdlog::trace("Unexpected PULL!");
+      memgraph::logging::Trace("Unexpected PULL!");
     } else {
-      spdlog::trace("Unexpected DISCARD!");
+      memgraph::logging::Trace("Unexpected DISCARD!");
     }
     // Same as `unexpected RUN` case.
     return State::Close;
@@ -168,7 +169,7 @@ State HandlePullDiscardV4(TSession &session, const State state, const Marker mar
   std::optional<int> qid;
   Value extra;
   if (!session.decoder_.ReadValue(&extra, Value::Type::Map)) {
-    spdlog::trace("Couldn't read extra field!");
+    memgraph::logging::Trace("Couldn't read extra field!");
   }
   const auto &extra_map = extra.ValueMap();
   auto n_it = extra_map.find("n");
@@ -190,16 +191,16 @@ State HandlePullDiscardV4(TSession &session, const State state, const Marker mar
 
 template <typename TSession>
 inline State HandleFailure(TSession &session, const std::exception &e) {
-  spdlog::trace("Error message: {}", e.what());
+  memgraph::logging::Trace("Error message: {}", e.what());
   if (const auto *p = dynamic_cast<const utils::StacktraceException *>(&e)) {
-    spdlog::trace("Error trace: {}", p->trace());
+    memgraph::logging::Trace("Error trace: {}", p->trace());
   }
   session.encoder_buffer_.Clear();
 
   auto code_message = ExceptionToErrorMessage(e);
   bool fail_sent = session.encoder_.MessageFailure({{"code", code_message.first}, {"message", code_message.second}});
   if (!fail_sent) {
-    spdlog::trace("Couldn't send failure message!");
+    memgraph::logging::Trace("Couldn't send failure message!");
     return State::Close;
   }
   return State::Error;
@@ -224,7 +225,7 @@ State HandlePrepare(TSession &session) {
 
     // Send the header.
     if (!session.encoder_.MessageSuccess(data)) {
-      spdlog::trace("Couldn't send query header!");
+      memgraph::logging::Trace("Couldn't send query header!");
       return State::Close;
     }
     return State::Result;
@@ -237,20 +238,20 @@ template <typename TSession>
 State HandleRunV1(TSession &session, const State state, const Marker marker) {
   const auto expected_marker = Marker::TinyStruct2;
   if (marker != expected_marker) {
-    spdlog::trace("Expected {} marker, but received 0x{:02X}!",
-                  session.version_.major == 1 ? "TinyStruct2" : "TinyStruct3",
-                  std::to_underlying(marker));
+    memgraph::logging::Trace("Expected {} marker, but received 0x{:02X}!",
+                             session.version_.major == 1 ? "TinyStruct2" : "TinyStruct3",
+                             std::to_underlying(marker));
     return State::Close;
   }
   Value query;
   Value params;
   if (!session.decoder_.ReadValue(&query, Value::Type::String)) {
-    spdlog::trace("Couldn't read query string!");
+    memgraph::logging::Trace("Couldn't read query string!");
     return State::Close;
   }
 
   if (!session.decoder_.ReadValue(&params, Value::Type::Map)) {
-    spdlog::trace("Couldn't read parameters!");
+    memgraph::logging::Trace("Couldn't read parameters!");
     return State::Close;
   }
 
@@ -258,7 +259,7 @@ State HandleRunV1(TSession &session, const State state, const Marker marker) {
     // Client could potentially recover if we move to error state, but there is
     // no legitimate situation in which well working client would end up in this
     // situation.
-    spdlog::trace("Unexpected RUN command!");
+    memgraph::logging::Trace("Unexpected RUN command!");
     return State::Close;
   }
 
@@ -284,25 +285,25 @@ template <typename TSession>
 State HandleRunV4(TSession &session, const State state, const Marker marker) {
   const auto expected_marker = Marker::TinyStruct3;
   if (marker != expected_marker) {
-    spdlog::trace("Expected TinyStruct3 marker, but received 0x{:02X}!", std::to_underlying(marker));
+    memgraph::logging::Trace("Expected TinyStruct3 marker, but received 0x{:02X}!", std::to_underlying(marker));
     return State::Close;
   }
   Value query;
   Value params;
   Value extra;
   if (!session.decoder_.ReadValue(&query, Value::Type::String)) {
-    spdlog::trace("Couldn't read query string!");
+    memgraph::logging::Trace("Couldn't read query string!");
     return State::Close;
   }
 
   if (!session.decoder_.ReadValue(&params, Value::Type::Map)) {
-    spdlog::trace("Couldn't read parameters!");
+    memgraph::logging::Trace("Couldn't read parameters!");
     return State::Close;
   }
 
   // Even though this part seems unnecessary it is needed to move the buffer
   if (!session.decoder_.ReadValue(&extra, Value::Type::Map)) {
-    spdlog::trace("Couldn't read extra field!");
+    memgraph::logging::Trace("Couldn't read extra field!");
     return State::Close;
   }
 
@@ -310,7 +311,7 @@ State HandleRunV4(TSession &session, const State state, const Marker marker) {
     // Client could potentially recover if we move to error state, but there is
     // no legitimate situation in which well working client would end up in this
     // situation.
-    spdlog::trace("Unexpected RUN command!");
+    memgraph::logging::Trace("Unexpected RUN command!");
     return State::Close;
   }
 
@@ -362,19 +363,19 @@ State HandlePullV5(TSession &session, const State state, const Marker marker) {
 
 template <typename TSession>
 State HandleDiscardV1(TSession &session, const State state, const Marker marker) {
-  spdlog::trace("Received DISCARD message");
+  memgraph::logging::Trace("Received DISCARD message");
   return details::HandlePullDiscardV1<false>(session, state, marker);
 }
 
 template <typename TSession>
 State HandleDiscardV4(TSession &session, const State state, const Marker marker) {
-  spdlog::trace("Received DISCARD message");
+  memgraph::logging::Trace("Received DISCARD message");
   return details::HandlePullDiscardV4<false>(session, state, marker);
 }
 
 template <typename TSession>
 State HandleDiscardV5(TSession &session, const State state, const Marker marker) {
-  spdlog::trace("Received DISCARD message");
+  memgraph::logging::Trace("Received DISCARD message");
   // Using V4 on purpose
   return HandleDiscardV4<TSession>(session, state, marker);
 }
@@ -390,19 +391,19 @@ State HandleReset(TSession &session, const Marker marker) {
   // so we cannot simply "kill" a transaction while it is running. So
   // now this command only resets the session to a clean state. It
   // does not IGNORE running and pending commands as it should.
-  spdlog::trace("Received RESET message");
+  memgraph::logging::Trace("Received RESET message");
   if (marker != Marker::TinyStruct) {
-    spdlog::trace("Expected TinyStruct marker, but received 0x{:02X}!", std::to_underlying(marker));
+    memgraph::logging::Trace("Expected TinyStruct marker, but received 0x{:02X}!", std::to_underlying(marker));
     return State::Close;
   }
 
   try {
     session.Abort();
     if (!session.encoder_.MessageSuccess({})) {
-      spdlog::trace("Couldn't send success message!");
+      memgraph::logging::Trace("Couldn't send success message!");
       return State::Close;
     }
-    spdlog::trace("Session reset!");
+    memgraph::logging::Trace("Session reset!");
     return State::Idle;
   } catch (const std::exception &e) {
     return HandleFailure(session, e);
@@ -411,20 +412,20 @@ State HandleReset(TSession &session, const Marker marker) {
 
 template <typename TSession>
 State HandleBegin(TSession &session, const State state, const Marker marker) {
-  spdlog::trace("Received BEGIN message");
+  memgraph::logging::Trace("Received BEGIN message");
   if (marker != Marker::TinyStruct1) {
-    spdlog::trace("Expected TinyStruct1 marker, but received 0x{:02x}!", std::to_underlying(marker));
+    memgraph::logging::Trace("Expected TinyStruct1 marker, but received 0x{:02x}!", std::to_underlying(marker));
     return State::Close;
   }
 
   Value extra;
   if (!session.decoder_.ReadValue(&extra, Value::Type::Map)) {
-    spdlog::trace("Couldn't read extra fields!");
+    memgraph::logging::Trace("Couldn't read extra fields!");
     return State::Close;
   }
 
   if (state != State::Idle) {
-    spdlog::trace("Unexpected BEGIN command!");
+    memgraph::logging::Trace("Unexpected BEGIN command!");
     return State::Close;
   }
 
@@ -434,7 +435,7 @@ State HandleBegin(TSession &session, const State state, const Marker marker) {
     session.Configure(extra.ValueMap());
     session.BeginTransaction(extra.ValueMap());
     if (!session.encoder_.MessageSuccess({})) {
-      spdlog::trace("Couldn't send success message!");
+      memgraph::logging::Trace("Couldn't send success message!");
       return State::Close;
     }
     return State::Idle;
@@ -445,14 +446,14 @@ State HandleBegin(TSession &session, const State state, const Marker marker) {
 
 template <typename TSession>
 State HandleCommit(TSession &session, const State state, const Marker marker) {
-  spdlog::trace("Received COMMIT message");
+  memgraph::logging::Trace("Received COMMIT message");
   if (marker != Marker::TinyStruct) {
-    spdlog::trace("Expected TinyStruct marker, but received 0x{:02x}!", std::to_underlying(marker));
+    memgraph::logging::Trace("Expected TinyStruct marker, but received 0x{:02x}!", std::to_underlying(marker));
     return State::Close;
   }
 
   if (state != State::Idle) {
-    spdlog::trace("Unexpected COMMIT command!");
+    memgraph::logging::Trace("Unexpected COMMIT command!");
     return State::Close;
   }
 
@@ -461,7 +462,7 @@ State HandleCommit(TSession &session, const State state, const Marker marker) {
   try {
     session.CommitTransaction();
     if (!session.encoder_.MessageSuccess({})) {
-      spdlog::trace("Couldn't send success message!");
+      memgraph::logging::Trace("Couldn't send success message!");
       return State::Close;
     }
     return State::Idle;
@@ -473,12 +474,12 @@ State HandleCommit(TSession &session, const State state, const Marker marker) {
 template <typename TSession>
 State HandleRollback(TSession &session, const State state, const Marker marker) {
   if (marker != Marker::TinyStruct) {
-    spdlog::trace("Expected TinyStruct marker, but received 0x{:02x}!", std::to_underlying(marker));
+    memgraph::logging::Trace("Expected TinyStruct marker, but received 0x{:02x}!", std::to_underlying(marker));
     return State::Close;
   }
 
   if (state != State::Idle) {
-    spdlog::trace("Unexpected ROLLBACK command!");
+    memgraph::logging::Trace("Unexpected ROLLBACK command!");
     return State::Close;
   }
 
@@ -487,7 +488,7 @@ State HandleRollback(TSession &session, const State state, const Marker marker) 
   try {
     session.RollbackTransaction();
     if (!session.encoder_.MessageSuccess({})) {
-      spdlog::trace("Couldn't send success message!");
+      memgraph::logging::Trace("Couldn't send success message!");
       return State::Close;
     }
     return State::Idle;
@@ -498,7 +499,7 @@ State HandleRollback(TSession &session, const State state, const Marker marker) 
 
 template <typename TSession>
 State HandleNoop(const State state) {
-  spdlog::trace("Received NOOP message");
+  memgraph::logging::Trace("Received NOOP message");
   return state;
 }
 
@@ -512,13 +513,13 @@ auto ReadDB(TSession &session) -> std::optional<std::string> {
   if constexpr (bolt_major == 5) {
     Value extra;
     if (!session.decoder_.ReadValue(&extra, Value::Type::Map)) {
-      spdlog::trace("Couldn't read extra field!");
+      memgraph::logging::Trace("Couldn't read extra field!");
       return std::nullopt;
     }
     auto const extra_map = extra.ValueMap();
     auto const db_it = extra_map.find("db");
     if (db_it == extra_map.end() || !db_it->second.IsString()) {
-      spdlog::trace("Couldn't read db field inside extra!");
+      memgraph::logging::Trace("Couldn't read db field inside extra!");
       return std::nullopt;
     }
     return db_it->second.ValueString();
@@ -526,7 +527,7 @@ auto ReadDB(TSession &session) -> std::optional<std::string> {
   if constexpr (bolt_major == 4 && bolt_minor == 3) {
     Value val_db;
     if (!session.decoder_.ReadValue(&val_db, Value::Type::String)) {
-      spdlog::trace("Couldn't read db field!");
+      memgraph::logging::Trace("Couldn't read db field!");
       return std::nullopt;
     }
     return val_db.ValueString();
@@ -536,20 +537,20 @@ auto ReadDB(TSession &session) -> std::optional<std::string> {
 
 template <typename TSession, int bolt_major, int bolt_minor = 0>
 State HandleRoute(TSession &session, const Marker marker) {
-  spdlog::trace("Received ROUTE message");
+  memgraph::logging::Trace("Received ROUTE message");
   if (marker != Marker::TinyStruct3) {
-    spdlog::trace("Expected TinyStruct3 marker, but received 0x{:02x}!", std::to_underlying(marker));
+    memgraph::logging::Trace("Expected TinyStruct3 marker, but received 0x{:02x}!", std::to_underlying(marker));
     return State::Close;
   }
   Value routing;
   if (!session.decoder_.ReadValue(&routing, Value::Type::Map)) {
-    spdlog::trace("Couldn't read routing field!");
+    memgraph::logging::Trace("Couldn't read routing field!");
     return State::Close;
   }
 
   Value bookmarks;
   if (!session.decoder_.ReadValue(&bookmarks, Value::Type::List)) {
-    spdlog::trace("Couldn't read bookmarks field!");
+    memgraph::logging::Trace("Couldn't read bookmarks field!");
     return State::Close;
   }
 
@@ -559,7 +560,7 @@ State HandleRoute(TSession &session, const Marker marker) {
   try {
     if (auto res = session.Route(routing.ValueMap(), bookmarks.ValueList(), db, {});
         !session.encoder_.MessageSuccess(std::move(res))) {
-      spdlog::trace("Couldn't send result of routing!");
+      memgraph::logging::Trace("Couldn't send result of routing!");
       return State::Close;
     }
     return State::Idle;
@@ -572,7 +573,7 @@ State HandleRoute(TSession &session, const Marker marker) {
   bool fail_sent =
       session.encoder_.MessageFailure({{"code", "66"}, {"message", "Route message is not supported in Memgraph!"}});
   if (!fail_sent) {
-    spdlog::trace("Couldn't send failure message!");
+    memgraph::logging::Trace("Couldn't send failure message!");
     return State::Close;
   }
   return State::Error;

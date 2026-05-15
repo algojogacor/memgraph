@@ -24,6 +24,7 @@
 #include <compare>
 #include <cstring>
 #include <string>
+#include "logging/log.hpp"
 
 #include "io/network/addrinfo.hpp"
 #include "io/network/endpoint.hpp"
@@ -78,13 +79,13 @@ bool Socket::IsOpen() const { return socket_ != -1; }
 void Socket::Close(int const sfd, std::string_view socket_addr) {
   if (close(sfd) != 0) {
     int const err_sc = errno;
-    spdlog::error("Failed to close fd for {}. Errno: {}", socket_addr, std::strerror(err_sc));
+    memgraph::logging::Error("Failed to close fd for {}. Errno: {}", socket_addr, std::strerror(err_sc));
   }
 }
 
 bool Socket::Connect(const Endpoint &endpoint) {
   if (socket_ != -1) {
-    spdlog::trace("Socket::Connect failed, socket_ not ready!");
+    memgraph::logging::Trace("Socket::Connect failed, socket_ not ready!");
     return false;
   }
 
@@ -96,19 +97,19 @@ bool Socket::Connect(const Endpoint &endpoint) {
 
       int const sfd = socket(it.ai_family, it.ai_socktype, it.ai_protocol);
       if (sfd == -1) {
-        spdlog::trace("Socket creation failed while connecting to {}. File descriptor is -1", socket_addr);
+        memgraph::logging::Trace("Socket creation failed while connecting to {}. File descriptor is -1", socket_addr);
         continue;
       }
 
       const int sockfd_flags_orig = fcntl(sfd, F_GETFL, 0);
       if (sockfd_flags_orig < 0) {
-        spdlog::error("Failed to read file status and file access mode during connect");
+        memgraph::logging::Error("Failed to read file status and file access mode during connect");
         Close(sfd, socket_addr);
         continue;
       }
 
       if (fcntl(sfd, F_SETFL, sockfd_flags_orig | O_NONBLOCK) < 0) {
-        spdlog::error("Failed to set socket to non-blocking mode during connect.");
+        memgraph::logging::Error("Failed to set socket to non-blocking mode during connect.");
         Close(sfd, socket_addr);
         continue;
       }
@@ -121,7 +122,7 @@ bool Socket::Connect(const Endpoint &endpoint) {
 
         // Failure which we don't handle
         if (errno != EINPROGRESS && errno != EWOULDBLOCK) {
-          spdlog::error("Failed to connect to socket with err code {}", errno);
+          memgraph::logging::Error("Failed to connect to socket with err code {}", errno);
           return false;
         }
 
@@ -177,7 +178,7 @@ bool Socket::Connect(const Endpoint &endpoint) {
       }
 
       if (fcntl(sfd, F_SETFL, sockfd_flags_orig) < 0) {
-        spdlog::error("Failed to set socket to blocking mode during connect");
+        memgraph::logging::Error("Failed to set socket to blocking mode during connect");
         Close(sfd, socket_addr);
         continue;
       }
@@ -188,7 +189,7 @@ bool Socket::Connect(const Endpoint &endpoint) {
       break;
     }
   } catch (const NetworkError &e) {
-    spdlog::trace("Error occurred while connecting to {}. Error: {}", endpoint.SocketAddress(), e.what());
+    memgraph::logging::Trace("Error occurred while connecting to {}. Error: {}", endpoint.SocketAddress(), e.what());
     return false;
   }
 
@@ -197,7 +198,7 @@ bool Socket::Connect(const Endpoint &endpoint) {
 
 bool Socket::Bind(const Endpoint &endpoint) {
   if (socket_ != -1) {
-    spdlog::trace("Socket::Bind failed, socket_ not ready!");
+    memgraph::logging::Trace("Socket::Bind failed, socket_ not ready!");
     return false;
   }
 
@@ -207,19 +208,19 @@ bool Socket::Bind(const Endpoint &endpoint) {
     for (const auto &it : AddrInfo{endpoint}) {
       int sfd = socket(it.ai_family, it.ai_socktype, it.ai_protocol);
       if (sfd == -1) {
-        spdlog::trace("Socket creation failed in Socket::Bind for socket address {}. File descriptor is -1",
-                      endpoint.SocketAddress());
+        memgraph::logging::Trace("Socket creation failed in Socket::Bind for socket address {}. File descriptor is -1",
+                                 endpoint.SocketAddress());
         continue;
       }
 
       int on = 1;
       if (setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
-        spdlog::trace("setsockopt in Socket::Bind failed for socket address {}", socket_addr);
+        memgraph::logging::Trace("setsockopt in Socket::Bind failed for socket address {}", socket_addr);
         // If the setsockopt failed close the file descriptor to prevent file
         // descriptors being leaked
         if (close(sfd) != 0) {
           int const err_sc = errno;
-          spdlog::error(
+          memgraph::logging::Error(
               "Failed to close fd for {}. Closing started because 'setsockopt' failed while binding. Errno: {}",
               socket_addr,
               std::strerror(err_sc));
@@ -233,19 +234,22 @@ bool Socket::Bind(const Endpoint &endpoint) {
       }
       // If the bind failed close the file descriptor to prevent file
       // descriptors being leaked
-      spdlog::trace("Socket::Bind failed. Closing file descriptor for socket address {}", endpoint.SocketAddress());
+      memgraph::logging::Trace("Socket::Bind failed. Closing file descriptor for socket address {}",
+                               endpoint.SocketAddress());
       if (close(sfd) != 0) {
         int const err_sc = errno;
-        spdlog::error("Failed to close fd for {} while trying to bind. Errno: {}", socket_addr, std::strerror(err_sc));
+        memgraph::logging::Error(
+            "Failed to close fd for {} while trying to bind. Errno: {}", socket_addr, std::strerror(err_sc));
       }
     }
   } catch (NetworkError const &e) {
-    spdlog::trace("Error happened while trying to bind to {}. Error: {}", endpoint.SocketAddress(), e.what());
+    memgraph::logging::Trace(
+        "Error happened while trying to bind to {}. Error: {}", endpoint.SocketAddress(), e.what());
     return false;
   }
 
   if (socket_ == -1) {
-    spdlog::trace("Socket::Bind failed. socket_ is -1 for socket address {}", endpoint.SocketAddress());
+    memgraph::logging::Trace("Socket::Bind failed. socket_ is -1 for socket address {}", endpoint.SocketAddress());
     return false;
   }
 
@@ -257,13 +261,13 @@ bool Socket::Bind(const Endpoint &endpoint) {
     // descriptors being leaked
     if (close(socket_) != 0) {
       int const err_sc = errno;
-      spdlog::error("Failed to close fd for {}. Closing started because 'getsockname' failed. Errno: {}",
-                    socket_addr,
-                    std::strerror(err_sc));
+      memgraph::logging::Error("Failed to close fd for {}. Closing started because 'getsockname' failed. Errno: {}",
+                               socket_addr,
+                               std::strerror(err_sc));
     }
     socket_ = -1;
-    spdlog::trace("Socket::Bind failed. getsockname failed, closing file descriptor for socket address {}",
-                  endpoint.SocketAddress());
+    memgraph::logging::Trace("Socket::Bind failed. getsockname failed, closing file descriptor for socket address {}",
+                             endpoint.SocketAddress());
     return false;
   }
 
@@ -377,10 +381,10 @@ auto Socket::Write(const uint8_t *data, size_t len, bool have_more, std::optiona
     if (written == -1) {
       if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
         if (errno == ETIMEDOUT) {
-          spdlog::warn("TCP_USER_TIMEOUT triggered on socket write (fd={}): unacknowledged data exceeded timeout",
-                       socket_);
+          memgraph::logging::Warn(
+              "TCP_USER_TIMEOUT triggered on socket write (fd={}): unacknowledged data exceeded timeout", socket_);
         } else {
-          spdlog::warn("Socket write error (fd={}, errno={}): {}", socket_, errno, strerror(errno));
+          memgraph::logging::Warn("Socket write error (fd={}, errno={}): {}", socket_, errno, strerror(errno));
         }
         return std::unexpected{ClientCommunicationError::GENERIC_ERROR};
       }
@@ -424,11 +428,11 @@ bool Socket::WaitForReadyRead(std::optional<int> timeout_ms) const {
   int const timeout = timeout_ms ? *timeout_ms : -1;
   int const ret = poll(&p, 1, timeout);
   if (ret == -1) {
-    spdlog::error("Error occurred while polling for file descriptors.");
+    memgraph::logging::Error("Error occurred while polling for file descriptors.");
     return false;
   }
   if (ret == 0) {
-    spdlog::error("Waiting too long to get in ready state for reading. Timeout occurred.");
+    memgraph::logging::Error("Waiting too long to get in ready state for reading. Timeout occurred.");
     return false;
   }
 
@@ -448,11 +452,11 @@ bool Socket::WaitForReadyWrite(std::optional<int> timeout_ms) const {
   int const timeout = timeout_ms ? *timeout_ms : -1;
   int const ret = poll(&p, 1, timeout);
   if (ret == -1) {
-    spdlog::error("Error occurred while polling for file descriptors.");
+    memgraph::logging::Error("Error occurred while polling for file descriptors.");
     return false;
   }
   if (ret == 0) {
-    spdlog::error("Waiting too long to get in ready state for writing. Timeout occurred.");
+    memgraph::logging::Error("Waiting too long to get in ready state for writing. Timeout occurred.");
     return false;
   }
   constexpr unsigned pollout = POLLOUT;

@@ -7,6 +7,7 @@
 //
 
 #include "auth/models.hpp"
+#include "logging/log.hpp"
 
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -752,7 +753,7 @@ Role Role::Deserialize(const nlohmann::json &data) {
   if (db_access_it != data.end() && db_access_it->is_structured()) {
     db_access = Databases::Deserialize(*db_access_it);
   } else {
-    spdlog::warn("Role without specified database access. Given access to the default database.");
+    memgraph::logging::Warn("Role without specified database access. Given access to the default database.");
   }
 
   FineGrainedAccessHandler fine_grained_access_handler{};
@@ -761,7 +762,7 @@ Role Role::Deserialize(const nlohmann::json &data) {
   if (fine_grainged_access_it != data.end() && fine_grainged_access_it->is_object()) {
     fine_grained_access_handler = FineGrainedAccessHandler::Deserialize(*fine_grainged_access_it);
   } else {
-    spdlog::warn("Role without fine grained access. Defaulting to none.");
+    memgraph::logging::Warn("Role without fine grained access. Defaulting to none.");
   }
 
   std::optional<UserImpersonation> usr_imp = std::nullopt;
@@ -769,7 +770,7 @@ Role Role::Deserialize(const nlohmann::json &data) {
   if (imp_data != data.end()) {
     usr_imp = imp_data->get<std::optional<UserImpersonation>>();
   } else {
-    spdlog::warn("Role without impersonation information; defaulting to no impersonation ability.");
+    memgraph::logging::Warn("Role without impersonation information; defaulting to no impersonation ability.");
   }
   auto role = Role{
       *role_name_it, permissions, std::move(fine_grained_access_handler), std::move(db_access), std::move(usr_imp)};
@@ -1178,7 +1179,7 @@ User User::Deserialize(const nlohmann::json &data) {
   if (db_access_it != data.end() && db_access_it->is_structured()) {
     db_access = Databases::Deserialize(*db_access_it);
   } else {
-    spdlog::warn("User without specified database access. Given access to the default database.");
+    memgraph::logging::Warn("User without specified database access. Given access to the default database.");
   }
 
   // We can have an empty fine_grained if the user was created without a valid license
@@ -1187,7 +1188,7 @@ User User::Deserialize(const nlohmann::json &data) {
   if (fine_grainged_access_it != data.end() && fine_grainged_access_it->is_object()) {
     fine_grained_access_handler = FineGrainedAccessHandler::Deserialize(*fine_grainged_access_it);
   } else {
-    spdlog::warn("User without fine grained access. Defaulting to none.");
+    memgraph::logging::Warn("User without fine grained access. Defaulting to none.");
   }
 
   std::optional<UserImpersonation> usr_imp = std::nullopt;
@@ -1195,7 +1196,7 @@ User User::Deserialize(const nlohmann::json &data) {
   if (imp_data != data.end()) {
     usr_imp = imp_data->get<std::optional<UserImpersonation>>();
   } else {
-    spdlog::warn("User without impersonation information; defaulting to no impersonation ability.");
+    memgraph::logging::Warn("User without impersonation information; defaulting to no impersonation ability.");
   }
 
   return {*username_it,

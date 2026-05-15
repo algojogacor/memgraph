@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "communication/bolt/client.hpp"
+#include "logging/log.hpp"
 
 #include <array>
 
@@ -36,29 +37,29 @@ void Client::Connect(const io::network::Endpoint &endpoint, const std::string &u
   }
 
   if (!client_.Write(kPreamble, true)) {
-    spdlog::error("Couldn't send preamble!");
+    memgraph::logging::Error("Couldn't send preamble!");
     throw ServerCommunicationException();
   }
 
   if (!client_.Write(kBoltV43Version, true)) {
-    spdlog::error("Couldn't send protocol version!");
+    memgraph::logging::Error("Couldn't send protocol version!");
     throw ServerCommunicationException();
   }
 
   for (int i = 0; i < 3; ++i) {
     if (!client_.Write(kEmptyBoltVersion, i != 2)) {
-      spdlog::error("Couldn't send protocol version!");
+      memgraph::logging::Error("Couldn't send protocol version!");
       throw ServerCommunicationException();
     }
   }
 
   if (!client_.Read(kBoltV43Version.size())) {
-    spdlog::error("Couldn't get negotiated protocol version!");
+    memgraph::logging::Error("Couldn't get negotiated protocol version!");
     throw ServerCommunicationException();
   }
 
   if (memcmp(kBoltV43Version.data(), client_.GetData(), kBoltV43Version.size()) != 0) {
-    spdlog::error("Server negotiated unsupported protocol version!");
+    memgraph::logging::Error("Server negotiated unsupported protocol version!");
     throw ClientFatalException("The server negotiated an usupported protocol version!");
   }
   client_.ShiftData(kBoltV43Version.size());
@@ -68,22 +69,22 @@ void Client::Connect(const io::network::Endpoint &endpoint, const std::string &u
                              {"principal", username},
                              {"credentials", password},
                              {"routing", {}}})) {
-    spdlog::error("Couldn't send init message!");
+    memgraph::logging::Error("Couldn't send init message!");
     throw ServerCommunicationException();
   }
 
   Signature signature{};
   Value metadata;
   if (!ReadMessage(signature, metadata)) {
-    spdlog::error("Couldn't read init message response!");
+    memgraph::logging::Error("Couldn't read init message response!");
     throw ServerCommunicationException();
   }
   if (signature != Signature::Success) {
-    spdlog::error("Handshake failed!");
+    memgraph::logging::Error("Handshake failed!");
     throw ClientFatalException("Handshake with the server failed!");
   }
 
-  spdlog::debug("Metadata of init message response: {}", metadata);
+  memgraph::logging::Debug("Metadata of init message response: {}", metadata);
 }
 
 QueryData Client::Execute(std::string_view query, const map_t &parameters, const map_t &extra) {
@@ -91,14 +92,14 @@ QueryData Client::Execute(std::string_view query, const map_t &parameters, const
     throw ClientFatalException("You must first connect to the server before using the client!");
   }
 
-  spdlog::debug("Sending run message with statement: '{}'; parameters: {}", query, parameters);
+  memgraph::logging::Debug("Sending run message with statement: '{}'; parameters: {}", query, parameters);
 
   // It is super critical from performance point of view to send the pull message right after the run message. Otherwise
   // the performance will degrade multiple magnitudes.
   encoder_.MessageRun(query, parameters, extra);
   encoder_.MessagePull({{"n", Value(-1)}});
 
-  spdlog::debug("Reading run message response");
+  memgraph::logging::Debug("Reading run message response");
   Signature signature{};
   Value fields;
   if (!ReadMessage(signature, fields)) {
@@ -115,7 +116,7 @@ QueryData Client::Execute(std::string_view query, const map_t &parameters, const
     throw ServerMalformedDataException();
   }
 
-  spdlog::debug("Reading pull_all message response");
+  memgraph::logging::Debug("Reading pull_all message response");
   Marker marker{};
   Value metadata;
   std::vector<std::vector<Value>> records;
@@ -182,7 +183,7 @@ void Client::Reset() {
     throw ClientFatalException("You must first connect to the server before using the client!");
   }
 
-  spdlog::debug("Sending reset message");
+  memgraph::logging::Debug("Sending reset message");
 
   encoder_.MessageReset();
 
@@ -209,14 +210,14 @@ std::optional<map_t> Client::Route(const map_t &routing, const std::vector<Value
     throw ClientFatalException("You must first connect to the server before using the client!");
   }
 
-  spdlog::debug("Sending route message with routing: {}; bookmarks: {}; db: {}",
-                routing,
-                bookmarks,
-                db.has_value() ? *db : Value());
+  memgraph::logging::Debug("Sending route message with routing: {}; bookmarks: {}; db: {}",
+                           routing,
+                           bookmarks,
+                           db.has_value() ? *db : Value());
 
   encoder_.MessageRoute(routing, bookmarks, db);
 
-  spdlog::debug("Reading route message response");
+  memgraph::logging::Debug("Reading route message response");
   Signature signature{};
   Value fields;
   if (!ReadMessage(signature, fields) || fields.type() != Value::Type::Map) {

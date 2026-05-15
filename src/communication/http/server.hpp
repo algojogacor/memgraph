@@ -12,6 +12,7 @@
 #pragma once
 
 #include <thread>
+#include "logging/log.hpp"
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -42,7 +43,7 @@ class Server final {
 
   void Shutdown() {
     if (ioc_.stopped()) {
-      spdlog::trace("HTTP server is already stopped!");
+      memgraph::logging::Trace("HTTP server is already stopped!");
       return;
     }
     ioc_.stop();
@@ -76,7 +77,7 @@ template <class TRequestHandler, typename TSessionContext>
 void Server<TRequestHandler, TSessionContext>::Start() {
   MG_ASSERT(!background_thread_, "The server was already started!");
   if (listener_->HasErrorHappened()) {
-    spdlog::error("We have error on http listener already! Aborting server start.");
+    memgraph::logging::Error("We have error on http listener already! Aborting server start.");
     return;
   }
   listener_->Run();

@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "dbms/dbms_handler.hpp"
+#include "logging/log.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -38,12 +39,12 @@ constexpr std::string_view kDBPrefix = "database:";  // Key prefix for database 
 // Per storage
 // NOTE Storage will connect to all replicas. Future work might change this
 void RestoreReplication(replication::RoleMainData &mainData, DatabaseAccess db_acc) {
-  spdlog::info("Restoring replication role.");
+  memgraph::logging::Info("Restoring replication role.");
 
   // Each individual client has already been restored and started. Here we just go through each database and start its
   // client
   for (auto &instance_client : mainData.registered_replicas_) {
-    spdlog::info("Replica {} restoration started for {}.", instance_client.name_, db_acc->name());
+    memgraph::logging::Info("Replica {} restoration started for {}.", instance_client.name_, db_acc->name());
     auto client = std::make_unique<storage::ReplicationStorageClient>(instance_client, mainData.uuid_);
     auto *storage = db_acc->storage();
     auto protector = dbms::DatabaseProtector{db_acc};
@@ -52,14 +53,14 @@ void RestoreReplication(replication::RoleMainData &mainData, DatabaseAccess db_a
     // MAYBE_BEHIND isn't a statement of the current state, this is the default value
     // Failed to start due to branching of MAIN and REPLICA
     if (client->State() == storage::replication::ReplicaState::MAYBE_BEHIND) {
-      spdlog::warn("Connection failed when registering replica {}. Replica will still be registered.",
-                   instance_client.name_);
+      memgraph::logging::Warn("Connection failed when registering replica {}. Replica will still be registered.",
+                              instance_client.name_);
     }
     db_acc->storage()->repl_storage_state_.replication_storage_clients_.WithLock(
         [client = std::move(client)](auto &storage_clients) mutable { storage_clients.push_back(std::move(client)); });
-    spdlog::info("Replica {} restored for {}.", instance_client.name_, db_acc->name());
+    memgraph::logging::Info("Replica {} restored for {}.", instance_client.name_, db_acc->name());
   }
-  spdlog::info("Replication role restored to MAIN.");
+  memgraph::logging::Info("Replication role restored to MAIN.");
 }
 }  // namespace
 
@@ -174,11 +175,11 @@ DbmsHandler::DbmsHandler(storage::Config config) : default_config_{std::move(con
     auto json = nlohmann::json::parse(config_json);
     const auto uuid = json.at("uuid").get<utils::UUID>();
     const auto rel_dir = json.at("rel_dir").get<std::filesystem::path>();
-    spdlog::info("Restoring database {} at {}.", name, rel_dir);
+    memgraph::logging::Info("Restoring database {} at {}.", name, rel_dir);
     auto new_db = New_(name, uuid, nullptr, rel_dir);
     MG_ASSERT(new_db.has_value(), "Failed while creating database {}.", name);
     directories.emplace(rel_dir.filename());
-    spdlog::info("Database {} restored.", name);
+    memgraph::logging::Info("Database {} restored.", name);
   }
 
   /*
@@ -292,7 +293,8 @@ DbmsHandler::DeleteResult DbmsHandler::TryDelete(std::string_view db_name, syste
   std::error_code ec;
   (void)std::filesystem::remove_all(storage_path, ec);
   if (ec) {
-    spdlog::error(R"(Failed to clean disk while deleting database "{}" stored in {})", db_name, storage_path);
+    memgraph::logging::Error(
+        R"(Failed to clean disk while deleting database "{}" stored in {})", db_name, storage_path);
   }
 
   // Detach from tenant profile. Return value is safe to ignore here because this
@@ -489,7 +491,8 @@ std::expected<void, TenantProfiles::AlterError> DbmsHandler::AlterTenantProfile(
     } catch (const UnknownDatabaseException &) {
       // DB was dropped concurrently — the profile change is already durable and will not
       // be re-applied on restart (the DB no longer exists). Skip gracefully.
-      spdlog::warn("AlterTenantProfile: database '{}' not found while applying profile '{}' — skipping", db_name, name);
+      memgraph::logging::Warn(
+          "AlterTenantProfile: database '{}' not found while applying profile '{}' — skipping", db_name, name);
     }
   }
   if (sys_txn) {
@@ -587,7 +590,8 @@ DbmsHandler::DeleteResult DbmsHandler::Delete_(std::string_view db_name) {
     std::error_code ec;
     (void)std::filesystem::remove_all(storage_path, ec);
     if (ec) {
-      spdlog::error(R"(Failed to clean disk while deleting database "{}" stored in {})", db_name, storage_path);
+      memgraph::logging::Error(
+          R"(Failed to clean disk while deleting database "{}" stored in {})", db_name, storage_path);
     }
   });
 
@@ -612,11 +616,12 @@ void DbmsHandler::RecoverStorageReplication(DatabaseAccess db_acc, replication::
   auto const is_enterprise = license::global_license_checker.IsEnterpriseValidFast();
   if (is_enterprise || db_acc->name() == dbms::kDefaultDB) {
     // Handle global replication state
-    spdlog::info("Replication configuration will be stored and will be automatically restored in case of a crash.");
+    memgraph::logging::Info(
+        "Replication configuration will be stored and will be automatically restored in case of a crash.");
     // RECOVER REPLICA CONNECTIONS
     memgraph::dbms::RestoreReplication(role_main_data, db_acc);
   } else if (!role_main_data.registered_replicas_.empty()) {
-    spdlog::warn("Multi-tenant replication is currently not supported!");
+    memgraph::logging::Warn("Multi-tenant replication is currently not supported!");
   }
 }
 
@@ -630,7 +635,7 @@ void DbmsHandler::RestoreTriggers(query::InterpreterContext *ic) {
 #endif
     if (auto db_acc_opt = db_gk.access()) {
       auto &db_acc = *db_acc_opt;
-      spdlog::debug("Restoring trigger for database \"{}\"", db_acc->name());
+      memgraph::logging::Debug("Restoring trigger for database \"{}\"", db_acc->name());
       auto storage_accessor = db_acc->Access(memgraph::storage::WRITE);
       auto dba = memgraph::query::DbAccessor{storage_accessor.get()};
       db_acc->trigger_store()->RestoreTriggers(

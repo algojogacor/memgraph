@@ -16,6 +16,7 @@
 #include <array>
 #include <cstdint>
 #include <iterator>
+#include "logging/log.hpp"
 
 #include "communication/bolt/v1/codes.hpp"
 #include "communication/bolt/v1/constants.hpp"
@@ -89,7 +90,7 @@ template <typename TSession>
 State StateHandshakeRun(TSession &session) {
   auto precmp = std::memcmp(session.input_stream_.data(), kPreamble.data(), kPreamble.size());
   if (precmp != 0) [[unlikely]] {
-    spdlog::trace("Received a wrong preamble!");
+    memgraph::logging::Trace("Received a wrong preamble!");
     return State::Close;
   }
 
@@ -122,16 +123,16 @@ State StateHandshakeRun(TSession &session) {
   session.version_.minor = protocol[2];
   session.version_.major = protocol[3];
   if (!session.version_.major) {
-    spdlog::trace("Server doesn't support any of the requested versions!");
+    memgraph::logging::Trace("Server doesn't support any of the requested versions!");
     return State::Close;
   }
 
   if (!session.output_stream_.Write(protocol)) {
-    spdlog::trace("Couldn't write handshake response!");
+    memgraph::logging::Trace("Couldn't write handshake response!");
     return State::Close;
   }
 
-  spdlog::info("Using version {}.{} of protocol", session.version_.major, session.version_.minor);
+  memgraph::logging::Info("Using version {}.{} of protocol", session.version_.major, session.version_.minor);
 
   // Delete data from the input stream. It is guaranteed that there will more
   // than, or equal to 20 bytes (kHandshakeSize) in the buffer.

@@ -11,6 +11,7 @@
 
 #include "query/plan/operator.hpp"
 #include <range/v3/all.hpp>
+#include "logging/log.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -331,7 +332,7 @@ void HandlePeriodicCommitError(const storage::StorageManipulationError &error) {
             throw PeriodicCommitException(
                 fmt::format("PeriodicCommit failed: {}", storage::FormatReplicationError(arg)));
           }
-          spdlog::warn("PeriodicCommit warning: {}", storage::FormatReplicationError(arg));
+          memgraph::logging::Warn("PeriodicCommit warning: {}", storage::FormatReplicationError(arg));
         } else if constexpr (std::is_same_v<ErrorType, storage::ConstraintViolation>) {
           throw PeriodicCommitException(
               "PeriodicCommit failed: Unable to commit due to constraint "
@@ -7782,7 +7783,8 @@ void CallCustomProcedure(const std::string_view fully_qualified_procedure_name, 
 
     auto leaked_bytes = memory_tracking_resource.GetAllocatedBytes();
     if (leaked_bytes > 0U) {
-      spdlog::warn("Query procedure '{}' leaked {} *tracked* bytes", fully_qualified_procedure_name, leaked_bytes);
+      memgraph::logging::Warn(
+          "Query procedure '{}' leaked {} *tracked* bytes", fully_qualified_procedure_name, leaked_bytes);
     }
   } else {
     // TODO: Add a tracking MemoryResource without limits, so that we report
@@ -8046,7 +8048,7 @@ auto ParseConfigMap(std::unordered_map<Expression *, Expression *> const &config
         auto value_expr = entry.second->Accept(evaluator);
         return !key_expr.IsString() || !value_expr.IsString();
       })) {
-    spdlog::error("Config map must contain only string keys and values!");
+    memgraph::logging::Error("Config map must contain only string keys and values!");
     return std::nullopt;
   }
 
@@ -10283,7 +10285,7 @@ class ParallelBranchCursor : public Cursor {
     }
 
     if (!collection_scheduler_) {
-      spdlog::warn(
+      memgraph::logging::Warn(
           "Collection scheduler not initialized. Please contact Memgraph support as this scenario "
           "should not happen!");
       throw QueryRuntimeException("Collection scheduler not initialized");

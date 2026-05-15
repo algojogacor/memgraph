@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "query/procedure/mg_procedure_impl.hpp"
+#include "logging/log.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -107,11 +108,11 @@ void MgpFreeImpl(memgraph::utils::MemoryResource &memory, void *const p) noexcep
     void *const original_ptr = data - bytes_for_header;
     memory.deallocate(original_ptr, alloc_size, alloc_align);
   } catch (const memgraph::utils::BasicException &be) {
-    spdlog::error("BasicException during the release of memory for query modules: {}", be.what());
+    memgraph::logging::Error("BasicException during the release of memory for query modules: {}", be.what());
   } catch (const std::exception &e) {
-    spdlog::error("std::exception during the release of memory for query modules: {}", e.what());
+    memgraph::logging::Error("std::exception during the release of memory for query modules: {}", e.what());
   } catch (...) {
-    spdlog::error("Unexpected throw during the release of memory for query modules");
+    memgraph::logging::Error("Unexpected throw during the release of memory for query modules");
   }
 }
 
@@ -174,50 +175,50 @@ template <typename TFunc, typename... Args>
     memgraph::utils::MemoryTracker::OutOfMemoryExceptionEnabler oom_enabler;
     WrapExceptionsHelper(std::forward<TFunc>(func), std::forward<Args>(args)...);
   } catch (const DeletedObjectException &neoe) {
-    spdlog::error("Deleted object error during mg API call: {}", neoe.what());
+    memgraph::logging::Error("Deleted object error during mg API call: {}", neoe.what());
     return mgp_error::MGP_ERROR_DELETED_OBJECT;
   } catch (const KeyAlreadyExistsException &kaee) {
-    spdlog::error("Key already exists error during mg API call: {}", kaee.what());
+    memgraph::logging::Error("Key already exists error during mg API call: {}", kaee.what());
     return mgp_error::MGP_ERROR_KEY_ALREADY_EXISTS;
   } catch (const InsufficientBufferException &ibe) {
-    spdlog::error("Insufficient buffer error during mg API call: {}", ibe.what());
+    memgraph::logging::Error("Insufficient buffer error during mg API call: {}", ibe.what());
     return mgp_error::MGP_ERROR_INSUFFICIENT_BUFFER;
   } catch (const ImmutableObjectException &ioe) {
-    spdlog::error("Immutable object error during mg API call: {}", ioe.what());
+    memgraph::logging::Error("Immutable object error during mg API call: {}", ioe.what());
     return mgp_error::MGP_ERROR_IMMUTABLE_OBJECT;
   } catch (const ValueConversionException &vce) {
-    spdlog::error("Value converion error during mg API call: {}", vce.what());
+    memgraph::logging::Error("Value converion error during mg API call: {}", vce.what());
     return mgp_error::MGP_ERROR_VALUE_CONVERSION;
   } catch (const SerializationException &se) {
-    spdlog::error("Serialization error during mg API call: {}", se.what());
+    memgraph::logging::Error("Serialization error during mg API call: {}", se.what());
     return mgp_error::MGP_ERROR_SERIALIZATION_ERROR;
   } catch (const AuthorizationException &ae) {
-    spdlog::error("Authorization error during mg API call: {}", ae.what());
+    memgraph::logging::Error("Authorization error during mg API call: {}", ae.what());
     return mgp_error::MGP_ERROR_AUTHORIZATION_ERROR;
   } catch (const std::bad_alloc &bae) {
-    spdlog::error("Memory allocation error during mg API call: {}", bae.what());
+    memgraph::logging::Error("Memory allocation error during mg API call: {}", bae.what());
     return mgp_error::MGP_ERROR_UNABLE_TO_ALLOCATE;
   } catch (const memgraph::utils::OutOfMemoryException &oome) {
     [[maybe_unused]] auto blocker = memgraph::utils::MemoryTracker::OutOfMemoryExceptionBlocker{};
-    spdlog::error("Memory limit exceeded during mg API call: {}", oome.what());
+    memgraph::logging::Error("Memory limit exceeded during mg API call: {}", oome.what());
     return mgp_error::MGP_ERROR_UNABLE_TO_ALLOCATE;
   } catch (const std::out_of_range &oore) {
-    spdlog::error("Out of range error during mg API call: {}", oore.what());
+    memgraph::logging::Error("Out of range error during mg API call: {}", oore.what());
     return mgp_error::MGP_ERROR_OUT_OF_RANGE;
   } catch (const std::invalid_argument &iae) {
-    spdlog::error("Invalid argument error during mg API call: {}", iae.what());
+    memgraph::logging::Error("Invalid argument error during mg API call: {}", iae.what());
     return mgp_error::MGP_ERROR_INVALID_ARGUMENT;
   } catch (const std::logic_error &lee) {
-    spdlog::error("Logic error during mg API call: {}", lee.what());
+    memgraph::logging::Error("Logic error during mg API call: {}", lee.what());
     return mgp_error::MGP_ERROR_LOGIC_ERROR;
   } catch (const memgraph::utils::temporal::InvalidArgumentException &e) {
-    spdlog::error("Invalid argument was sent to an mg API call for temporal types: {}", e.what());
+    memgraph::logging::Error("Invalid argument was sent to an mg API call for temporal types: {}", e.what());
     return mgp_error::MGP_ERROR_INVALID_ARGUMENT;
   } catch (const std::exception &e) {
-    spdlog::error("Unexpected error during mg API call: {}", e.what());
+    memgraph::logging::Error("Unexpected error during mg API call: {}", e.what());
     return mgp_error::MGP_ERROR_UNKNOWN_ERROR;
   } catch (...) {
-    spdlog::error("Unexpected error during mg API call");
+    memgraph::logging::Error("Unexpected error during mg API call");
     return mgp_error::MGP_ERROR_UNKNOWN_ERROR;
   }
   return mgp_error::MGP_ERROR_NO_ERROR;
@@ -5334,22 +5335,22 @@ mgp_error mgp_log(const mgp_log_level log_level, const char *output) {
   return WrapExceptions([=] {
     switch (log_level) {
       case mgp_log_level::MGP_LOG_LEVEL_TRACE:
-        spdlog::trace(output);
+        memgraph::logging::Trace(output);
         return;
       case mgp_log_level::MGP_LOG_LEVEL_DEBUG:
-        spdlog::debug(output);
+        memgraph::logging::Debug(output);
         return;
       case mgp_log_level::MGP_LOG_LEVEL_INFO:
-        spdlog::info(output);
+        memgraph::logging::Info(output);
         return;
       case mgp_log_level::MGP_LOG_LEVEL_WARN:
-        spdlog::warn(output);
+        memgraph::logging::Warn(output);
         return;
       case mgp_log_level::MGP_LOG_LEVEL_ERROR:
-        spdlog::error(output);
+        memgraph::logging::Error(output);
         return;
       case mgp_log_level::MGP_LOG_LEVEL_CRITICAL:
-        spdlog::critical(output);
+        memgraph::logging::Critical(output);
         return;
     }
     throw std::invalid_argument{fmt::format("Invalid log level: {}", log_level)};

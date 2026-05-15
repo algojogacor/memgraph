@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <optional>
 #include <range/v3/all.hpp>
+#include "logging/log.hpp"
 
 #include "storage/v2/id_types.hpp"
 #include "storage/v2/indices/active_indices_updater.hpp"
@@ -503,7 +504,7 @@ auto InMemoryLabelPropertyIndex::PopulateIndex(
       MG_ASSERT(false, "It should not be possible to remove the index before populating it.");
     }
 
-    spdlog::trace("Vertices size when creating index: {}", vertices.size());
+    memgraph::logging::Trace("Vertices size when creating index: {}", vertices.size());
 
     auto const accessor_factory = [&] { return index->skiplist.access(); };
 

@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include "logging/log.hpp"
 #include "rpc/messages.hpp"
 #include "rpc/version.hpp"
 #include "slk/serialization.hpp"
@@ -50,7 +51,7 @@ void SendFinalResponse(TResponse const &res, uint64_t const response_version, sl
   SaveMessageHeader(message_header, builder);
   SaveWithDowngrade(res, response_version, builder);
   builder->Finalize();
-  spdlog::trace("[RpcServer] sent {}, version {}. {}", TResponse::kType.name, response_version, description);
+  memgraph::logging::Trace("[RpcServer] sent {}, version {}. {}", TResponse::kType.name, response_version, description);
 }
 
 inline void SendInProgressMsg(slk::Builder *builder) {
@@ -62,7 +63,7 @@ inline void SendInProgressMsg(slk::Builder *builder) {
                                                  .message_version = InProgressRes::kVersion};
   SaveMessageHeader(message_header, builder);
   builder->Finalize();
-  spdlog::trace("[RpcServer] sent {}", InProgressRes::kType.name);
+  memgraph::logging::Trace("[RpcServer] sent {}", InProgressRes::kType.name);
 }
 
 // T must be the newest type in the sequence of requests

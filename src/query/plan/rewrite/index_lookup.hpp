@@ -28,6 +28,7 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include "logging/log.hpp"
 
 #include <gflags/gflags.h>
 #include <range/v3/all.hpp>
@@ -70,7 +71,7 @@ struct IndexHints {
       const auto label_name = index_hint.label_ix_.name;
       if (index_type == IndexHint::IndexType::LABEL) {
         if (!db->LabelIndexReady(db->NameToLabel(label_name))) {
-          spdlog::debug("Index for label {} doesn't exist", label_name);
+          memgraph::logging::Debug("Index for label {} doesn't exist", label_name);
           continue;
         }
         label_index_hints_.emplace_back(index_hint);
@@ -83,14 +84,14 @@ struct IndexHints {
           auto property_names = index_hint.property_ixs_ |
                                 ranges::views::transform([&](auto &&path) { return fmt::format("{}", path); }) |
                                 ranges::views::join(", ") | ranges::to<std::string>;
-          spdlog::debug("Index for label doesn't exist: {} with properties {}", label_name, property_names);
+          memgraph::logging::Debug("Index for label doesn't exist: {} with properties {}", label_name, property_names);
           continue;
         }
         label_property_index_hints_.emplace_back(index_hint);
       } else if (index_type == IndexHint::IndexType::POINT) {
         auto property_name = index_hint.property_ixs_[0].path[0].name;
         if (!db->PointIndexExists(db->NameToLabel(label_name), db->NameToProperty(property_name))) {
-          spdlog::debug("Point index for label {} and property {} doesn't exist", label_name, property_name);
+          memgraph::logging::Debug("Point index for label {} and property {} doesn't exist", label_name, property_name);
           continue;
         }
         point_index_hints_.emplace_back(index_hint);
@@ -1534,7 +1535,7 @@ class IndexLookupRewriter final : public HierarchicalLogicalOperatorVisitor {
     }
 
     // this should never be reached because HasIndexedSource should filter out all other types of indices
-    spdlog::error("Unknown indexed scan operator type");
+    memgraph::logging::Error("Unknown indexed scan operator type");
     return static_cast<double>(db_->VerticesCount());
   }
 

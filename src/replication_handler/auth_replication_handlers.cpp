@@ -12,6 +12,7 @@
 #include "replication_handler/auth_replication_handlers.hpp"
 #include <spdlog/spdlog.h>
 #include <utility>
+#include "logging/log.hpp"
 
 #include "auth/auth.hpp"
 #include "auth/profiles/user_profiles.hpp"
@@ -27,10 +28,10 @@ namespace memgraph::auth {
 
 void LogWrongMain(const std::optional<utils::UUID> &current_main_uuid, const utils::UUID &main_req_id,
                   std::string_view rpc_req) {
-  spdlog::error(fmt::format("Received {} with main_id: {} != current_main_uuid: {}",
-                            rpc_req,
-                            std::string(main_req_id),
-                            current_main_uuid.has_value() ? std::string(current_main_uuid.value()) : ""));
+  memgraph::logging::Error(fmt::format("Received {} with main_id: {} != current_main_uuid: {}",
+                                       rpc_req,
+                                       std::string(main_req_id),
+                                       current_main_uuid.has_value() ? std::string(current_main_uuid.value()) : ""));
 }
 
 #ifdef MG_ENTERPRISE
@@ -55,9 +56,9 @@ void UpdateAuthDataHandler(system::ReplicaHandlerAccessToState &system_state_acc
   //       what we have so far.
 
   if (req.expected_group_timestamp != system_state_access.LastCommitedTS()) {
-    spdlog::debug("UpdateAuthDataHandler: bad expected timestamp {},{}",
-                  req.expected_group_timestamp,
-                  system_state_access.LastCommitedTS());
+    memgraph::logging::Debug("UpdateAuthDataHandler: bad expected timestamp {},{}",
+                             req.expected_group_timestamp,
+                             system_state_access.LastCommitedTS());
     rpc::SendFinalResponse(res, request_version, res_builder);
     return;
   }
@@ -65,26 +66,26 @@ void UpdateAuthDataHandler(system::ReplicaHandlerAccessToState &system_state_acc
   try {
     // Update
     if (req.user) {
-      spdlog::trace("Saving user '{}'", req.user->username());
+      memgraph::logging::Trace("Saving user '{}'", req.user->username());
       auth->SaveUser(*req.user);
     }
     if (req.role) {
-      spdlog::trace("Saving role '{}'", req.role->rolename());
+      memgraph::logging::Trace("Saving role '{}'", req.role->rolename());
       auth->SaveRole(*req.role);
     }
     if (req.profile) {
-      spdlog::trace("Saving profile '{}'", req.profile->name);
+      memgraph::logging::Trace("Saving profile '{}'", req.profile->name);
       if (!auth->CreateOrUpdateProfile(req.profile->name, req.profile->limits, req.profile->usernames)) {
-        spdlog::warn("Failed to create or update profile '{}'", req.profile->name);
+        memgraph::logging::Warn("Failed to create or update profile '{}'", req.profile->name);
         // silent failure
       }
     }
     // Success
     res = UpdateAuthDataRes(true);
-    spdlog::debug("UpdateAuthDataHandler: SUCCESS");
+    memgraph::logging::Debug("UpdateAuthDataHandler: SUCCESS");
   } catch (const auth::AuthException &e) {
     // Failure
-    spdlog::trace("Saving role '{}' exception: {}", req.role->rolename(), e.what());
+    memgraph::logging::Trace("Saving role '{}' exception: {}", req.role->rolename(), e.what());
   }
 
   rpc::SendFinalResponse(res, request_version, res_builder);
@@ -111,9 +112,9 @@ void DropAuthDataHandler(memgraph::system::ReplicaHandlerAccessToState &system_s
   //       what we have so far.
 
   if (req.expected_group_timestamp != system_state_access.LastCommitedTS()) {
-    spdlog::debug("DropAuthDataHandler: bad expected timestamp {},{}",
-                  req.expected_group_timestamp,
-                  system_state_access.LastCommitedTS());
+    memgraph::logging::Debug("DropAuthDataHandler: bad expected timestamp {},{}",
+                             req.expected_group_timestamp,
+                             system_state_access.LastCommitedTS());
     rpc::SendFinalResponse(res, request_version, res_builder);
     return;
   }
@@ -136,7 +137,7 @@ void DropAuthDataHandler(memgraph::system::ReplicaHandlerAccessToState &system_s
     }
     // Success
     res = DropAuthDataRes(true);
-    spdlog::debug("DropAuthDataHandler: SUCCESS");
+    memgraph::logging::Debug("DropAuthDataHandler: SUCCESS");
   } catch (const auth::AuthException & /* not used */) {
     // Failure
   }
@@ -159,7 +160,7 @@ bool SystemRecoveryHandler(auth::SynchedAuth &auth, auth::Auth::Config auth_conf
       for (const auto &profile : profiles) {
         // Missing profile
         if (!locked_auth.CreateOrUpdateProfile(profile.name, profile.limits, profile.usernames)) {
-          spdlog::debug("SystemRecoveryHandler: Failed to save profile");
+          memgraph::logging::Debug("SystemRecoveryHandler: Failed to save profile");
           return false;
         }
         std::erase_if(old_profiles, [&](const auto &p) { return p.name == profile.name; });
@@ -167,7 +168,7 @@ bool SystemRecoveryHandler(auth::SynchedAuth &auth, auth::Auth::Config auth_conf
       // Delete all the leftover profiles
       for (const auto &profile : old_profiles) {
         if (!locked_auth.DropProfile(profile.name)) {
-          spdlog::debug("SystemRecoveryHandler: Failed to remove profile \"{}\".", profile.name);
+          memgraph::logging::Debug("SystemRecoveryHandler: Failed to remove profile \"{}\".", profile.name);
           return false;
         }
       }
@@ -183,7 +184,7 @@ bool SystemRecoveryHandler(auth::SynchedAuth &auth, auth::Auth::Config auth_conf
         try {
           locked_auth.SaveRole(role);
         } catch (const auth::AuthException &) {
-          spdlog::debug("SystemRecoveryHandler: Failed to save role");
+          memgraph::logging::Debug("SystemRecoveryHandler: Failed to save role");
           return false;
         }
         std::erase(old_roles, role.rolename());
@@ -191,7 +192,7 @@ bool SystemRecoveryHandler(auth::SynchedAuth &auth, auth::Auth::Config auth_conf
       // Delete all the leftover roles
       for (const auto &role : old_roles) {
         if (!locked_auth.RemoveRole(role, /*force=*/true)) {
-          spdlog::debug("SystemRecoveryHandler: Failed to remove role \"{}\".", role);
+          memgraph::logging::Debug("SystemRecoveryHandler: Failed to remove role \"{}\".", role);
           return false;
         }
       }
@@ -205,7 +206,7 @@ bool SystemRecoveryHandler(auth::SynchedAuth &auth, auth::Auth::Config auth_conf
       try {
         locked_auth.SaveUser(user);
       } catch (const auth::AuthException &) {
-        spdlog::debug("SystemRecoveryHandler: Failed to save user");
+        memgraph::logging::Debug("SystemRecoveryHandler: Failed to save user");
         return false;
       }
       std::erase(old_users, user.username());
@@ -213,7 +214,7 @@ bool SystemRecoveryHandler(auth::SynchedAuth &auth, auth::Auth::Config auth_conf
     // Delete all the leftover users
     for (const auto &user : old_users) {
       if (!locked_auth.RemoveUser(user)) {
-        spdlog::debug("SystemRecoveryHandler: Failed to remove user \"{}\".", user);
+        memgraph::logging::Debug("SystemRecoveryHandler: Failed to remove user \"{}\".", user);
         return false;
       }
     }

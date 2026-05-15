@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "query/stream/streams.hpp"
+#include "logging/log.hpp"
 
 #include <ranges>
 #include <shared_mutex>
@@ -120,7 +121,7 @@ void CallCustomTransformation(const std::string &transformation_name, const std:
     result.signature.emplace(params_param_name,
                              ResultsMetadata{signature_params_it->second.first, signature_params_it->second.second, 1});
 
-    spdlog::trace("Calling transformation in stream '{}'", stream_name);
+    memgraph::logging::Trace("Calling transformation in stream '{}'", stream_name);
     trans.cb(&mgp_messages, &graph, &result, &memory);
   }
   if (result.error_msg.has_value()) {
@@ -549,7 +550,7 @@ Streams::StreamsMap::iterator Streams::CreateConsumer(StreamsMap &map, const std
 
     DiscardValueResultStream stream;
 
-    spdlog::trace("Start transaction in stream '{}'", stream_name);
+    memgraph::logging::Trace("Start transaction in stream '{}'", stream_name);
     utils::OnScopeExit cleanup{[&interpreter, &result]() {
       result.rows.clear();
       interpreter->Abort();
@@ -560,12 +561,12 @@ Streams::StreamsMap::iterator Streams::CreateConsumer(StreamsMap &map, const std
       try {
         interpreter->BeginTransaction();
         for (auto &row : result.rows) {
-          spdlog::trace("Processing row in stream '{}'", stream_name);
+          memgraph::logging::Trace("Processing row in stream '{}'", stream_name);
           auto [query_value, params_value] =
               ExtractTransformationResult(row.values, result.signature, transformation_name, stream_name);
           storage::ExternalPropertyValue params_prop{params_value};
           std::string query{query_value.ValueString()};
-          spdlog::trace("Executing query '{}' in stream '{}'", query, stream_name);
+          memgraph::logging::Trace("Executing query '{}' in stream '{}'", query, stream_name);
           auto prepare_result = interpreter->Prepare(
               query,
               [=](storage::Storage const *) { return params_prop.IsMap() ? params_prop.ValueMap() : empty_parameters; },
@@ -580,7 +581,7 @@ Streams::StreamsMap::iterator Streams::CreateConsumer(StreamsMap &map, const std
           interpreter->PullAll(&stream);
         }
 
-        spdlog::trace("Commit transaction in stream '{}'", stream_name);
+        memgraph::logging::Trace("Commit transaction in stream '{}'", stream_name);
         interpreter->CommitTransaction();
         result.rows.clear();
         break;
@@ -594,27 +595,26 @@ Streams::StreamsMap::iterator Streams::CreateConsumer(StreamsMap &map, const std
       } catch (const DatabaseContextRequiredException &e) {
         // No database; we are shutting down
         interpreter->Abort();
-        spdlog::trace("No database associated with stream '{}'; shuting down...", stream_name);
+        memgraph::logging::Trace("No database associated with stream '{}'; shuting down...", stream_name);
         break;
       }
     }
   };
 
-  auto insert_result =
-      map.try_emplace(stream_name,
-                      StreamData<TStream>{std::move(stream_info.common_info.transformation_name),
-                                          std::move(ownername),
-                                          std::move(rolenames),
-                                          std::make_unique<SynchronizedStreamSource<TStream>>(
-                                              stream_name, std::move(stream_info), std::move(consumer_function),
-                                              arena_pool_)});
+  auto insert_result = map.try_emplace(
+      stream_name,
+      StreamData<TStream>{std::move(stream_info.common_info.transformation_name),
+                          std::move(ownername),
+                          std::move(rolenames),
+                          std::make_unique<SynchronizedStreamSource<TStream>>(
+                              stream_name, std::move(stream_info), std::move(consumer_function), arena_pool_)});
   MG_ASSERT(insert_result.second, "Unexpected error during storing consumer '{}'", stream_name);
   return insert_result.first;
 }
 
 template <typename TDbAccess>
 void Streams::RestoreStreams(TDbAccess db, InterpreterContext *ic) {
-  spdlog::info("Loading streams...");
+  memgraph::logging::Info("Loading streams...");
   auto locked_streams_map = streams_.Lock();
   MG_ASSERT(locked_streams_map->empty(), "Cannot restore streams when some streams already exist!");
 
@@ -630,10 +630,10 @@ void Streams::RestoreStreams(TDbAccess db, InterpreterContext *ic) {
         // TODO: Migration
         stream_json_data.get_to(status);
       } catch (const nlohmann::json::type_error &exception) {
-        spdlog::warn(get_failed_message("invalid type conversion", exception.what()));
+        memgraph::logging::Warn(get_failed_message("invalid type conversion", exception.what()));
         return;
       } catch (const nlohmann::json::out_of_range &exception) {
-        spdlog::warn(get_failed_message("non existing field", exception.what()));
+        memgraph::logging::Warn(get_failed_message("non existing field", exception.what()));
         return;
       }
       MG_ASSERT(status.name == stream_name, "Expected stream name is '{}', but got '{}'", status.name, stream_name);
@@ -642,7 +642,7 @@ void Streams::RestoreStreams(TDbAccess db, InterpreterContext *ic) {
       try {
         owner = ic->auth_checker->GenQueryUser(status.owner, status.owner_roles);
       } catch (const utils::BasicException &e) {
-        spdlog::warn(
+        memgraph::logging::Warn(
             fmt::format("Failed to load stream '{}' because its owner is not an existing Memgraph user.", stream_name));
         return;
       }
@@ -656,9 +656,9 @@ void Streams::RestoreStreams(TDbAccess db, InterpreterContext *ic) {
               },
               it->second);
         }
-        spdlog::info("Stream '{}' is loaded", stream_name);
+        memgraph::logging::Info("Stream '{}' is loaded", stream_name);
       } catch (const utils::BasicException &exception) {
-        spdlog::warn(get_failed_message("unexpected error", exception.what()));
+        memgraph::logging::Warn(get_failed_message("unexpected error", exception.what()));
       }
     };
 
@@ -674,7 +674,7 @@ void Streams::RestoreStreams(TDbAccess db, InterpreterContext *ic) {
           break;
       }
     } else {
-      spdlog::warn(
+      memgraph::logging::Warn(
           "Unable to load stream '{}', because it does not contain the type of the stream. Most probably the stream "
           "was saved before Memgraph 2.1. Please recreate the stream manually to make it work. For more information "
           "please check https://memgraph.com/docs/memgraph/changelog#v210---nov-22-2021 .",

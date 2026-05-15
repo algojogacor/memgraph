@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "replication_handler/replication_handler.hpp"
+#include "logging/log.hpp"
 
 #include "dbms/constants.hpp"
 #include "dbms/dbms_handler.hpp"
@@ -60,7 +61,7 @@ void RecoverReplication(utils::Synchronized<ReplicationState, utils::RWSpinLock>
     // Warning
     if (dbms_handler.default_config().durability.snapshot_wal_mode ==
         storage::Config::Durability::SnapshotWalMode::DISABLED) {
-      spdlog::warn(
+      memgraph::logging::Warn(
           "The instance has the MAIN replication role, but durability logs and snapshots are disabled. Please "
           "consider "
           "enabling durability by using --storage-snapshot-interval-sec and --storage-wal-enabled flags because "
@@ -96,7 +97,7 @@ void RecoverReplication(utils::Synchronized<ReplicationState, utils::RWSpinLock>
     // Warning
     if (dbms_handler.default_config().durability.snapshot_wal_mode ==
         storage::Config::Durability::SnapshotWalMode::DISABLED) {
-      spdlog::warn(
+      memgraph::logging::Warn(
           "The instance has the MAIN replication role, but durability logs and snapshots are disabled. Please "
           "consider "
           "enabling durability by using --storage-snapshot-interval-sec and --storage-wal-enabled flags because "
@@ -140,7 +141,7 @@ void StartReplicaClient(replication::ReplicationClient &client, system::System &
 #endif
   // No client error, start instance level client
   auto const &endpoint = client.rpc_client_.Endpoint();
-  spdlog::trace("Replication client started at: {}", endpoint.SocketAddress());  // non-resolved IP
+  memgraph::logging::Trace("Replication client started at: {}", endpoint.SocketAddress());  // non-resolved IP
   client.StartFrequentCheck(
       [&, license = license::global_license_checker.IsEnterpriseValidFast(), main_uuid](
           ReplicationClient &local_client) mutable {
@@ -282,7 +283,7 @@ bool ReplicationHandler::DoToMainPromotion(const utils::UUID &main_uuid, bool co
 
     // All DBs should have the same epoch
     auto const new_epoch = ReplicationEpoch();
-    spdlog::trace("Generated new epoch {}", new_epoch.id());
+    memgraph::logging::Trace("Generated new epoch {}", new_epoch.id());
 
     // STEP 4) We are now MAIN, update storage local epoch
     dbms_handler_.ForEach([&](dbms::DatabaseAccess db_acc) {
@@ -299,10 +300,10 @@ bool ReplicationHandler::DoToMainPromotion(const utils::UUID &main_uuid, bool co
           ldt >= storage->timestamp_) {
         // Mark all txns finished with IDs in range [old_storage_ts, global_ldt]
         static_cast<storage::InMemoryStorage *>(storage)->commit_log_->MarkFinishedInRange(storage->timestamp_, ldt);
-        spdlog::trace("Txn IDs in ranges [{},{}] marked as finished", storage->timestamp_, ldt);
+        memgraph::logging::Trace("Txn IDs in ranges [{},{}] marked as finished", storage->timestamp_, ldt);
         storage->timestamp_ = ldt + 1;
       }
-      spdlog::trace("New timestamp is {} for the database {}.", storage->timestamp_, db_acc->name());
+      memgraph::logging::Trace("New timestamp is {} for the database {}.", storage->timestamp_, db_acc->name());
     });
 
     // STEP 5) Resume TTL

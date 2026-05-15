@@ -1,4 +1,4 @@
-// Copyright 2025 Memgraph Ltd.
+// Copyright 2026 Memgraph Ltd.
 //
 // Use of this software is governed by the Business Source License
 // included in the file licenses/BSL.txt; by using this file, you agree to be bound by the terms of the Business Source
@@ -15,6 +15,7 @@
 #include <exception>
 #include <thread>
 #include <vector>
+#include "logging/log.hpp"
 
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/io_context.hpp>
@@ -50,10 +51,10 @@ class IOContextThreadPool final {
         while (running_) {
           try {
             io_context_.run();
-            spdlog::trace("IOContextThreadPool exited");
+            memgraph::logging::Trace("IOContextThreadPool exited");
             break;  // exited normally
           } catch (const std::exception &e) {
-            spdlog::trace("IOContextThreadPool exception: {}", e.what());
+            memgraph::logging::Trace("IOContextThreadPool exception: {}", e.what());
           }
         }
       });

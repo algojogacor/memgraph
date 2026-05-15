@@ -11,6 +11,7 @@
 
 #include "storage/v2/inmemory/label_index.hpp"
 #include <range/v3/all.hpp>
+#include "logging/log.hpp"
 
 #include "storage/v2/indices/active_indices_updater.hpp"
 #include "storage/v2/indices/indices_utils.hpp"
@@ -169,7 +170,7 @@ auto InMemoryLabelIndex::PopulateIndex(
     MG_ASSERT(false, "It should not be possible to remove the index before populating it.");
   }
 
-  spdlog::trace("Vertices size when creating index: {}", vertices.size());
+  memgraph::logging::Trace("Vertices size when creating index: {}", vertices.size());
 
   try {
     auto const accessor_factory = [&] { return index->skiplist.access(); };

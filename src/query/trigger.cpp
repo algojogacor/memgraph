@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "query/trigger.hpp"
+#include "logging/log.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -243,7 +244,7 @@ void Trigger::Execute(DbAccessor *dba, dbms::DatabaseAccess db_acc, utils::Memor
     return;
   }
 
-  spdlog::debug("Executing trigger '{}'", name_);
+  memgraph::logging::Debug("Executing trigger '{}'", name_);
   auto trigger_plan = GetPlan(dba, db_acc->name(), triggering_user);
   MG_ASSERT(trigger_plan, "Invalid trigger plan received");
   auto &[plan, identifiers] = *trigger_plan;
@@ -353,16 +354,16 @@ void TriggerStore::RestoreTrigger(utils::SkipList<QueryCacheEntry> *query_cache,
 
   const auto invalid_state_message = get_failed_message("Invalid state of the trigger data.");
 
-  spdlog::debug("Loading trigger '{}'", trigger_name);
+  memgraph::logging::Debug("Loading trigger '{}'", trigger_name);
   auto json_trigger_data = nlohmann::json::parse(trigger_data);
 
   if (!json_trigger_data["version"].is_number_unsigned()) {
-    spdlog::warn(invalid_state_message);
+    memgraph::logging::Warn(invalid_state_message);
     return;
   }
   const auto version = json_trigger_data["version"].get<uint64_t>();
   if (version != kVersion && version != kDefinerOnlyVersion) {
-    spdlog::warn(get_failed_message(fmt::format(
+    memgraph::logging::Warn(get_failed_message(fmt::format(
         "Invalid version of the trigger data. Expected {} or {}, got {}.", kVersion, kDefinerOnlyVersion, version)));
     return;
   }
@@ -374,25 +375,25 @@ void TriggerStore::RestoreTrigger(utils::SkipList<QueryCacheEntry> *query_cache,
   }
 
   if (!json_trigger_data["statement"].is_string()) {
-    spdlog::warn(invalid_state_message);
+    memgraph::logging::Warn(invalid_state_message);
     return;
   }
   auto statement = json_trigger_data["statement"].get<std::string>();
 
   if (!json_trigger_data["phase"].is_number_integer()) {
-    spdlog::warn(invalid_state_message);
+    memgraph::logging::Warn(invalid_state_message);
     return;
   }
   const auto phase = json_trigger_data["phase"].get<TriggerPhase>();
 
   if (!json_trigger_data["event_type"].is_number_integer()) {
-    spdlog::warn(invalid_state_message);
+    memgraph::logging::Warn(invalid_state_message);
     return;
   }
   const auto event_type = json_trigger_data["event_type"].get<TriggerEventType>();
 
   if (!json_trigger_data["user_parameters"].is_object()) {
-    spdlog::warn(invalid_state_message);
+    memgraph::logging::Warn(invalid_state_message);
     return;
   }
   const auto user_parameters = serialization::DeserializeExternalPropertyValueMap(json_trigger_data["user_parameters"],
@@ -403,7 +404,7 @@ void TriggerStore::RestoreTrigger(utils::SkipList<QueryCacheEntry> *query_cache,
   if (owner_json.is_string()) {
     owner.emplace(owner_json.get<std::string>());
   } else if (!owner_json.is_null()) {
-    spdlog::warn(invalid_state_message);
+    memgraph::logging::Warn(invalid_state_message);
     return;
   }
 
@@ -412,7 +413,7 @@ void TriggerStore::RestoreTrigger(utils::SkipList<QueryCacheEntry> *query_cache,
   if (owner_roles_json.is_array()) {
     roles = owner_roles_json.get<std::vector<std::string>>();
   } else if (!owner_roles_json.is_null()) {
-    spdlog::warn(invalid_state_message);
+    memgraph::logging::Warn(invalid_state_message);
     return;
   }
 
@@ -420,19 +421,19 @@ void TriggerStore::RestoreTrigger(utils::SkipList<QueryCacheEntry> *query_cache,
   try {
     user = auth_checker->GenQueryUser(owner, roles);
   } catch (const utils::BasicException &e) {
-    spdlog::warn(
+    memgraph::logging::Warn(
         fmt::format("Failed to load trigger '{}' because its owner is not an existing Memgraph user.", trigger_name));
     return;
   }
 
   const auto privilege_context_json = json_trigger_data["privilege_context"];
   if (!privilege_context_json.is_string()) {
-    spdlog::warn(invalid_state_message);
+    memgraph::logging::Warn(invalid_state_message);
     return;
   }
   const auto privilege_context_opt = TriggerPrivilegeContextFromString(privilege_context_json.get<std::string>());
   if (!privilege_context_opt) {
-    spdlog::warn(invalid_state_message);
+    memgraph::logging::Warn(invalid_state_message);
     return;
   }
   const auto privilege_context = *privilege_context_opt;
@@ -451,7 +452,7 @@ void TriggerStore::RestoreTrigger(utils::SkipList<QueryCacheEntry> *query_cache,
                     privilege_context,
                     server_parameters);
   } catch (const utils::BasicException &e) {
-    spdlog::warn("Failed to create trigger '{}' because: {}", trigger_name, e.what());
+    memgraph::logging::Warn("Failed to create trigger '{}' because: {}", trigger_name, e.what());
     return;
   }
 
@@ -459,7 +460,7 @@ void TriggerStore::RestoreTrigger(utils::SkipList<QueryCacheEntry> *query_cache,
       phase == TriggerPhase::BEFORE_COMMIT ? before_commit_triggers_.access() : after_commit_triggers_.access();
   triggers_acc.insert(std::move(*trigger));
 
-  spdlog::debug("Trigger loaded successfully!");
+  memgraph::logging::Debug("Trigger loaded successfully!");
 }
 
 void TriggerStore::RestoreTriggers(utils::SkipList<QueryCacheEntry> *query_cache, DbAccessor *db_accessor,
@@ -467,7 +468,7 @@ void TriggerStore::RestoreTriggers(utils::SkipList<QueryCacheEntry> *query_cache
                                    std::string_view db_name, parameters::Parameters const *server_parameters) {
   MG_ASSERT(before_commit_triggers_.size() == 0 && after_commit_triggers_.size() == 0,
             "Cannot restore trigger when some triggers already exist!");
-  spdlog::info("Loading triggers...");
+  memgraph::logging::Info("Loading triggers...");
 
   for (const auto &[trigger_name, trigger_data] : storage_) {
     RestoreTrigger(

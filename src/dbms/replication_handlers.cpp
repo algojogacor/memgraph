@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "dbms/replication_handlers.hpp"
+#include "logging/log.hpp"
 
 #include "dbms/dbms_handler.hpp"
 #include "dbms/rpc.hpp"
@@ -34,7 +35,7 @@ void CreateDatabaseHandler(system::ReplicaHandlerAccessToState &system_state_acc
 
   // Ignore if no license
   if (!license::global_license_checker.IsEnterpriseValidFast()) {
-    spdlog::error(
+    memgraph::logging::Error(
         "Handling CreateDatabase, an enterprise RPC message, without license. Check your license status by running "
         "SHOW LICENSE INFO.");
     rpc::SendFinalResponse(res, request_version, res_builder);
@@ -56,9 +57,9 @@ void CreateDatabaseHandler(system::ReplicaHandlerAccessToState &system_state_acc
   //       what we have so far.
 
   if (req.expected_group_timestamp != system_state_access.LastCommitedTS()) {
-    spdlog::debug("CreateDatabaseHandler: bad expected timestamp {},{}",
-                  req.expected_group_timestamp,
-                  system_state_access.LastCommitedTS());
+    memgraph::logging::Debug("CreateDatabaseHandler: bad expected timestamp {},{}",
+                             req.expected_group_timestamp,
+                             system_state_access.LastCommitedTS());
     rpc::SendFinalResponse(res, request_version, res_builder);
     return;
   }
@@ -68,7 +69,7 @@ void CreateDatabaseHandler(system::ReplicaHandlerAccessToState &system_state_acc
     if (auto const new_db = dbms_handler.Update(req.config); new_db.has_value()) {
       // Successfully create db
       res = CreateDatabaseRes(CreateDatabaseRes::Result::SUCCESS);
-      spdlog::debug("CreateDatabaseHandler: SUCCESS");
+      memgraph::logging::Debug("CreateDatabaseHandler: SUCCESS");
     }
   } catch (...) {
     // Failure
@@ -85,7 +86,7 @@ void DropDatabaseHandler(memgraph::system::ReplicaHandlerAccessToState &system_s
 
   // Ignore if no license
   if (!license::global_license_checker.IsEnterpriseValidFast()) {
-    spdlog::error(
+    memgraph::logging::Error(
         "Handling DropDatabase, an enterprise RPC message, without license. Check your license status by running SHOW "
         "LICENSE INFO.");
     rpc::SendFinalResponse(res, request_version, res_builder);
@@ -107,9 +108,9 @@ void DropDatabaseHandler(memgraph::system::ReplicaHandlerAccessToState &system_s
   //       what we have so far.
 
   if (req.expected_group_timestamp != system_state_access.LastCommitedTS()) {
-    spdlog::debug("DropDatabaseHandler: bad expected timestamp {},{}",
-                  req.expected_group_timestamp,
-                  system_state_access.LastCommitedTS());
+    memgraph::logging::Debug("DropDatabaseHandler: bad expected timestamp {},{}",
+                             req.expected_group_timestamp,
+                             system_state_access.LastCommitedTS());
     rpc::SendFinalResponse(res, request_version, res_builder);
     return;
   }
@@ -125,7 +126,7 @@ void DropDatabaseHandler(memgraph::system::ReplicaHandlerAccessToState &system_s
     } else {
       // Successfully drop db
       res = DropDatabaseRes(DropDatabaseRes::Result::SUCCESS);
-      spdlog::debug("DropDatabaseHandler: SUCCESS");
+      memgraph::logging::Debug("DropDatabaseHandler: SUCCESS");
     }
   } catch (...) {
     // Failure
@@ -142,7 +143,7 @@ void RenameDatabaseHandler(memgraph::system::ReplicaHandlerAccessToState &system
 
   // Ignore if no license
   if (!license::global_license_checker.IsEnterpriseValidFast()) {
-    spdlog::error(
+    memgraph::logging::Error(
         "Handling RenameDatabase, an enterprise RPC message, without license. Check your license status by running "
         "SHOW "
         "LICENSE INFO.");
@@ -165,9 +166,9 @@ void RenameDatabaseHandler(memgraph::system::ReplicaHandlerAccessToState &system
   //       what we have so far.
 
   if (req.expected_group_timestamp != system_state_access.LastCommitedTS()) {
-    spdlog::debug("RenameDatabaseHandler: bad expected timestamp {},{}",
-                  req.expected_group_timestamp,
-                  system_state_access.LastCommitedTS());
+    memgraph::logging::Debug("RenameDatabaseHandler: bad expected timestamp {},{}",
+                             req.expected_group_timestamp,
+                             system_state_access.LastCommitedTS());
     rpc::SendFinalResponse(res, request_version, res_builder);
     return;
   }
@@ -186,11 +187,12 @@ void RenameDatabaseHandler(memgraph::system::ReplicaHandlerAccessToState &system
       // Successfully renamed db
       system_state_access.SetLastCommitedTS(req.new_group_timestamp);
       res = RenameDatabaseRes(RenameDatabaseRes::Result::SUCCESS);
-      spdlog::debug("RenameDatabaseHandler: SUCCESS updated LCTS to {}", req.new_group_timestamp);
+      memgraph::logging::Debug("RenameDatabaseHandler: SUCCESS updated LCTS to {}", req.new_group_timestamp);
     }
   } catch (...) {
     // Failure
-    spdlog::trace(R"(RenameDatabaseHandler: Failed to rename database "{}" to "{}".)", req.old_name, req.new_name);
+    memgraph::logging::Trace(
+        R"(RenameDatabaseHandler: Failed to rename database "{}" to "{}".)", req.old_name, req.new_name);
   }
 
   rpc::SendFinalResponse(res, request_version, res_builder);
@@ -201,7 +203,7 @@ bool SystemRecoveryHandler(DbmsHandler &dbms_handler, const std::vector<storage:
    * NO LICENSE
    */
   if (!license::global_license_checker.IsEnterpriseValidFast()) {
-    spdlog::error(
+    memgraph::logging::Error(
         "Handling SystemRecovery, an enterprise RPC message, without license. Check your license status by running "
         "SHOW LICENSE INFO.");
     for (const auto &config : database_configs) {
@@ -228,11 +230,11 @@ bool SystemRecoveryHandler(DbmsHandler &dbms_handler, const std::vector<storage:
     // Missing db
     try {
       if (!dbms_handler.Update(config)) {
-        spdlog::debug("SystemRecoveryHandler: Failed to update database \"{}\".", *config.name.str_view());
+        memgraph::logging::Debug("SystemRecoveryHandler: Failed to update database \"{}\".", *config.name.str_view());
         return false;
       }
     } catch (const UnknownDatabaseException &) {
-      spdlog::debug("SystemRecoveryHandler: UnknownDatabaseException");
+      memgraph::logging::Debug("SystemRecoveryHandler: UnknownDatabaseException");
       return false;
     }
     std::erase(old, *config.name.str_view());
@@ -244,10 +246,10 @@ bool SystemRecoveryHandler(DbmsHandler &dbms_handler, const std::vector<storage:
     if (!del) {
       // Some errors are not terminal
       if (del.error() == DeleteError::DEFAULT_DB || del.error() == DeleteError::NON_EXISTENT) {
-        spdlog::debug("SystemRecoveryHandler: Dropped database \"{}\".", remove_db);
+        memgraph::logging::Debug("SystemRecoveryHandler: Dropped database \"{}\".", remove_db);
         continue;
       }
-      spdlog::debug("SystemRecoveryHandler: Failed to drop database \"{}\".", remove_db);
+      memgraph::logging::Debug("SystemRecoveryHandler: Failed to drop database \"{}\".", remove_db);
       return false;
     }
   }
@@ -268,7 +270,7 @@ void TenantProfileHandler(system::ReplicaHandlerAccessToState &system_state_acce
   storage::replication::TenantProfileRes res(false);
 
   if (!license::global_license_checker.IsEnterpriseValidFast()) {
-    spdlog::error("Handling TenantProfile RPC without enterprise license.");
+    memgraph::logging::Error("Handling TenantProfile RPC without enterprise license.");
     rpc::SendFinalResponse(res, request_version, res_builder);
     return;
   }
@@ -280,7 +282,7 @@ void TenantProfileHandler(system::ReplicaHandlerAccessToState &system_state_acce
   }
 
   if (req.expected_group_timestamp != system_state_access.LastCommitedTS()) {
-    spdlog::debug("TenantProfileHandler: bad expected timestamp");
+    memgraph::logging::Debug("TenantProfileHandler: bad expected timestamp");
     rpc::SendFinalResponse(res, request_version, res_builder);
     return;
   }
@@ -292,7 +294,8 @@ void TenantProfileHandler(system::ReplicaHandlerAccessToState &system_state_acce
       case Action::CREATE: {
         auto result = dbms_handler.CreateTenantProfile(req.profile.name, req.profile.memory_limit, /*sys_txn=*/nullptr);
         if (!result && result.error() == TenantProfiles::CreateError::DURABILITY_ERROR) {
-          spdlog::error("TenantProfileHandler: CREATE for profile '{}' failed — KVStore I/O error", req.profile.name);
+          memgraph::logging::Error("TenantProfileHandler: CREATE for profile '{}' failed — KVStore I/O error",
+                                   req.profile.name);
           res.success = false;
         }
         break;
@@ -301,9 +304,11 @@ void TenantProfileHandler(system::ReplicaHandlerAccessToState &system_state_acce
         auto result = dbms_handler.AlterTenantProfile(req.profile.name, req.profile.memory_limit, /*sys_txn=*/nullptr);
         if (!result) {
           if (result.error() == TenantProfiles::AlterError::NOT_FOUND) {
-            spdlog::warn("TenantProfileHandler: ALTER for non-existent tenant profile '{}'", req.profile.name);
+            memgraph::logging::Warn("TenantProfileHandler: ALTER for non-existent tenant profile '{}'",
+                                    req.profile.name);
           } else {
-            spdlog::error("TenantProfileHandler: ALTER for profile '{}' failed — KVStore I/O error", req.profile.name);
+            memgraph::logging::Error("TenantProfileHandler: ALTER for profile '{}' failed — KVStore I/O error",
+                                     req.profile.name);
           }
           res.success = false;
         }
@@ -317,12 +322,13 @@ void TenantProfileHandler(system::ReplicaHandlerAccessToState &system_state_acce
               // Benign: replica may have already pruned this profile or never had it.
               break;
             case TenantProfiles::DropError::HAS_ATTACHED_DATABASES:
-              spdlog::warn("TenantProfileHandler: DROP for profile '{}' rejected — has attached databases",
-                           req.profile.name);
+              memgraph::logging::Warn("TenantProfileHandler: DROP for profile '{}' rejected — has attached databases",
+                                      req.profile.name);
               res.success = false;
               break;
             case TenantProfiles::DropError::DURABILITY_ERROR:
-              spdlog::error("TenantProfileHandler: DROP for profile '{}' failed — KVStore I/O error", req.profile.name);
+              memgraph::logging::Error("TenantProfileHandler: DROP for profile '{}' failed — KVStore I/O error",
+                                       req.profile.name);
               res.success = false;
               break;
           }
@@ -333,11 +339,11 @@ void TenantProfileHandler(system::ReplicaHandlerAccessToState &system_state_acce
         auto result = dbms_handler.SetTenantProfileOnDatabase(req.profile.name, req.db_name, /*sys_txn=*/nullptr);
         if (!result) {
           if (result.error() == TenantProfiles::AttachError::PROFILE_NOT_FOUND) {
-            spdlog::warn("TenantProfileHandler: SET_ON_DATABASE for non-existent tenant profile '{}'",
-                         req.profile.name);
+            memgraph::logging::Warn("TenantProfileHandler: SET_ON_DATABASE for non-existent tenant profile '{}'",
+                                    req.profile.name);
           } else {
-            spdlog::error("TenantProfileHandler: SET_ON_DATABASE for profile '{}' failed — KVStore I/O error",
-                          req.profile.name);
+            memgraph::logging::Error(
+                "TenantProfileHandler: SET_ON_DATABASE for profile '{}' failed — KVStore I/O error", req.profile.name);
           }
           res.success = false;
         }
@@ -347,23 +353,24 @@ void TenantProfileHandler(system::ReplicaHandlerAccessToState &system_state_acce
         auto result = dbms_handler.RemoveTenantProfileFromDatabase(req.db_name, /*sys_txn=*/nullptr);
         if (!result) {
           if (result.error() == TenantProfiles::DetachError::DURABILITY_ERROR) {
-            spdlog::error("TenantProfileHandler: REMOVE_FROM_DATABASE for db '{}' failed — KVStore I/O error",
-                          req.db_name);
+            memgraph::logging::Error(
+                "TenantProfileHandler: REMOVE_FROM_DATABASE for db '{}' failed — KVStore I/O error", req.db_name);
             res.success = false;
           } else {
-            spdlog::warn("TenantProfileHandler: REMOVE_FROM_DATABASE — db '{}' not attached to any profile on replica",
-                         req.db_name);
+            memgraph::logging::Warn(
+                "TenantProfileHandler: REMOVE_FROM_DATABASE — db '{}' not attached to any profile on replica",
+                req.db_name);
           }
         }
         break;
       }
       default:
-        spdlog::warn("TenantProfileHandler: unknown action {}", static_cast<uint8_t>(req.action));
+        memgraph::logging::Warn("TenantProfileHandler: unknown action {}", static_cast<uint8_t>(req.action));
         res.success = false;
         break;
     }
   } catch (const std::exception &e) {
-    spdlog::warn("TenantProfileHandler failed: {}", e.what());
+    memgraph::logging::Warn("TenantProfileHandler failed: {}", e.what());
     res.success = false;
   }
 

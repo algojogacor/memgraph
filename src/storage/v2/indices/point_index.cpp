@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "storage/v2/indices/point_index.hpp"
+#include "logging/log.hpp"
 
 #include <boost/geometry.hpp>
 #include <boost/geometry/index/predicates.hpp>
@@ -124,7 +125,8 @@ void PointIndexStorage::PublishActiveIndices(ActiveIndicesUpdater const &updater
   updater(std::make_shared<PointIndexStorage::ActiveIndices>(indexes_));
 }
 
-bool PointIndexStorage::CreatePointIndex(LabelId label, PropertyId property, utils::SkipListDb<Vertex>::Accessor vertices,
+bool PointIndexStorage::CreatePointIndex(LabelId label, PropertyId property,
+                                         utils::SkipListDb<Vertex>::Accessor vertices,
                                          std::optional<SnapshotObserverInfo> const &snapshot_info) {
   auto key = LabelPropKey{label, property};
   if (indexes_->contains(key)) return false;
@@ -333,7 +335,7 @@ auto PointIndexContext::PointVertices(LabelId label, PropertyId property, Coordi
   auto const &indexes = *current_indexes_;
   auto it = indexes.find(LabelPropKey{label, property});
   if (it == indexes.cend()) {
-    spdlog::warn("Failure: trying to locate a point index that should exist");
+    memgraph::logging::Warn("Failure: trying to locate a point index that should exist");
     return {};
   }
 
@@ -347,7 +349,7 @@ auto PointIndexContext::PointVertices(LabelId label, PropertyId property, Coordi
   auto const &indexes = *current_indexes_;
   auto it = indexes.find(LabelPropKey{label, property});
   if (it == indexes.cend()) {
-    spdlog::warn("Failure: trying to locate a point index that should exist");
+    memgraph::logging::Warn("Failure: trying to locate a point index that should exist");
     return {};
   }
 

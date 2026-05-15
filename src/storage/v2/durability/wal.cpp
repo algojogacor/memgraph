@@ -14,6 +14,7 @@
 #include <range/v3/all.hpp>
 #include <type_traits>
 #include <unordered_map>
+#include "logging/log.hpp"
 
 #include "storage/v2/access_type.hpp"
 #include "storage/v2/constraints/type_constraints_kind.hpp"
@@ -961,7 +962,7 @@ WalInfo ReadWalInfo(const std::filesystem::path &path) {
       auto is_transaction_end = SkipWalDeltaData(&wal, version);
       return {{timestamp, is_transaction_end}};
     } catch (const RecoveryFailure &e) {
-      spdlog::error("Error occurred while reading WAL info: {}", e.what());
+      memgraph::logging::Error("Error occurred while reading WAL info: {}", e.what());
       return std::nullopt;
     }
   };
@@ -1238,7 +1239,7 @@ std::optional<RecoveryInfo> LoadWal(
     SalientConfig::Items items, EnumStore *enum_store, SharedSchemaTracking *schema_info,
     std::function<std::optional<std::tuple<EdgeRef, EdgeTypeId, Vertex *, Vertex *>>(Gid)> find_edge,
     memgraph::storage::ttl::TTL *ttl, memgraph::storage::DescriptionStore *description_store) {
-  spdlog::info("Trying to load WAL file {}.", path);
+  memgraph::logging::Info("Trying to load WAL file {}.", path);
 
   Decoder wal;
   auto version = wal.Initialize(path, kWalMagic);
@@ -1250,7 +1251,7 @@ std::optional<RecoveryInfo> LoadWal(
 
   // Check timestamp.
   if (last_applied_delta_timestamp && info.to_timestamp <= *last_applied_delta_timestamp) {
-    spdlog::info(
+    memgraph::logging::Info(
         "Skip loading WAL file because it is too old. {} <= {}", info.to_timestamp, *last_applied_delta_timestamp);
     return std::nullopt;
   }
@@ -1262,7 +1263,7 @@ std::optional<RecoveryInfo> LoadWal(
   uint64_t deltas_applied = 0;
   auto edge_acc = edges->access();
   auto vertex_acc = vertices->access();
-  spdlog::info("WAL file contains {} deltas.", info.num_deltas);
+  memgraph::logging::Info("WAL file contains {} deltas.", info.num_deltas);
 
   // In 2PC, we can have deltas stored on disk which shouldn't be applied when recovering
   bool should_commit{true};
@@ -1937,7 +1938,7 @@ std::optional<RecoveryInfo> LoadWal(
     }
   }
 
-  spdlog::info(
+  memgraph::logging::Info(
       "Applied {} deltas from WAL. Skipped {} deltas, because they were too old or because 2PC protocol decided to "
       "abort txn but deltas were already made durable.",
       deltas_applied,

@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "utils/logging.hpp"
+#include "logging/log.hpp"
 
 #include <fmt/format.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -45,7 +46,7 @@ void memgraph::logging::AssertFailed(std::source_location const loc, char const 
       loc.line(),
       expr,
       !message.empty() ? fmt::format("\n\tMessage: '{}'", message) : "");
-  spdlog::critical("{}", msg);
+  memgraph::logging::Critical("{}", msg);
   if (std::dynamic_pointer_cast<spdlog::async_logger>(spdlog::default_logger())) {
     std::cerr << msg << '\n';
   }

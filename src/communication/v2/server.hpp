@@ -13,6 +13,7 @@
 
 #include <boost/system/detail/errc.hpp>
 #include <string>
+#include "logging/log.hpp"
 
 #include <fmt/format.h>
 #include <boost/asio/io_context.hpp>
@@ -83,9 +84,9 @@ class Server final {
   bool Start();
 
   void Shutdown() {
-    spdlog::info("{} io shutting down.", service_name_);
+    memgraph::logging::Info("{} io shutting down.", service_name_);
     io_thread_pool_.Shutdown();
-    spdlog::info("{} shutdown.", service_name_);
+    memgraph::logging::Info("{} shutdown.", service_name_);
   }
 
   void AwaitShutdown() { io_thread_pool_.AwaitShutdown(); }
@@ -100,13 +101,13 @@ class Server final {
   void OnAccept(boost::system::error_code ec, tcp::socket socket);
 
   void OnError(const boost::system::error_code &ec, const std::string_view what) {
-    spdlog::error("Listener failed on {}: {}", what, ec.message());
+    memgraph::logging::Error("Listener failed on {}: {}", what, ec.message());
     if (ec == boost::system::errc::too_many_files_open || ec == boost::system::errc::too_many_files_open_in_system) {
-      spdlog::trace("too many open files... retrying");
+      memgraph::logging::Trace("too many open files... retrying");
       DoAccept();
       return;
     }
-    spdlog::trace("fatal communication error... shutting down");
+    memgraph::logging::Trace("fatal communication error... shutting down");
     Shutdown();
   }
 
@@ -154,7 +155,7 @@ Server<TSession, TSessionContext>::Server(ServerEndpoint &endpoint, TSessionCont
   // Bind to the server address
   (void)acceptor_.bind(endpoint_, ec);
   if (ec) {
-    spdlog::error(
+    memgraph::logging::Error(
         utils::MessageWithLink("Cannot bind to socket on endpoint {}.", endpoint_, "https://memgr.ph/socket"));
     OnError(ec, "bind");
     MG_ASSERT(false, "Failed to bind.");
@@ -172,15 +173,15 @@ Server<TSession, TSessionContext>::Server(ServerEndpoint &endpoint, TSessionCont
 template <typename TSession, typename TSessionContext>
 bool Server<TSession, TSessionContext>::Start() {
   if (IsRunning()) {
-    spdlog::error("The server is already running");
+    memgraph::logging::Error("The server is already running");
     return false;
   }
 
   io_thread_pool_.Run();
   DoAccept();
 
-  spdlog::info("{} server is fully armed and operational", service_name_);
-  spdlog::info("{} listening on {}", service_name_, endpoint_);
+  memgraph::logging::Info("{} server is fully armed and operational", service_name_);
+  memgraph::logging::Info("{} listening on {}", service_name_, endpoint_);
   return true;
 }
 

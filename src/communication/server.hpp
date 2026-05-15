@@ -17,6 +17,7 @@
 #include <optional>
 #include <thread>
 #include <vector>
+#include "logging/log.hpp"
 
 #include <fmt/format.h>
 
@@ -92,14 +93,14 @@ class Server final {
     alive_.store(true);
 
     if (!socket_.Bind(endpoint_)) {
-      spdlog::error(utils::MessageWithLink(
+      memgraph::logging::Error(utils::MessageWithLink(
           "Cannot bind to socket on endpoint {}.", endpoint_.SocketAddress(), "https://memgr.ph/socket"));
       alive_.store(false);
       return false;
     }
     socket_.SetTimeout(1, 0);
     if (!socket_.Listen(1024)) {
-      spdlog::error(
+      memgraph::logging::Error(
           utils::MessageWithLink("Cannot listen on socket {}", endpoint_.SocketAddress(), "https://memgr.ph/socket"));
       alive_.store(false);
       return false;
@@ -110,14 +111,14 @@ class Server final {
     thread_ = std::thread([this]() {
       utils::ThreadSetName(fmt::format("{} server", service_name_));
 
-      spdlog::info("{} server is fully armed and operational", service_name_);
-      spdlog::info("{} listening on {}", service_name_, socket_.endpoint().SocketAddress());
+      memgraph::logging::Info("{} server is fully armed and operational", service_name_);
+      memgraph::logging::Info("{} listening on {}", service_name_, socket_.endpoint().SocketAddress());
 
       while (alive_) {
         AcceptConnection();
       }
 
-      spdlog::info("{} shutting down...", service_name_);
+      memgraph::logging::Info("{} shutting down...", service_name_);
     });
 
     return true;
@@ -158,7 +159,7 @@ class Server final {
       return;
     }
     auto const endpoint = s->endpoint();
-    spdlog::info("Accepted a {} connection from {}.", service_name_, endpoint.SocketAddress());
+    memgraph::logging::Info("Accepted a {} connection from {}.", service_name_, endpoint.SocketAddress());
     listener_.AddConnection(std::move(*s));
   }
 

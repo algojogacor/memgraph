@@ -19,6 +19,7 @@
 #include <span>
 #include <string_view>
 #include <utility>
+#include "logging/log.hpp"
 
 #include <openssl/bio.h>
 #include <openssl/err.h>
@@ -202,7 +203,7 @@ class Session final {
           throw utils::BasicException(SslGetLastError());
         } else {
           // This is a fatal error.
-          spdlog::error(utils::MessageWithLink(
+          memgraph::logging::Error(utils::MessageWithLink(
               "An unknown error occurred while processing SSL messages. "
               "Please make sure that you have SSL properly configured on the server and the client.",
               "https://memgr.ph/ssl"));

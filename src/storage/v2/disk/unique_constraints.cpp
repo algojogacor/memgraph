@@ -14,6 +14,7 @@
 #include <limits>
 #include <optional>
 #include <tuple>
+#include "logging/log.hpp"
 #include "spdlog/spdlog.h"
 #include "storage/v2/constraints/unique_constraints.hpp"
 #include "storage/v2/disk/delta_utils.hpp"
@@ -119,7 +120,7 @@ bool DiskUniqueConstraints::InsertConstraint(
   /// TODO: how about extracting to commit
   auto status = disk_transaction->Commit();
   if (!status.ok()) {
-    spdlog::error("rocksdb: {}", status.getState());
+    memgraph::logging::Error("rocksdb: {}", status.getState());
     return false;
   }
   memgraph::metrics::IncrementCounter(memgraph::metrics::ActiveUniqueConstraints);
@@ -207,7 +208,7 @@ bool DiskUniqueConstraints::ClearDeletedVertex(const std::string_view gid,
   disk_transaction->SetCommitTimestamp(transaction_commit_timestamp);
   auto status = disk_transaction->Commit();
   if (!status.ok()) {
-    spdlog::error("rocksdb: {}", status.getState());
+    memgraph::logging::Error("rocksdb: {}", status.getState());
   }
   return status.ok();
 }
@@ -238,11 +239,11 @@ bool DiskUniqueConstraints::DeleteVerticesWithRemovedConstraintLabel(DeletionEnt
     disk_transaction->SetCommitTimestamp(transaction_commit_timestamp);
     auto status = disk_transaction->Commit();
     if (!status.ok()) {
-      spdlog::error("rocksdb: {}", status.getState());
+      memgraph::logging::Error("rocksdb: {}", status.getState());
     }
     return status.ok();
   }
-  spdlog::error("Deletion of vertices with removed constraint label failed.");
+  memgraph::logging::Error("Deletion of vertices with removed constraint label failed.");
   return false;
 }
 
@@ -253,7 +254,7 @@ bool DiskUniqueConstraints::SyncVertexToUniqueConstraintsStorage(const Vertex &v
       kvstore_->db_->BeginTransaction(rocksdb::WriteOptions(), rocksdb::TransactionOptions()));
 
   if (auto maybe_old_disk_key = disk::GetOldDiskKeyOrNull(vertex.delta()); maybe_old_disk_key.has_value()) {
-    spdlog::trace("Found old disk key {} for vertex {}", maybe_old_disk_key.value(), vertex.gid.ToString());
+    memgraph::logging::Trace("Found old disk key {} for vertex {}", maybe_old_disk_key.value(), vertex.gid.ToString());
     if (auto status = disk_transaction->Delete(maybe_old_disk_key.value()); !status.ok()) {
       return false;
     }
@@ -273,7 +274,7 @@ bool DiskUniqueConstraints::SyncVertexToUniqueConstraintsStorage(const Vertex &v
   disk_transaction->SetCommitTimestamp(commit_timestamp);
   auto status = disk_transaction->Commit();
   if (!status.ok()) {
-    spdlog::error("rocksdb: {}", status.getState());
+    memgraph::logging::Error("rocksdb: {}", status.getState());
   }
   return status.ok();
 }
@@ -353,7 +354,7 @@ void DiskUniqueConstraints::Clear() {
   disk_transaction->SetCommitTimestamp(0);
   auto status = disk_transaction->Commit();
   if (!status.ok()) {
-    spdlog::error("rocksdb: {}", status.getState());
+    memgraph::logging::Error("rocksdb: {}", status.getState());
   }
 }
 

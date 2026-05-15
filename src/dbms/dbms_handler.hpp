@@ -24,6 +24,7 @@
 #include <system_error>
 #include <type_traits>
 #include <utility>
+#include "logging/log.hpp"
 
 #include "constants.hpp"
 #include "dbms/database.hpp"
@@ -178,43 +179,43 @@ class DbmsHandler {
     }
 
     const auto name_view = config.name.str_view();
-    spdlog::debug("Trying to create db '{}' on replica which already exists.", *name_view);
+    memgraph::logging::Debug("Trying to create db '{}' on replica which already exists.", *name_view);
 
     auto db = Get_(*name_view);
-    spdlog::debug("Aligning database with name {} which has UUID {}, where config UUID is {}",
-                  *name_view,
-                  std::string(db->uuid()),
-                  std::string(config.uuid));
+    memgraph::logging::Debug("Aligning database with name {} which has UUID {}, where config UUID is {}",
+                             *name_view,
+                             std::string(db->uuid()),
+                             std::string(config.uuid));
     if (db->uuid() == config.uuid) {  // Same db
       return db;
     }
 
-    spdlog::debug("Different UUIDs");
+    memgraph::logging::Debug("Different UUIDs");
 
     // TODO: Fix this hack
     if (*name_view == kDefaultDB) {
       const memory::DbArenaScope db_arena_scope{db.get()};
       auto *storage = db->storage();
-      spdlog::debug("Last commit timestamp for DB {} is {}",
-                    kDefaultDB,
-                    storage->repl_storage_state_.commit_ts_info_.load(std::memory_order_acquire).ldt_);
+      memgraph::logging::Debug("Last commit timestamp for DB {} is {}",
+                               kDefaultDB,
+                               storage->repl_storage_state_.commit_ts_info_.load(std::memory_order_acquire).ldt_);
       // This seems correct, if database made progress
       if (storage->repl_storage_state_.commit_ts_info_.load(std::memory_order_acquire).ldt_ !=
           storage::kTimestampInitialId) {
-        spdlog::debug("Default storage is not clean, cannot update UUID...");
+        memgraph::logging::Debug("Default storage is not clean, cannot update UUID...");
         return std::unexpected{NewError::GENERIC};  // Update error
       }
-      spdlog::debug("Updated default db's UUID");
+      memgraph::logging::Debug("Updated default db's UUID");
       // Default db cannot be deleted and remade, have to just update the UUID
       storage->config_.salient.uuid = config.uuid;
       UpdateDurability(storage->config_, ".");
       return db;
     }
 
-    spdlog::debug("Dropping database {} with UUID: {} and recreating with the correct UUID: {}",
-                  *name_view,
-                  std::string(db->uuid()),
-                  std::string(config.uuid));
+    memgraph::logging::Debug("Dropping database {} with UUID: {} and recreating with the correct UUID: {}",
+                             *name_view,
+                             std::string(db->uuid()),
+                             std::string(config.uuid));
     // Defer drop
     (void)Delete_(db->name());
     // Second attempt
@@ -433,7 +434,7 @@ class DbmsHandler {
       auto db_acc = db_gk.access();
       if (db_acc) {
         auto *db = db_acc->get();
-        spdlog::debug("Restoring streams for database \"{}\"", db->name());
+        memgraph::logging::Debug("Restoring streams for database \"{}\"", db->name());
         db->streams()->RestoreStreams(*db_acc, ic);
       }
     }
@@ -528,7 +529,7 @@ class DbmsHandler {
     if (conf) {
       return conf->durability.storage_directory;
     }
-    spdlog::debug("Failed to find storage dir for database \"{}\"", name);
+    memgraph::logging::Debug("Failed to find storage dir for database \"{}\"", name);
     return {};
   }
 
@@ -544,7 +545,7 @@ class DbmsHandler {
     auto config_copy = default_config_;
     config_copy.salient.name = name;
     config_copy.salient.uuid = uuid;
-    spdlog::debug("Creating database '{}' - '{}'", name, std::string{uuid});
+    memgraph::logging::Debug("Creating database '{}' - '{}'", name, std::string{uuid});
     if (rel_dir) {
       storage::UpdatePaths(config_copy, default_config_.durability.storage_directory / *rel_dir);
     } else {
@@ -626,7 +627,7 @@ class DbmsHandler {
       const auto dir_name = std::filesystem::relative(item.path(), item.path().parent_path());
       auto const dir_name_str = dir_name.string();
       if (std::ranges::contains(skip, dir_name_str) || dir_name_str.starts_with(".")) {
-        spdlog::trace("{} won't be used for symlinking.", dir_name_str);
+        memgraph::logging::Trace("{} won't be used for symlinking.", dir_name_str);
         continue;
       }
       to_link.push_back(item.path());
@@ -659,11 +660,12 @@ class DbmsHandler {
           auto db_acc = Get_(db_name);
           if (profile.memory_limit > 0) {
             db_acc.get()->SetTenantMemoryLimit(profile.memory_limit);
-            spdlog::info(
+            memgraph::logging::Info(
                 "Applied tenant profile '{}' (limit={}) to database '{}'", profile.name, profile.memory_limit, db_name);
           }
         } catch (const UnknownDatabaseException &) {
-          spdlog::warn("Tenant profile '{}' references unknown database '{}' — skipping", profile.name, db_name);
+          memgraph::logging::Warn(
+              "Tenant profile '{}' references unknown database '{}' — skipping", profile.name, db_name);
         }
       }
     }

@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "utils/file.hpp"
+#include "logging/log.hpp"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -107,7 +108,7 @@ bool DeleteDir(const std::filesystem::path &dir) noexcept {
 
 auto GetFilesFromDir(std::filesystem::path const &dir) -> std::vector<std::filesystem::path> {
   if (!utils::DirExists(dir)) {
-    spdlog::error("Directory {} doesn't exist", dir);
+    memgraph::logging::Error("Directory {} doesn't exist", dir);
     return {};
   }
   std::error_code error_code;
@@ -121,7 +122,7 @@ bool DeleteFile(const std::filesystem::path &file) noexcept {
   std::error_code error_code;  // For exception suppression.
   auto const res = std::filesystem::remove(file, error_code);
   if (!res) {
-    spdlog::error("Couldn't delete file {}. Error code message: {}", file.string(), error_code.message());
+    memgraph::logging::Error("Couldn't delete file {}. Error code message: {}", file.string(), error_code.message());
   }
   return res;
 }
@@ -130,7 +131,7 @@ bool CopyFile(const std::filesystem::path &src, const std::filesystem::path &dst
   std::error_code error_code;  // For exception suppression.
   auto const res = std::filesystem::copy_file(src, dst, error_code);
   if (!res) {
-    spdlog::error("Error code message: {}", error_code.message());
+    memgraph::logging::Error("Error code message: {}", error_code.message());
   }
   return res;
 }
@@ -139,7 +140,7 @@ bool RenamePath(const std::filesystem::path &src, const std::filesystem::path &d
   std::error_code error_code;  // For exception suppression.
   std::filesystem::rename(src, dst, error_code);
   if (error_code) {
-    spdlog::error("Error code message: {}", error_code.message());
+    memgraph::logging::Error("Error code message: {}", error_code.message());
   }
   return !error_code;
 }
@@ -325,7 +326,7 @@ void InputFile::Close() noexcept {
   }
 
   if (ret != 0) {
-    spdlog::error("While trying to close {} an error occured: {} ({})", path_, strerror(errno), errno);
+    memgraph::logging::Error("While trying to close {} an error occured: {} ({})", path_, strerror(errno), errno);
   }
 
   fd_ = -1;
@@ -422,7 +423,8 @@ bool OutputFile::Open(const std::filesystem::path &path, Mode mode) {
 
   auto const res = fd_ != -1;
   if (!res) {
-    spdlog::error("While trying to open {} for writing an error occurred: {} ({})", path_, strerror(errno), errno);
+    memgraph::logging::Error(
+        "While trying to open {} for writing an error occurred: {} ({})", path_, strerror(errno), errno);
   }
   return res;
 }
@@ -521,7 +523,7 @@ auto OutputFile::AcquireLockWithTimeout(uint32_t data_dir_lock_acquisition_timeo
     if (std::chrono::steady_clock::now() - start_time > lock_file_timeout) {
       return false;
     }
-    spdlog::trace("Failed to acquire lock on {}, retrying in {}ms...", path_, sleep_time_ms);
+    memgraph::logging::Trace("Failed to acquire lock on {}, retrying in {}ms...", path_, sleep_time_ms);
     std::this_thread::sleep_for(std::chrono::milliseconds(sleep_time_ms));
   }
   std::unreachable();
@@ -707,7 +709,8 @@ bool NonConcurrentOutputFile::Open(const std::filesystem::path &path, Mode mode)
 
   auto const res = fd_ != -1;
   if (!res) {
-    spdlog::error("While trying to open {} for writing an error occurred: {} ({})", path_, strerror(errno), errno);
+    memgraph::logging::Error(
+        "While trying to open {} for writing an error occurred: {} ({})", path_, strerror(errno), errno);
   }
   return res;
 }

@@ -12,6 +12,7 @@
 #include <spdlog/spdlog.h>
 #include <mutex>
 #include <shared_mutex>
+#include "logging/log.hpp"
 
 #include "utils/exceptions.hpp"
 #include "utils/logging.hpp"
@@ -87,11 +88,11 @@ void Settings::SetValueForce(const std::string &setting_name, const std::string 
   const std::lock_guard settings_guard{settings_lock_};
   if (!storage_) return;
   if (!storage_->Get(setting_name).has_value()) {
-    spdlog::error("SetValueForce called for unregistered setting '{}'", setting_name);
+    memgraph::logging::Error("SetValueForce called for unregistered setting '{}'", setting_name);
     return;
   }
   if (!storage_->Put(setting_name, new_value)) {
-    spdlog::error("Failed to force-set setting '{}'", setting_name);
+    memgraph::logging::Error("Failed to force-set setting '{}'", setting_name);
   }
 }
 

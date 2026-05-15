@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "communication/context.hpp"
+#include "logging/log.hpp"
 
 #include <openssl/opensslv.h>
 #include <openssl/ssl.h>
@@ -131,21 +132,21 @@ auto ServerContext::reload() -> std::expected<void, SSL_CTX_Error> {
   new_ctx->use_certificate_chain_file(cert_file_, ec);
   if (ec) {
     auto err_msg = fmt::format("Couldn't load server certificate from file {}. Error: {}", cert_file_, ec.message());
-    spdlog::error(err_msg);
+    memgraph::logging::Error(err_msg);
     return std::unexpected{SSL_CTX_Error{.err_type = SSL_CTX_ERR_TYPE::FAIL_CERT_FILE, .msg = std::move(err_msg)}};
   }
   // NOLINTNEXTLINE(bugprone-unused-return-value)
   new_ctx->use_private_key_file(key_file_, ssl::context::pem, ec);
   if (ec) {
     auto err_msg = fmt::format("Couldn't load server private key from file {}. Error: {}", key_file_, ec.message());
-    spdlog::error(err_msg);
+    memgraph::logging::Error(err_msg);
     return std::unexpected{SSL_CTX_Error{.err_type = SSL_CTX_ERR_TYPE::FAIL_KEY_FILE, .msg = std::move(err_msg)}};
   }
   // NOLINTNEXTLINE(bugprone-unused-return-value)
   new_ctx->set_options(SSL_OP_NO_SSLv3, ec);
   if (ec) {
     auto err_msg = fmt::format("Setting options to SSL context failed! Error: {}", ec.message());
-    spdlog::error(err_msg);
+    memgraph::logging::Error(err_msg);
     return std::unexpected{SSL_CTX_Error{.err_type = SSL_CTX_ERR_TYPE::FAIL_SET_OPTIONS, .msg = std::move(err_msg)}};
   }
 
@@ -156,7 +157,7 @@ auto ServerContext::reload() -> std::expected<void, SSL_CTX_Error> {
     new_ctx->load_verify_file(ca_file_, ec);
     if (ec) {
       auto err_msg = fmt::format("Couldn't load certificate authority from file {}. Error: {}", ca_file_, ec.message());
-      spdlog::error(err_msg);
+      memgraph::logging::Error(err_msg);
       return std::unexpected{SSL_CTX_Error{.err_type = SSL_CTX_ERR_TYPE::FAIL_LOAD_CA, .msg = std::move(err_msg)}};
     }
 
@@ -166,7 +167,7 @@ auto ServerContext::reload() -> std::expected<void, SSL_CTX_Error> {
       new_ctx->set_verify_mode(ssl::verify_peer | ssl::verify_fail_if_no_peer_cert, ec);
       if (ec) {
         auto err_msg = fmt::format("Setting SSL verification mode failed! Error: {}", ec.message());
-        spdlog::error(err_msg);
+        memgraph::logging::Error(err_msg);
         return std::unexpected{
             SSL_CTX_Error{.err_type = SSL_CTX_ERR_TYPE::FAIL_SET_SSL_VERIFICATION_MODE, .msg = std::move(err_msg)}};
       }

@@ -13,6 +13,7 @@
 
 #include <list>
 #include <memory>
+#include "logging/log.hpp"
 
 #include <spdlog/spdlog.h>
 #include <boost/asio/io_context.hpp>
@@ -35,7 +36,7 @@ class Listener final : public std::enable_shared_from_this<Listener<TRequestHand
   using std::enable_shared_from_this<Listener<TRequestHandler, TSessionContext>>::shared_from_this;
 
   void LogErrorListener(boost::beast::error_code ec, const std::string_view what) {
-    spdlog::warn("HTTP listener failed on {}: {}", what, ec.message());
+    memgraph::logging::Warn("HTTP listener failed on {}: {}", what, ec.message());
   }
 
  public:
@@ -59,7 +60,7 @@ class Listener final : public std::enable_shared_from_this<Listener<TRequestHand
     try {
       return acceptor_.local_endpoint();
     } catch (const boost::system::system_error &e) {
-      spdlog::error("Failed to get remote endpoint for listener.");
+      memgraph::logging::Error("Failed to get remote endpoint for listener.");
       return std::nullopt;
     }
   }
@@ -101,7 +102,7 @@ class Listener final : public std::enable_shared_from_this<Listener<TRequestHand
       return;
     }
 
-    spdlog::info("HTTP server is listening on {}", endpoint);
+    memgraph::logging::Info("HTTP server is listening on {}", endpoint);
   }
 
   void DoAccept() {

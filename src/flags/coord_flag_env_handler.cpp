@@ -29,6 +29,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "logging/log.hpp"
 
 #include "flags/coord_flag_env_handler.hpp"
 #include "flags/coordination.hpp"
@@ -77,7 +78,7 @@ void SetFinalCoordinationSetup() {
                              is_flag_set(FLAGS_coordinator_hostname);
 
   if (any_flags_set && any_envs_set) {
-    spdlog::warn(
+    memgraph::logging::Warn(
         "Both environment variables and flags are set for coordinator setup. Using environment variables as priority. "
         "Flags will be ignored.");
   }
@@ -102,7 +103,7 @@ void SetFinalCoordinationSetup() {
         maybe_coord_envs | ranges::views::transform(trim) | ranges::to<std::vector<std::optional<std::string>>>;
 
     if (any_envs_set) {
-      spdlog::trace("Coordinator will be initialized using environment variables.");
+      memgraph::logging::Trace("Coordinator will be initialized using environment variables.");
       return CoordinationSetup{
           .management_port = coord_envs[0] ? std::stoi(coord_envs[0].value()) : 0,
           .coordinator_port = coord_envs[1] ? std::stoi(coord_envs[1].value()) : 0,
@@ -111,7 +112,7 @@ void SetFinalCoordinationSetup() {
           .coordinator_hostname = coord_envs[4] ? coord_envs[4].value() : ""};
     }
 
-    spdlog::trace("Coordinator will be initialized using flags.");
+    memgraph::logging::Trace("Coordinator will be initialized using flags.");
     return CoordinationSetup{.management_port = FLAGS_management_port,
                              .coordinator_port = FLAGS_coordinator_port,
                              .coordinator_id = FLAGS_coordinator_id,

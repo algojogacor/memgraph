@@ -15,6 +15,7 @@
 #include <optional>
 #include <storage/v2/replication/rpc.hpp>
 #include <utility>
+#include "logging/log.hpp"
 
 #include "communication/client.hpp"
 #include "io/network/endpoint.hpp"
@@ -126,10 +127,10 @@ class Client {
 
       // Finalize the request.
       req_builder_.Finalize();
-      spdlog::trace("[RpcClient] sent {}, version {}, to {}",
-                    req_type_name,
-                    TRequestResponse::Request::kVersion,
-                    self_->client_->endpoint().SocketAddress());
+      memgraph::logging::Trace("[RpcClient] sent {}, version {}, to {}",
+                               req_type_name,
+                               TRequestResponse::Request::kVersion,
+                               self_->client_->endpoint().SocketAddress());
 
       while (true) {
         // Receive the response.
@@ -183,17 +184,17 @@ class Client {
 
         if (maybe_message_header->message_id == utils::TypeId::REP_IN_PROGRESS_RES) {
           // Continue holding the lock
-          spdlog::info("[RpcClient] Received InProgressRes RPC message from {}:{}. Waiting for {}.",
-                       self_->endpoint_.GetAddress(),
-                       self_->endpoint_.GetPort(),
-                       final_res_type_name);
+          memgraph::logging::Info("[RpcClient] Received InProgressRes RPC message from {}:{}. Waiting for {}.",
+                                  self_->endpoint_.GetAddress(),
+                                  self_->endpoint_.GetPort(),
+                                  final_res_type_name);
           self_->client_->ShiftData(response_data_size);
           continue;
         }
 
         if (maybe_message_header->message_id != final_res_type.id) {
-          spdlog::error("[RpcClient] Message response was of unexpected type, received TypeId {}",
-                        static_cast<uint64_t>(maybe_message_header->message_id));
+          memgraph::logging::Error("[RpcClient] Message response was of unexpected type, received TypeId {}",
+                                   static_cast<uint64_t>(maybe_message_header->message_id));
           // Logically invalid state, connection is still up, defunct stream and release
           defunct_ = true;
           guard_.unlock();
@@ -201,11 +202,11 @@ class Client {
           throw GenericRpcFailedException();
         }
 
-        spdlog::trace("[RpcClient] received {}, version {}, from endpoint {}:{}.",
-                      final_res_type_name,
-                      maybe_message_header->message_version,
-                      self_->endpoint_.GetAddress(),
-                      self_->endpoint_.GetPort());
+        memgraph::logging::Trace("[RpcClient] received {}, version {}, from endpoint {}:{}.",
+                                 final_res_type_name,
+                                 maybe_message_header->message_version,
+                                 self_->endpoint_.GetAddress(),
+                                 self_->endpoint_.GetPort());
         self_->client_->ShiftData(response_data_size);
         return res_load_(&res_reader);
       }
@@ -221,10 +222,10 @@ class Client {
       // Finalize the request.
       req_builder_.Finalize();
 
-      spdlog::trace("[RpcClient] sent {}, version {}, to {}",
-                    req_type_name,
-                    TRequestResponse::Request::kVersion,
-                    self_->client_->endpoint().SocketAddress());
+      memgraph::logging::Trace("[RpcClient] sent {}, version {}, to {}",
+                               req_type_name,
+                               TRequestResponse::Request::kVersion,
+                               self_->client_->endpoint().SocketAddress());
 
       // Receive the response.
       uint64_t response_data_size = 0;
@@ -277,20 +278,20 @@ class Client {
       // Check the response ID.
       if (maybe_message_header->message_id != res_type.id &&
           maybe_message_header->message_id != utils::TypeId::UNKNOWN) {
-        spdlog::error("Message response was of unexpected type. Received ID {} and expected {}",
-                      static_cast<uint64_t>(maybe_message_header->message_id),
-                      static_cast<uint64_t>(res_type.id));
+        memgraph::logging::Error("Message response was of unexpected type. Received ID {} and expected {}",
+                                 static_cast<uint64_t>(maybe_message_header->message_id),
+                                 static_cast<uint64_t>(res_type.id));
         // Logically invalid state, connection is still up, defunct stream and release
         defunct_ = true;
         guard_.unlock();
         throw GenericRpcFailedException();
       }
 
-      spdlog::trace("[RpcClient] received {}, version {} from endpoint {}:{}.",
-                    res_type_name,
-                    maybe_message_header->message_version,
-                    self_->endpoint_.GetAddress(),
-                    self_->endpoint_.GetPort());
+      memgraph::logging::Trace("[RpcClient] received {}, version {} from endpoint {}:{}.",
+                               res_type_name,
+                               maybe_message_header->message_version,
+                               self_->endpoint_.GetAddress(),
+                               self_->endpoint_.GetPort());
 
       return res_load_(&res_reader);
     }
@@ -423,7 +424,7 @@ class Client {
     if (!client_) {
       client_.emplace(context_);
       if (!client_->Connect(endpoint_)) {
-        spdlog::error("Couldn't connect to remote address {}", endpoint_.SocketAddress());
+        memgraph::logging::Error("Couldn't connect to remote address {}", endpoint_.SocketAddress());
         client_ = std::nullopt;
         throw RpcFailedToConnectException();
       }

@@ -16,6 +16,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "logging/log.hpp"
 
 #include <gflags/gflags.h>
 
@@ -67,7 +68,7 @@ inline void LoadConfig(const std::string &product_name) {
 inline std::pair<std::string, std::string> LoadUsernameAndPassword(const std::string &pass_file) {
   std::ifstream file(pass_file);
   if (file.fail()) {
-    spdlog::warn("Problem with opening MG_PASSFILE, memgraph server will start without user");
+    memgraph::logging::Warn("Problem with opening MG_PASSFILE, memgraph server will start without user");
     return {};
   }
   std::vector<std::string> result;
@@ -94,7 +95,7 @@ inline std::pair<std::string, std::string> LoadUsernameAndPassword(const std::st
   file.close();
 
   if (result.size() != 2) {
-    spdlog::warn(
+    memgraph::logging::Warn(
         "Wrong data format. Data should be store in format: username:password, memgraph server will start without "
         "user");
     return {};

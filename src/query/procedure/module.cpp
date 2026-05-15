@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "query/procedure/module.hpp"
+#include "logging/log.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -854,13 +855,13 @@ SharedLibraryModule::~SharedLibraryModule() {
 
 bool SharedLibraryModule::Load(const std::filesystem::path &file_path) {
   MG_ASSERT(!handle_, "Attempting to load an already loaded module...");
-  spdlog::info("Loading module {}...", file_path);
+  memgraph::logging::Info("Loading module {}...", file_path);
   file_path_ = file_path;
   dlerror();  // Clear any existing error.
   // NOLINTNEXTLINE(hicpp-signed-bitwise)
   handle_ = dlopen(file_path.c_str(), RTLD_NOW | RTLD_LOCAL);
   if (!handle_) {
-    spdlog::error(
+    memgraph::logging::Error(
         utils::MessageWithLink("Unable to load module {}; {}.", file_path, dlerror(), "https://memgr.ph/modules"));
     return false;
   }
@@ -868,7 +869,7 @@ bool SharedLibraryModule::Load(const std::filesystem::path &file_path) {
   init_fn_ = reinterpret_cast<int (*)(mgp_module *, mgp_memory *)>(dlsym(handle_, "mgp_init_module"));
   char *dl_errored = dlerror();
   if (!init_fn_ || dl_errored) {
-    spdlog::error(
+    memgraph::logging::Error(
         utils::MessageWithLink("Unable to load module {}; {}.", file_path, dl_errored, "https://memgr.ph/modules"));
     dlclose(handle_);
     handle_ = nullptr;
@@ -878,7 +879,7 @@ bool SharedLibraryModule::Load(const std::filesystem::path &file_path) {
     // Run mgp_init_module which must succeed.
     int init_res = init_fn_(module_def, memory);
     auto with_error = [this](std::string_view error_msg) {
-      spdlog::error(error_msg);
+      memgraph::logging::Error(error_msg);
       dlclose(handle_);
       handle_ = nullptr;
       return false;
@@ -912,27 +913,27 @@ bool SharedLibraryModule::Load(const std::filesystem::path &file_path) {
   // Get optional mgp_shutdown_module
   shutdown_fn_ = reinterpret_cast<int (*)()>(dlsym(handle_, "mgp_shutdown_module"));
   dl_errored = dlerror();
-  if (dl_errored) spdlog::warn("When loading module {}; {}", file_path, dl_errored);
-  spdlog::info("Loaded module {}", file_path);
+  if (dl_errored) memgraph::logging::Warn("When loading module {}; {}", file_path, dl_errored);
+  memgraph::logging::Info("Loaded module {}", file_path);
   return true;
 }
 
 bool SharedLibraryModule::Close() {
   MG_ASSERT(handle_, "Attempting to close a module that has not been loaded...");
-  spdlog::info("Closing module {}...", file_path_);
+  memgraph::logging::Info("Closing module {}...", file_path_);
   // non-existent shutdown function is semantically the same as a shutdown
   // function that does nothing.
   int shutdown_res = 0;
   if (shutdown_fn_) shutdown_res = shutdown_fn_();
   if (shutdown_res != 0) {
-    spdlog::warn("When closing module {}; mgp_shutdown_module returned {}", file_path_, shutdown_res);
+    memgraph::logging::Warn("When closing module {}; mgp_shutdown_module returned {}", file_path_, shutdown_res);
   }
   if (dlclose(handle_) != 0) {
-    spdlog::error(
+    memgraph::logging::Error(
         utils::MessageWithLink("Failed to close module {}; {}.", file_path_, dlerror(), "https://memgr.ph/modules"));
     return false;
   }
-  spdlog::info("Closed module {}", file_path_);
+  memgraph::logging::Info("Closed module {}", file_path_);
   handle_ = nullptr;
   procedures_.clear();
   return true;
@@ -992,18 +993,18 @@ PythonModule::~PythonModule() {
   try {
     if (py_module_) Close();
   } catch (std::exception const &e) {
-    spdlog::error("Exception during PythonModule cleanup for {}, {}", file_path_.string(), e.what());
+    memgraph::logging::Error("Exception during PythonModule cleanup for {}, {}", file_path_.string(), e.what());
   }
 }
 
 bool PythonModule::Load(const std::filesystem::path &file_path) {
   MG_ASSERT(!py_module_, "Attempting to load an already loaded module...");
-  spdlog::info("Loading module {}...", file_path);
+  memgraph::logging::Info("Loading module {}...", file_path);
   file_path_ = file_path;
   auto gil = py::EnsureGIL();
   auto maybe_exc = py::AppendToSysPath(file_path.parent_path().c_str());
   if (maybe_exc) {
-    spdlog::error(
+    memgraph::logging::Error(
         utils::MessageWithLink("Unable to load module {}; {}.", file_path, *maybe_exc, "https://memgr.ph/modules"));
     return false;
   }
@@ -1028,30 +1029,30 @@ bool PythonModule::Load(const std::filesystem::path &file_path) {
   };
   py_module_ = WithModuleRegistration(&procedures_, &transformations_, &functions_, module_cb);
   if (py_module_) {
-    spdlog::info("Loaded module {}", file_path);
+    memgraph::logging::Info("Loaded module {}", file_path);
 
     if (!succ) {
       if (!batched_void_proc_name.empty()) {
-        spdlog::error(
+        memgraph::logging::Error(
             "Unable to load module {}; void procedures cannot be batched (procedure '{}' declares no result fields).",
             file_path,
             batched_void_proc_name);
       } else {
-        spdlog::error("Unable to add result to transformation");
+        memgraph::logging::Error("Unable to add result to transformation");
       }
       return false;
     }
     return true;
   }
   auto exc_info = py::FetchError().value();
-  spdlog::error(
+  memgraph::logging::Error(
       utils::MessageWithLink("Unable to load module {}; {}.", file_path, exc_info, "https://memgr.ph/modules"));
   return false;
 }
 
 bool PythonModule::Close() {
   MG_ASSERT(py_module_, "Attempting to close a module that has not been loaded...");
-  spdlog::info("Closing module {}...", file_path_);
+  memgraph::logging::Info("Closing module {}...", file_path_);
 
   // If the Python interpreter is finalizing, we should avoid complex cleanup
   // that involves running scripts, as it might fail or cause crashes.
@@ -1075,7 +1076,7 @@ bool PythonModule::Close() {
   // returns a borrowed reference to the internal modules dictionary.
   PyObject *sys_mod_ref = PyImport_GetModuleDict();
   if (!sys_mod_ref) {
-    spdlog::warn("Failed to get sys.modules dictionary");
+    memgraph::logging::Warn("Failed to get sys.modules dictionary");
     py_module_ = py::Object(nullptr);
     return false;
   }
@@ -1104,16 +1105,16 @@ bool PythonModule::Close() {
     std::error_code ec;
     std::filesystem::remove_all(submodule / "__pycache__", ec);
     if (ec) {
-      spdlog::warn("Failed to remove __pycache__ in {}: {}", submodule.string(), ec.message());
+      memgraph::logging::Warn("Failed to remove __pycache__ in {}: {}", submodule.string(), ec.message());
     }
     auto rec_it = std::filesystem::recursive_directory_iterator(submodule, ec);
     if (ec) {
-      spdlog::warn("Failed to iterate submodule {}: {}", submodule.string(), ec.message());
+      memgraph::logging::Warn("Failed to iterate submodule {}: {}", submodule.string(), ec.message());
       continue;
     }
     for (; rec_it != std::filesystem::recursive_directory_iterator(); rec_it.increment(ec)) {
       if (ec) {
-        spdlog::warn("Failed to iterate in {}: {}", submodule.string(), ec.message());
+        memgraph::logging::Warn("Failed to iterate in {}: {}", submodule.string(), ec.message());
         break;
       }
       auto const &rec_dir_entry = *rec_it;
@@ -1122,7 +1123,8 @@ bool PythonModule::Close() {
         ec.clear();
         std::filesystem::remove_all(rec_dir_entry.path() / "__pycache__", ec);
         if (ec) {
-          spdlog::warn("Failed to remove __pycache__ in {}: {}", rec_dir_entry.path().string(), ec.message());
+          memgraph::logging::Warn(
+              "Failed to remove __pycache__ in {}: {}", rec_dir_entry.path().string(), ec.message());
         }
       }
       std::string const rec_dir_entry_ext = rec_dir_entry.path().extension().string();
@@ -1133,7 +1135,7 @@ bool PythonModule::Close() {
 
   // first throw out of cache file
   if (PyDict_DelItemString(sys_mod_ref, file_path_.stem().c_str()) != 0) {
-    spdlog::warn("Failed to remove the module {} from sys.modules", file_path_.stem().c_str());
+    memgraph::logging::Warn("Failed to remove the module {} from sys.modules", file_path_.stem().c_str());
     PyErr_Clear();
     py_module_ = py::Object(nullptr);
     return false;
@@ -1142,7 +1144,7 @@ bool PythonModule::Close() {
   // Remove the cached bytecode if it's present
   std::filesystem::remove_all(file_path_.parent_path() / "__pycache__");
   py_module_ = py::Object(nullptr);
-  spdlog::info("Closed module {}", file_path_);
+  memgraph::logging::Info("Closed module {}", file_path_);
   return true;
 }
 
@@ -1193,7 +1195,8 @@ void ProcessFileDependencies(std::filesystem::path file_path_, const char *modul
     const py::Object py_run_res(PyRun_String(func_code, Py_file_input, sandbox_dict.Ptr(), sandbox_dict.Ptr()));
     if (!py_run_res) {
       if (auto exc = py::FetchError()) {
-        spdlog::warn("Python dependency scan failed for {}: {}", file_path_.string(), py::FormatException(*exc));
+        memgraph::logging::Warn(
+            "Python dependency scan failed for {}: {}", file_path_.string(), py::FormatException(*exc));
       }
       return;
     }
@@ -1247,7 +1250,8 @@ void ProcessFileDependencies(std::filesystem::path file_path_, const char *modul
         const std::string_view sys_mod_key_name_str(sys_mod_key_name);
         if (sys_mod_key_name_str.starts_with(module_name_str) && sys_mod_key_name_str != module_path) {
           if (PyDict_DelItemString(sys_mod_ref, sys_mod_key_name) != 0) {
-            spdlog::warn("Failed to remove stale sys.modules entry '{}' during module cleanup", sys_mod_key_name);
+            memgraph::logging::Warn("Failed to remove stale sys.modules entry '{}' during module cleanup",
+                                    sys_mod_key_name);
             PyErr_Clear();
           }
         }
@@ -1298,14 +1302,15 @@ constexpr std::array<const char *, 5> kEnterpriseModuleList = {
 std::unique_ptr<Module> LoadModuleFromFile(const std::filesystem::path &path) {
   const auto &ext = path.extension();
   if (ext != ".so" && ext != ".py") {
-    spdlog::warn(utils::MessageWithLink("Unknown query module file {}.", path, "https://memgr.ph/modules"));
+    memgraph::logging::Warn(utils::MessageWithLink("Unknown query module file {}.", path, "https://memgr.ph/modules"));
     return nullptr;
   }
 #ifdef MG_ENTERPRISE
   const auto name = path.stem().string();
   if (!memgraph::license::global_license_checker.IsEnterpriseValidFast() &&
       std::ranges::contains(kEnterpriseModuleList, name)) {
-    spdlog::warn(fmt::format("Failed to load query module {} because it requires a valid enterprise license.", path));
+    memgraph::logging::Warn(
+        fmt::format("Failed to load query module {} because it requires a valid enterprise license.", path));
     return nullptr;
   }
 #endif
@@ -1343,7 +1348,7 @@ bool ModuleRegistry::TryEraseAllModules() {
   auto const any_used =
       ranges::any_of(modules_ | ranges::views::values, [](auto const &module) { return module.use_count() != 1; });
   if (any_used) {
-    spdlog::warn("At least one module was still in use");
+    memgraph::logging::Warn("At least one module was still in use");
     return false;
   }
 
@@ -1355,11 +1360,12 @@ bool ModuleRegistry::RegisterModule(const std::string_view name, std::unique_ptr
   MG_ASSERT(!name.empty(), "Module name cannot be empty");
   MG_ASSERT(module, "Tried to register an invalid module");
   if (ReservedBuiltInModuleNames().contains(name)) {
-    spdlog::error(utils::MessageWithLink("Unable to overwrite a builtin module {}.", name, "https://memgr.ph/modules"));
+    memgraph::logging::Error(
+        utils::MessageWithLink("Unable to overwrite a builtin module {}.", name, "https://memgr.ph/modules"));
     return false;
   }
   if (modules_.contains(name)) {
-    spdlog::error(
+    memgraph::logging::Error(
         utils::MessageWithLink("Unable to overwrite an already loaded module {}.", name, "https://memgr.ph/modules"));
     return false;
   }
@@ -1408,7 +1414,7 @@ const std::vector<std::filesystem::path> &ModuleRegistry::GetModulesDirectory() 
 
 bool ModuleRegistry::LoadModuleIfFound(const std::filesystem::path &modules_dir, const std::string_view name) {
   if (!utils::DirExists(modules_dir)) {
-    spdlog::error(
+    memgraph::logging::Error(
         utils::MessageWithLink("Module directory {} doesn't exist.", modules_dir, "https://memgr.ph/modules"));
     return false;
   }
@@ -1447,7 +1453,7 @@ void ModuleRegistry::LoadModulesFromDirectory(const std::filesystem::path &modul
   // all modules except mg are deleted before this
   if (modules_dir.empty()) return;
   if (!utils::DirExists(modules_dir)) {
-    spdlog::error(
+    memgraph::logging::Error(
         utils::MessageWithLink("Module directory {} doesn't exist.", modules_dir, "https://memgr.ph/modules"));
     return;
   }

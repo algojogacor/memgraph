@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "storage/v2/replication/serialization.hpp"
+#include "logging/log.hpp"
 
 namespace memgraph::storage::replication {
 ////// Encoder //////
@@ -74,11 +75,11 @@ bool Encoder::WriteFile(const std::filesystem::path &path, std::filesystem::path
   builder_->PrepareForFileSending();
   utils::InputFile file;
   if (!file.Open(path)) {
-    spdlog::error("Failed to open file {}.", path);
+    memgraph::logging::Error("Failed to open file {}.", path);
     return false;
   }
   if (!path.has_filename()) {
-    spdlog::error("Path {} does not have a filename.", path);
+    memgraph::logging::Error("Path {} does not have a filename.", path);
     return false;
   }
   WriteString(path_to_write.string());

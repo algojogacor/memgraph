@@ -11,6 +11,7 @@
 
 #include "storage/v2/indices/text_edge_index.hpp"
 #include <spdlog/spdlog.h>
+#include "logging/log.hpp"
 #include "mgcxx_text_search.hpp"
 #include "query/exceptions.hpp"
 #include "storage/v2/edge_accessor.hpp"
@@ -29,7 +30,7 @@ TextEdgeIndexData::~TextEdgeIndexData() {
     try {
       mgcxx::text_search::drop_index(std::move(context));
     } catch (...) {
-      spdlog::error("Failed to drop text edge index during deferred cleanup");
+      memgraph::logging::Error("Failed to drop text edge index during deferred cleanup");
     }
   }
 }
@@ -62,7 +63,7 @@ void TextEdgeIndex::CreateTantivyIndex(const std::string &index_path, const Text
     new_map->emplace(index_info.index_name, std::move(data));
     index_ = std::move(new_map);
   } catch (const std::exception &e) {
-    spdlog::error(
+    memgraph::logging::Error(
         "Failed to create text edge index {} at path: {}. Error: {}", index_info.index_name, index_path, e.what());
     throw query::TextSearchException("Tantivy error: {}", e.what());
   }
@@ -132,7 +133,7 @@ void TextEdgeIndex::RecoverIndex(const TextEdgeIndexSpec &index_info, utils::Ski
     if (needs_rebuild) throw;
     // It's possible that index on disk has incompatible schema if, for example, new required properties were added to
     // the index spec in new versions
-    spdlog::warn("Text edge index {} has incompatible schema on disk, rebuilding.", index_info.index_name);
+    memgraph::logging::Warn("Text edge index {} has incompatible schema on disk, rebuilding.", index_info.index_name);
     std::error_code ec;
     std::filesystem::remove_all(index_path, ec);
     if (ec)

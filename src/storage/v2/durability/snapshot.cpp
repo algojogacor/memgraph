@@ -11,6 +11,7 @@
 
 #include "storage/v2/durability/snapshot.hpp"
 #include <range/v3/all.hpp>
+#include "logging/log.hpp"
 
 #include <fmt/core.h>
 #include <sys/sendfile.h>
@@ -209,11 +210,12 @@ bool WaitAndCombine(task_results_t &partial_results, SnapshotEncoder &snapshot_e
     auto const task_ok = promise.get_future().get();  // Wait for incoming result
     if (!task_ok) all_ok = false;
 
-    spdlog::trace("Handling snapshot part {}, size {}, count {}...", res.snapshot_path, res.snapshot_size, res.count);
+    memgraph::logging::Trace(
+        "Handling snapshot part {}, size {}, count {}...", res.snapshot_path, res.snapshot_size, res.count);
     utils::OnScopeExit cleanup{[path = res.snapshot_path] {
       std::error_code ec;
       std::filesystem::remove(path, ec);
-      if (ec) spdlog::warn("Couldn't remove temporary snapshot part {}: {}", path, ec.message());
+      if (ec) memgraph::logging::Warn("Couldn't remove temporary snapshot part {}: {}", path, ec.message());
     }};
 
     if (!task_ok || snapshot_aborted()) {
@@ -247,7 +249,7 @@ bool WaitAndCombine(task_results_t &partial_results, SnapshotEncoder &snapshot_e
           throw RecoveryFailure("Couldn't copy {} part to snapshot! Error: {}", res.snapshot_path, strerror(errno));
         }
         if (bytes_sent == 0) {
-          spdlog::trace("EOF {}", res.snapshot_path);
+          memgraph::logging::Trace("EOF {}", res.snapshot_path);
           break;
         }
         size -= bytes_sent;
@@ -309,7 +311,7 @@ bool MultiThreadedWorkflow(utils::SkipListDb<Edge> *edges, utils::SkipListDb<Ver
           SnapshotEncoder edges_snapshot;
           const auto snapshot_path = fmt::format("{}_edge_part_{}", path, id);
           if (!edges_snapshot.Initialize(snapshot_path)) {
-            spdlog::warn(
+            memgraph::logging::Warn(
                 "Failed to open snapshot file {} in MultiThreadedWorkflow. Snapshot creation will be retried on the "
                 "next scheduled interval",
                 snapshot_path);
@@ -341,7 +343,7 @@ bool MultiThreadedWorkflow(utils::SkipListDb<Edge> *edges, utils::SkipListDb<Ver
         SnapshotEncoder vertex_snapshot;
         const auto snapshot_path = fmt::format("{}_vertex_part_{}", path, id);
         if (!vertex_snapshot.Initialize(snapshot_path)) {
-          spdlog::warn(
+          memgraph::logging::Warn(
               "Failed to open snapshot file {} in MultiThreadedWorkflow. Snapshot creation will be retried on the "
               "next scheduled interval",
               snapshot_path);
@@ -730,15 +732,15 @@ void LoadPartialEdges(const std::filesystem::path &path, utils::SkipListDb<Edge>
   // Recover edges.
   auto edge_acc = edges.access();
   uint64_t last_edge_gid = 0;
-  spdlog::info("Recovering {} edges.", edges_count);
+  memgraph::logging::Info("Recovering {} edges.", edges_count);
   if (!snapshot.SetPosition(from_offset)) throw RecoveryFailure("Couldn't set offset position for reading edges!");
 
   std::vector<std::pair<PropertyId, PropertyValue>> read_properties;
   uint64_t five_percent_chunk = edges_count / 20;
   if (five_percent_chunk == 0) {
-    spdlog::debug("Started to recover edge set <0 - {}>", edges_count);
+    memgraph::logging::Debug("Started to recover edge set <0 - {}>", edges_count);
   } else {
-    spdlog::debug("Started to recover edge set <0 - {}>.", 0 + five_percent_chunk);
+    memgraph::logging::Debug("Started to recover edge set <0 - {}>.", 0 + five_percent_chunk);
   }
 
   uint64_t percentage_delta = 0;
@@ -746,11 +748,11 @@ void LoadPartialEdges(const std::filesystem::path &path, utils::SkipListDb<Edge>
     if (five_percent_chunk != 0) {
       if (i > 0 && i % five_percent_chunk == 0 && percentage_delta != 100) {
         percentage_delta += 5;
-        spdlog::info("Recovered {}% of edges.", percentage_delta);
+        memgraph::logging::Info("Recovered {}% of edges.", percentage_delta);
         if (percentage_delta == 95)
-          spdlog::debug("Started to recover edge set <{} - {}>", i, edges_count);
+          memgraph::logging::Debug("Started to recover edge set <{} - {}>", i, edges_count);
         else if (percentage_delta != 100)
-          spdlog::debug("Started to recover edge set <{} - {}>", i, i + five_percent_chunk);
+          memgraph::logging::Debug("Started to recover edge set <{} - {}>", i, i + five_percent_chunk);
       }
     }
 
@@ -785,7 +787,7 @@ void LoadPartialEdges(const std::filesystem::path &path, utils::SkipListDb<Edge>
         props.InitProperties(std::move(read_properties));
       }
     } else {
-      spdlog::debug("Ensuring edge {} doesn't have any properties.", *gid);
+      memgraph::logging::Debug("Ensuring edge {} doesn't have any properties.", *gid);
       // Read properties.
       {
         auto props_size = snapshot.ReadUint();
@@ -800,7 +802,7 @@ void LoadPartialEdges(const std::filesystem::path &path, utils::SkipListDb<Edge>
       snapshot_info->Update(UpdateType::EDGES);
     }
   }
-  spdlog::info("Process of recovering {} edges is finished.", edges_count);
+  memgraph::logging::Info("Process of recovering {} edges is finished.", edges_count);
 }
 
 // Returns the gid of the last recovered vertex
@@ -817,13 +819,13 @@ uint64_t LoadPartialVertices(const std::filesystem::path &path, utils::SkipListD
 
   auto vertex_acc = vertices.access();
   uint64_t last_vertex_gid = 0;
-  spdlog::info("Recovering {} vertices.", vertices_count);
+  memgraph::logging::Info("Recovering {} vertices.", vertices_count);
   std::vector<std::pair<PropertyId, PropertyValue>> read_properties;
   uint64_t five_percent_chunk = vertices_count / 20;
   if (five_percent_chunk == 0) {
-    spdlog::debug("Started to recover vertex set <0 - {}>", vertices_count);
+    memgraph::logging::Debug("Started to recover vertex set <0 - {}>", vertices_count);
   } else {
-    spdlog::debug("Started to recover vertex set <0 - {}>", 0 + five_percent_chunk);
+    memgraph::logging::Debug("Started to recover vertex set <0 - {}>", 0 + five_percent_chunk);
   }
 
   uint64_t percentage_delta = 0;
@@ -831,11 +833,11 @@ uint64_t LoadPartialVertices(const std::filesystem::path &path, utils::SkipListD
     if (five_percent_chunk != 0) {
       if (i > 0 && i % five_percent_chunk == 0 && percentage_delta != 100) {
         percentage_delta += 5;
-        spdlog::info("Recovered {}% of vertices.", percentage_delta);
+        memgraph::logging::Info("Recovered {}% of vertices.", percentage_delta);
         if (percentage_delta == 95)
-          spdlog::debug("Started to recover vertex set <{} - {}>", i, vertices_count);
+          memgraph::logging::Debug("Started to recover vertex set <{} - {}>", i, vertices_count);
         else if (percentage_delta != 100)
-          spdlog::debug("Started to recover vertex set <{} - {}>", i, i + five_percent_chunk);
+          memgraph::logging::Debug("Started to recover vertex set <{} - {}>", i, i + five_percent_chunk);
       }
     }
     {
@@ -916,7 +918,7 @@ uint64_t LoadPartialVertices(const std::filesystem::path &path, utils::SkipListD
       snapshot_info->Update(UpdateType::VERTICES);
     }
   }
-  spdlog::info("Process of recovering {} vertices is finished.", vertices_count);
+  memgraph::logging::Info("Process of recovering {} vertices is finished.", vertices_count);
 
   return last_vertex_gid;
 }
@@ -964,16 +966,16 @@ LoadPartialConnectivityResult LoadPartialConnectivity(
     throw RecoveryFailure("Couldn't find vertex with first vertex gid!");
   }
 
-  spdlog::info("Recovering connectivity for {} vertices.", vertices_count);
+  memgraph::logging::Info("Recovering connectivity for {} vertices.", vertices_count);
 
   if (!snapshot.SetPosition(from_offset)) throw RecoveryFailure("Couldn't set from_offset position!");
 
   uint64_t five_percent_chunk = vertices_count / 20;
 
   if (five_percent_chunk == 0) {
-    spdlog::debug("Started to recover vertices connectivity set <0 - {}>", vertices_count);
+    memgraph::logging::Debug("Started to recover vertices connectivity set <0 - {}>", vertices_count);
   } else {
-    spdlog::debug("Started to recover vertices connectivity set <0 - {}>", 0 + five_percent_chunk);
+    memgraph::logging::Debug("Started to recover vertices connectivity set <0 - {}>", 0 + five_percent_chunk);
   }
 
   uint64_t percentage_delta = 0;
@@ -981,11 +983,11 @@ LoadPartialConnectivityResult LoadPartialConnectivity(
     if (five_percent_chunk != 0) {
       if (i > 0 && i % five_percent_chunk == 0 && percentage_delta != 100) {
         percentage_delta += 5;
-        spdlog::info("Recovered {}% of vertices connectivity.", percentage_delta);
+        memgraph::logging::Info("Recovered {}% of vertices connectivity.", percentage_delta);
         if (percentage_delta == 95)
-          spdlog::debug("Started to recover vertices connectivity set <{} - {}>", i, vertices_count);
+          memgraph::logging::Debug("Started to recover vertices connectivity set <{} - {}>", i, vertices_count);
         else if (percentage_delta != 100)
-          spdlog::debug("Started to recover vertices connectivity set <{} - {}>", i, i + five_percent_chunk);
+          memgraph::logging::Debug("Started to recover vertices connectivity set <{} - {}>", i, i + five_percent_chunk);
       }
     }
 
@@ -1111,7 +1113,7 @@ LoadPartialConnectivityResult LoadPartialConnectivity(
     }
     ++vertex_it;
   }
-  spdlog::info("Process of recovering connectivity for {} vertices is finished.", vertices_count);
+  memgraph::logging::Info("Process of recovering connectivity for {} vertices is finished.", vertices_count);
 
   return {edge_count, highest_edge_gid, first_vertex_gid};
 }
@@ -1169,14 +1171,14 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
 
   // Read snapshot info.
   const auto info = ReadSnapshotInfo(path);
-  spdlog::info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
+  memgraph::logging::Info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
   // Check for edges.
   const bool snapshot_has_edges = info.offset_edges != 0;
 
   // Recover mapper.
   std::unordered_map<uint64_t, uint64_t> snapshot_id_map;
   {
-    spdlog::info("Recovering mapper metadata.");
+    memgraph::logging::Info("Recovering mapper metadata.");
     if (!snapshot.SetPosition(info.offset_mapper)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -1219,7 +1221,7 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
     auto edge_acc = edges->access();
     uint64_t last_edge_gid = 0;
     if (snapshot_has_edges) {
-      spdlog::info("Recovering {} edges.", info.edges_count);
+      memgraph::logging::Info("Recovering {} edges.", info.edges_count);
       if (!snapshot.SetPosition(info.offset_edges)) throw RecoveryFailure("Couldn't read data from snapshot!");
       for (uint64_t i = 0; i < info.edges_count; ++i) {
         {
@@ -1233,7 +1235,7 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
           if (!gid) throw RecoveryFailure("Couldn't read edge gid!");
           if (i > 0 && *gid <= last_edge_gid) throw RecoveryFailure("Invalid edge gid read!");
           last_edge_gid = *gid;
-          spdlog::debug("Recovering edge {} with properties.", *gid);
+          memgraph::logging::Debug("Recovering edge {} with properties.", *gid);
           auto [it, inserted] = edge_acc.insert(Edge{Gid::FromUint(*gid), nullptr});
           if (!inserted) throw RecoveryFailure("The edge must be inserted here!");
 
@@ -1261,7 +1263,7 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
           if (i > 0 && *gid <= last_edge_gid) throw RecoveryFailure("Invalid edge gid read!");
           last_edge_gid = *gid;
 
-          spdlog::debug("Ensuring edge {} doesn't have any properties.", *gid);
+          memgraph::logging::Debug("Ensuring edge {} doesn't have any properties.", *gid);
           // Read properties.
           {
             auto props_size = snapshot.ReadUint();
@@ -1273,14 +1275,14 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
           }
         }
       }
-      spdlog::info("Edges are recovered.");
+      memgraph::logging::Info("Edges are recovered.");
     }
 
     // Recover vertices (labels and properties).
     if (!snapshot.SetPosition(info.offset_vertices)) throw RecoveryFailure("Couldn't read data from snapshot!");
     auto vertex_acc = vertices->access();
     uint64_t last_vertex_gid = 0;
-    spdlog::info("Recovering {} vertices.", info.vertices_count);
+    memgraph::logging::Info("Recovering {} vertices.", info.vertices_count);
     for (uint64_t i = 0; i < info.vertices_count; ++i) {
       {
         auto marker = snapshot.ReadMarker();
@@ -1294,12 +1296,12 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
         throw RecoveryFailure("Invalid vertex gid read!");
       }
       last_vertex_gid = *gid;
-      spdlog::debug("Recovering vertex {}.", *gid);
+      memgraph::logging::Debug("Recovering vertex {}.", *gid);
       auto [it, inserted] = vertex_acc.insert(Vertex{Gid::FromUint(*gid), nullptr});
       if (!inserted) throw RecoveryFailure("The vertex must be inserted here!");
 
       // Recover labels.
-      spdlog::trace("Recovering labels for vertex {}.", *gid);
+      memgraph::logging::Trace("Recovering labels for vertex {}.", *gid);
       {
         auto labels_size = snapshot.ReadUint();
         if (!labels_size) throw RecoveryFailure("Couldn't read the size of labels!");
@@ -1315,7 +1317,7 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
       }
 
       // Recover properties.
-      spdlog::trace("Recovering properties for vertex {}.", *gid);
+      memgraph::logging::Trace("Recovering properties for vertex {}.", *gid);
       {
         auto props_size = snapshot.ReadUint();
         if (!props_size) throw RecoveryFailure("Couldn't read the size of properties!");
@@ -1362,10 +1364,10 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
         if (!edge_type) throw RecoveryFailure("Couldn't read edge type!");
       }
     }
-    spdlog::info("Vertices are recovered.");
+    memgraph::logging::Info("Vertices are recovered.");
 
     // Recover vertices (in/out edges).
-    spdlog::info("Recovering connectivity.");
+    memgraph::logging::Info("Recovering connectivity.");
     if (!snapshot.SetPosition(info.offset_vertices)) throw RecoveryFailure("Couldn't read data from snapshot!");
     for (auto &vertex : vertex_acc) {
       {
@@ -1373,7 +1375,7 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
         if (!marker || *marker != Marker::SECTION_VERTEX) throw RecoveryFailure("Couldn't read section vertex marker!");
       }
 
-      spdlog::trace("Recovering connectivity for vertex {}.", vertex.gid.AsUint());
+      memgraph::logging::Trace("Recovering connectivity for vertex {}.", vertex.gid.AsUint());
       // Check vertex.
       auto gid = snapshot.ReadUint();
       if (!gid) throw RecoveryFailure("Couldn't read vertex gid!");
@@ -1403,7 +1405,7 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
 
       // Recover in edges.
       {
-        spdlog::trace("Recovering inbound edges for vertex {}.", vertex.gid.AsUint());
+        memgraph::logging::Trace("Recovering inbound edges for vertex {}.", vertex.gid.AsUint());
         auto in_size = snapshot.ReadUint();
         if (!in_size) throw RecoveryFailure("Couldn't read the size of in edges!");
         vertex.in_edges.reserve(*in_size);
@@ -1441,7 +1443,7 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
 
       // Recover out edges.
       {
-        spdlog::trace("Recovering outbound edges for vertex {}.", vertex.gid.AsUint());
+        memgraph::logging::Trace("Recovering outbound edges for vertex {}.", vertex.gid.AsUint());
         auto out_size = snapshot.ReadUint();
         if (!out_size) throw RecoveryFailure("Couldn't read the number of out edges!");
         vertex.out_edges.reserve(*out_size);
@@ -1485,7 +1487,7 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
         edge_count->fetch_add(*out_size, std::memory_order_acq_rel);
       }
     }
-    spdlog::info("Connectivity is recovered.");
+    memgraph::logging::Info("Connectivity is recovered.");
 
     // Set initial values for edge/vertex ID generators.
     ret.next_edge_id = last_edge_gid + 1;
@@ -1494,7 +1496,7 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
 
   // Recover indices.
   {
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -1504,7 +1506,7 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of label indices");
-      spdlog::info("Recovering metadata of {} label indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of label index!");
@@ -1512,14 +1514,14 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
             &indices_constraints.indices.label, get_label_from_id(*label), "The label index already exists!");
         SPDLOG_TRACE("Recovered metadata of label index for :{}", name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of label property indices!");
-      spdlog::info("Recovering metadata of {} label+property indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index!");
@@ -1532,15 +1534,15 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
-    spdlog::info("Metadata of indices are recovered.");
+    memgraph::logging::Info("Metadata of indices are recovered.");
   }
 
   // Recover constraints.
   {
-    spdlog::info("Recovering metadata of constraints.");
+    memgraph::logging::Info("Recovering metadata of constraints.");
     if (!snapshot.SetPosition(info.offset_constraints)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -1551,7 +1553,7 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of existence constraints!");
-      spdlog::info("Recovering metadata of {} existence constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} existence constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of existence constraints!");
@@ -1564,7 +1566,7 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of existence constraints are recovered.");
+      memgraph::logging::Info("Metadata of existence constraints are recovered.");
     }
 
     // Recover unique constraints.
@@ -1573,7 +1575,7 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of unique constraints!");
-      spdlog::info("Recovering metadata of {} unique constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} unique constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of unique constraint!");
@@ -1591,12 +1593,12 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
         SPDLOG_TRACE("Recovered metadata of unique constraints for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of unique constraints are recovered.");
+      memgraph::logging::Info("Metadata of unique constraints are recovered.");
     }
-    spdlog::info("Metadata of constraints are recovered.");
+    memgraph::logging::Info("Metadata of constraints are recovered.");
   }
 
-  spdlog::info("Recovering metadata.");
+  memgraph::logging::Info("Recovering metadata.");
   // Recover epoch history
   {
     if (!snapshot.SetPosition(info.offset_epoch_history)) throw RecoveryFailure("Couldn't read data from snapshot!");
@@ -1623,7 +1625,7 @@ RecoveredSnapshot LoadSnapshotVersion14(Decoder &snapshot, const std::filesystem
     }
   }
 
-  spdlog::info("Metadata recovered.");
+  memgraph::logging::Info("Metadata recovered.");
   // Recover timestamp.
   ret.next_timestamp = info.start_timestamp + 1;
 
@@ -1655,14 +1657,14 @@ RecoveredSnapshot LoadSnapshotVersion15(Decoder &snapshot, const std::filesystem
 
   // Read snapshot info.
   const auto info = ReadSnapshotInfo(path);
-  spdlog::info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
+  memgraph::logging::Info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
   // Check for edges.
   const bool snapshot_has_edges = info.offset_edges != 0;
 
   // Recover mapper.
   std::unordered_map<uint64_t, uint64_t> snapshot_id_map;
   {
-    spdlog::info("Recovering mapper metadata.");
+    memgraph::logging::Info("Recovering mapper metadata.");
     if (!snapshot.SetPosition(info.offset_mapper)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -1702,7 +1704,7 @@ RecoveredSnapshot LoadSnapshotVersion15(Decoder &snapshot, const std::filesystem
 
   {
     // Recover vertices (labels and properties).
-    spdlog::info("Recovering vertices.", info.vertices_count);
+    memgraph::logging::Info("Recovering vertices.", info.vertices_count);
     uint64_t last_vertex_gid{0};
 
     if (!snapshot.SetPosition(info.offset_vertex_batches)) {
@@ -1734,9 +1736,9 @@ RecoveredSnapshot LoadSnapshotVersion15(Decoder &snapshot, const std::filesystem
         },
         vertex_batches);
 
-    spdlog::info("Vertices are recovered.");
+    memgraph::logging::Info("Vertices are recovered.");
 
-    spdlog::info("Recovering edges.");
+    memgraph::logging::Info("Recovering edges.");
     // Recover edges.
     if (snapshot_has_edges) {
       // We don't need to check whether we store properties on edge or not, because `LoadPartialEdges` will always
@@ -1757,10 +1759,10 @@ RecoveredSnapshot LoadSnapshotVersion15(Decoder &snapshot, const std::filesystem
           },
           edge_batches);
     }
-    spdlog::info("Edges are recovered.");
+    memgraph::logging::Info("Edges are recovered.");
 
     // Recover vertices (in/out edges).
-    spdlog::info("Recover connectivity.");
+    memgraph::logging::Info("Recover connectivity.");
     recovery_info.vertex_batches.reserve(vertex_batches.size());
     for (const auto batch : vertex_batches) {
       recovery_info.vertex_batches.emplace_back(Gid::FromUint(0), batch.count);
@@ -1796,7 +1798,7 @@ RecoveredSnapshot LoadSnapshotVersion15(Decoder &snapshot, const std::filesystem
         },
         vertex_batches);
 
-    spdlog::info("Connectivity is recovered.");
+    memgraph::logging::Info("Connectivity is recovered.");
 
     // Set initial values for edge/vertex ID generators.
     recovery_info.next_edge_id = highest_edge_gid + 1;
@@ -1805,7 +1807,7 @@ RecoveredSnapshot LoadSnapshotVersion15(Decoder &snapshot, const std::filesystem
 
   // Recover indices.
   {
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -1815,7 +1817,7 @@ RecoveredSnapshot LoadSnapshotVersion15(Decoder &snapshot, const std::filesystem
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of label indices");
-      spdlog::info("Recovering metadata of {} label indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of label index!");
@@ -1823,14 +1825,14 @@ RecoveredSnapshot LoadSnapshotVersion15(Decoder &snapshot, const std::filesystem
             &indices_constraints.indices.label, get_label_from_id(*label), "The label index already exists!");
         SPDLOG_TRACE("Recovered metadata of label index for :{}", name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of label property indices!");
-      spdlog::info("Recovering metadata of {} label+property indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index!");
@@ -1844,14 +1846,14 @@ RecoveredSnapshot LoadSnapshotVersion15(Decoder &snapshot, const std::filesystem
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
-    spdlog::info("Metadata of indices are recovered.");
+    memgraph::logging::Info("Metadata of indices are recovered.");
   }
 
   // Recover constraints.
   {
-    spdlog::info("Recovering metadata of constraints.");
+    memgraph::logging::Info("Recovering metadata of constraints.");
     if (!snapshot.SetPosition(info.offset_constraints))
       throw RecoveryFailure("Couldn't read offset constraints marker!");
 
@@ -1863,7 +1865,7 @@ RecoveredSnapshot LoadSnapshotVersion15(Decoder &snapshot, const std::filesystem
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of existence constraints!");
-      spdlog::info("Recovering metadata of {} existence constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} existence constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of existence constraints!");
@@ -1876,7 +1878,7 @@ RecoveredSnapshot LoadSnapshotVersion15(Decoder &snapshot, const std::filesystem
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of existence constraints are recovered.");
+      memgraph::logging::Info("Metadata of existence constraints are recovered.");
     }
 
     // Recover unique constraints.
@@ -1885,7 +1887,7 @@ RecoveredSnapshot LoadSnapshotVersion15(Decoder &snapshot, const std::filesystem
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of unique constraints!");
-      spdlog::info("Recovering metadata of {} unique constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} unique constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of unique constraint!");
@@ -1903,12 +1905,12 @@ RecoveredSnapshot LoadSnapshotVersion15(Decoder &snapshot, const std::filesystem
         SPDLOG_TRACE("Recovered metadata of unique constraints for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of unique constraints are recovered.");
+      memgraph::logging::Info("Metadata of unique constraints are recovered.");
     }
-    spdlog::info("Metadata of constraints are recovered.");
+    memgraph::logging::Info("Metadata of constraints are recovered.");
   }
 
-  spdlog::info("Recovering metadata.");
+  memgraph::logging::Info("Recovering metadata.");
   // Recover epoch history
   {
     if (!snapshot.SetPosition(info.offset_epoch_history)) throw RecoveryFailure("Couldn't read data from snapshot!");
@@ -1935,7 +1937,7 @@ RecoveredSnapshot LoadSnapshotVersion15(Decoder &snapshot, const std::filesystem
     }
   }
 
-  spdlog::info("Metadata recovered.");
+  memgraph::logging::Info("Metadata recovered.");
   // Recover timestamp.
   recovery_info.next_timestamp = info.start_timestamp + 1;
 
@@ -1967,14 +1969,14 @@ RecoveredSnapshot LoadSnapshotVersion16(Decoder &snapshot, const std::filesystem
 
   // Read snapshot info.
   const auto info = ReadSnapshotInfo(path);
-  spdlog::info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
+  memgraph::logging::Info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
   // Check for edges.
   const bool snapshot_has_edges = info.offset_edges != 0;
 
   // Recover mapper.
   std::unordered_map<uint64_t, uint64_t> snapshot_id_map;
   {
-    spdlog::info("Recovering mapper metadata.");
+    memgraph::logging::Info("Recovering mapper metadata.");
     if (!snapshot.SetPosition(info.offset_mapper)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -2014,7 +2016,7 @@ RecoveredSnapshot LoadSnapshotVersion16(Decoder &snapshot, const std::filesystem
 
   {
     // Recover vertices (labels and properties).
-    spdlog::info("Recovering vertices.", info.vertices_count);
+    memgraph::logging::Info("Recovering vertices.", info.vertices_count);
     uint64_t last_vertex_gid{0};
 
     if (!snapshot.SetPosition(info.offset_vertex_batches)) {
@@ -2046,9 +2048,9 @@ RecoveredSnapshot LoadSnapshotVersion16(Decoder &snapshot, const std::filesystem
         },
         vertex_batches);
 
-    spdlog::info("Vertices are recovered.");
+    memgraph::logging::Info("Vertices are recovered.");
 
-    spdlog::info("Recovering edges.");
+    memgraph::logging::Info("Recovering edges.");
     // Recover edges.
     if (snapshot_has_edges) {
       // We don't need to check whether we store properties on edge or not, because `LoadPartialEdges` will always
@@ -2069,10 +2071,10 @@ RecoveredSnapshot LoadSnapshotVersion16(Decoder &snapshot, const std::filesystem
           },
           edge_batches);
     }
-    spdlog::info("Edges are recovered.");
+    memgraph::logging::Info("Edges are recovered.");
 
     // Recover vertices (in/out edges).
-    spdlog::info("Recover connectivity.");
+    memgraph::logging::Info("Recover connectivity.");
     recovery_info.vertex_batches.reserve(vertex_batches.size());
     for (const auto batch : vertex_batches) {
       recovery_info.vertex_batches.emplace_back(Gid::FromUint(0), batch.count);
@@ -2108,7 +2110,7 @@ RecoveredSnapshot LoadSnapshotVersion16(Decoder &snapshot, const std::filesystem
         },
         vertex_batches);
 
-    spdlog::info("Connectivity is recovered.");
+    memgraph::logging::Info("Connectivity is recovered.");
 
     // Set initial values for edge/vertex ID generators.
     recovery_info.next_edge_id = highest_edge_gid + 1;
@@ -2117,7 +2119,7 @@ RecoveredSnapshot LoadSnapshotVersion16(Decoder &snapshot, const std::filesystem
 
   // Recover indices.
   {
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -2127,7 +2129,7 @@ RecoveredSnapshot LoadSnapshotVersion16(Decoder &snapshot, const std::filesystem
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of label indices");
-      spdlog::info("Recovering metadata of {} label indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of label index!");
@@ -2135,14 +2137,14 @@ RecoveredSnapshot LoadSnapshotVersion16(Decoder &snapshot, const std::filesystem
             &indices_constraints.indices.label, get_label_from_id(*label), "The label index already exists!");
         SPDLOG_TRACE("Recovered metadata of label index for :{}", name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of entries for label index statistics!");
-      spdlog::info("Recovering metadata of {} label indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label while recovering label index statistics!");
@@ -2156,14 +2158,14 @@ RecoveredSnapshot LoadSnapshotVersion16(Decoder &snapshot, const std::filesystem
         SPDLOG_TRACE("Recovered metadata of label index statistics for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of label property indices!");
-      spdlog::info("Recovering metadata of {} label+property indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index!");
@@ -2176,14 +2178,14 @@ RecoveredSnapshot LoadSnapshotVersion16(Decoder &snapshot, const std::filesystem
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
     // Recover label+property indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of entries for label property statistics!");
-      spdlog::info("Recovering metadata of {} label+property indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index statistics!");
@@ -2218,15 +2220,15 @@ RecoveredSnapshot LoadSnapshotVersion16(Decoder &snapshot, const std::filesystem
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
-    spdlog::info("Metadata of indices are recovered.");
+    memgraph::logging::Info("Metadata of indices are recovered.");
   }
 
   // Recover constraints.
   {
-    spdlog::info("Recovering metadata of constraints.");
+    memgraph::logging::Info("Recovering metadata of constraints.");
     if (!snapshot.SetPosition(info.offset_constraints)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -2237,7 +2239,7 @@ RecoveredSnapshot LoadSnapshotVersion16(Decoder &snapshot, const std::filesystem
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of existence constraints!");
-      spdlog::info("Recovering metadata of {} existence constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} existence constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of existence constraints!");
@@ -2250,7 +2252,7 @@ RecoveredSnapshot LoadSnapshotVersion16(Decoder &snapshot, const std::filesystem
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of existence constraints are recovered.");
+      memgraph::logging::Info("Metadata of existence constraints are recovered.");
     }
 
     // Recover unique constraints.
@@ -2259,7 +2261,7 @@ RecoveredSnapshot LoadSnapshotVersion16(Decoder &snapshot, const std::filesystem
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of unique constraints!");
-      spdlog::info("Recovering metadata of {} unique constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} unique constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of unique constraints!");
@@ -2277,12 +2279,12 @@ RecoveredSnapshot LoadSnapshotVersion16(Decoder &snapshot, const std::filesystem
         SPDLOG_TRACE("Recovered metadata of unique constraints for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of unique constraints are recovered.");
+      memgraph::logging::Info("Metadata of unique constraints are recovered.");
     }
-    spdlog::info("Metadata of constraints are recovered.");
+    memgraph::logging::Info("Metadata of constraints are recovered.");
   }
 
-  spdlog::info("Recovering metadata.");
+  memgraph::logging::Info("Recovering metadata.");
   // Recover epoch history
   {
     if (!snapshot.SetPosition(info.offset_epoch_history)) throw RecoveryFailure("Couldn't read data from snapshot!");
@@ -2309,7 +2311,7 @@ RecoveredSnapshot LoadSnapshotVersion16(Decoder &snapshot, const std::filesystem
     }
   }
 
-  spdlog::info("Metadata recovered.");
+  memgraph::logging::Info("Metadata recovered.");
   // Recover timestamp.
   recovery_info.next_timestamp = info.start_timestamp + 1;
 
@@ -2341,14 +2343,14 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
 
   // Read snapshot info.
   const auto info = ReadSnapshotInfo(path);
-  spdlog::info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
+  memgraph::logging::Info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
   // Check for edges.
   const bool snapshot_has_edges = info.offset_edges != 0;
 
   // Recover mapper.
   std::unordered_map<uint64_t, uint64_t> snapshot_id_map;
   {
-    spdlog::info("Recovering mapper metadata.");
+    memgraph::logging::Info("Recovering mapper metadata.");
     if (!snapshot.SetPosition(info.offset_mapper)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -2388,7 +2390,7 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
 
   {
     // Recover vertices (labels and properties).
-    spdlog::info("Recovering vertices.", info.vertices_count);
+    memgraph::logging::Info("Recovering vertices.", info.vertices_count);
     uint64_t last_vertex_gid{0};
 
     if (!snapshot.SetPosition(info.offset_vertex_batches)) {
@@ -2420,9 +2422,9 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
         },
         vertex_batches);
 
-    spdlog::info("Vertices are recovered.");
+    memgraph::logging::Info("Vertices are recovered.");
 
-    spdlog::info("Recovering edges.");
+    memgraph::logging::Info("Recovering edges.");
     // Recover edges.
     if (snapshot_has_edges) {
       // We don't need to check whether we store properties on edge or not, because `LoadPartialEdges` will always
@@ -2443,10 +2445,10 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
           },
           edge_batches);
     }
-    spdlog::info("Edges are recovered.");
+    memgraph::logging::Info("Edges are recovered.");
 
     // Recover vertices (in/out edges).
-    spdlog::info("Recover connectivity.");
+    memgraph::logging::Info("Recover connectivity.");
     recovery_info.vertex_batches.reserve(vertex_batches.size());
     for (const auto batch : vertex_batches) {
       recovery_info.vertex_batches.emplace_back(Gid::FromUint(0), batch.count);
@@ -2482,7 +2484,7 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
         },
         vertex_batches);
 
-    spdlog::info("Connectivity is recovered.");
+    memgraph::logging::Info("Connectivity is recovered.");
 
     // Set initial values for edge/vertex ID generators.
     recovery_info.next_edge_id = highest_edge_gid + 1;
@@ -2491,7 +2493,7 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
 
   // Recover indices.
   {
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -2501,7 +2503,7 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of label indices");
-      spdlog::info("Recovering metadata of {} label indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of label index!");
@@ -2509,14 +2511,14 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
             &indices_constraints.indices.label, get_label_from_id(*label), "The label index already exists!");
         SPDLOG_TRACE("Recovered metadata of label index for :{}", name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of entries for label index statistics!");
-      spdlog::info("Recovering metadata of {} label indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label while recovering label index statistics!");
@@ -2530,14 +2532,14 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
         SPDLOG_TRACE("Recovered metadata of label index statistics for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of label property indices!");
-      spdlog::info("Recovering metadata of {} label+property indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index!");
@@ -2550,14 +2552,14 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
     // Recover label+property indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of entries for label property statistics!");
-      spdlog::info("Recovering metadata of {} label+property indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index statistics!");
@@ -2592,11 +2594,11 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
     // Recover edge-type indices.
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_edge_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     marker = snapshot.ReadMarker();
@@ -2606,7 +2608,7 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type index!");
@@ -2616,14 +2618,14 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
         SPDLOG_TRACE("Recovered metadata of edge-type index for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)));
       }
-      spdlog::info("Metadata of edge-type indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type indices are recovered.");
     }
 
     // Recover text indices.
     {
       auto size_opt = snapshot.ReadUint();
       const auto size = size_opt.value_or(0);
-      spdlog::info("Recovering metadata of {} text indices.", size);
+      memgraph::logging::Info("Recovering metadata of {} text indices.", size);
       for (uint64_t i = 0; i < size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -2637,15 +2639,15 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
                      index_name.value(),
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of text indices are recovered.");
+      memgraph::logging::Info("Metadata of text indices are recovered.");
     }
 
-    spdlog::info("Metadata of indices are recovered.");
+    memgraph::logging::Info("Metadata of indices are recovered.");
   }
 
   // Recover constraints.
   {
-    spdlog::info("Recovering metadata of constraints.");
+    memgraph::logging::Info("Recovering metadata of constraints.");
     if (!snapshot.SetPosition(info.offset_constraints)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -2656,7 +2658,7 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of existence constraints!");
-      spdlog::info("Recovering metadata of {} existence constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} existence constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of existence constraints!");
@@ -2669,7 +2671,7 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of existence constraints are recovered.");
+      memgraph::logging::Info("Metadata of existence constraints are recovered.");
     }
 
     // Recover unique constraints.
@@ -2678,7 +2680,7 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of unique constraints!");
-      spdlog::info("Recovering metadata of {} unique constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} unique constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of unique constraints!");
@@ -2696,12 +2698,12 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
         SPDLOG_TRACE("Recovered metadata of unique constraints for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of unique constraints are recovered.");
+      memgraph::logging::Info("Metadata of unique constraints are recovered.");
     }
-    spdlog::info("Metadata of constraints are recovered.");
+    memgraph::logging::Info("Metadata of constraints are recovered.");
   }
 
-  spdlog::info("Recovering metadata.");
+  memgraph::logging::Info("Recovering metadata.");
   // Recover epoch history
   {
     if (!snapshot.SetPosition(info.offset_epoch_history)) throw RecoveryFailure("Couldn't read data from snapshot!");
@@ -2728,7 +2730,7 @@ RecoveredSnapshot LoadSnapshotVersion17(Decoder &snapshot, const std::filesystem
     }
   }
 
-  spdlog::info("Metadata recovered.");
+  memgraph::logging::Info("Metadata recovered.");
   // Recover timestamp.
   recovery_info.next_timestamp = info.start_timestamp + 1;
 
@@ -2764,14 +2766,14 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
 
   // Read snapshot info.
   const auto info = ReadSnapshotInfo(path);
-  spdlog::info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
+  memgraph::logging::Info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
   // Check for edges.
   bool const snapshot_has_edges = info.offset_edges != 0;
 
   // Recover mapper.
   std::unordered_map<uint64_t, uint64_t> snapshot_id_map;
   {
-    spdlog::info("Recovering mapper metadata.");
+    memgraph::logging::Info("Recovering mapper metadata.");
     if (!snapshot.SetPosition(info.offset_mapper)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -2794,7 +2796,7 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
   // Recover enums.
   // TODO: when we have enum deletion/edits we will need to handle remapping
   {
-    spdlog::info("Recovering metadata of enums.");
+    memgraph::logging::Info("Recovering metadata of enums.");
     if (!snapshot.SetPosition(info.offset_enums)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -2804,7 +2806,7 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
 
     auto size = snapshot.ReadUint();
     if (!size) throw RecoveryFailure("Couldn't read the number of enums!");
-    spdlog::info("Recovering metadata of {} enums.", *size);
+    memgraph::logging::Info("Recovering metadata of {} enums.", *size);
     for (uint64_t i = 0; i < *size; ++i) {
       auto etype = snapshot.ReadString();
       if (!etype) throw RecoveryFailure("Couldn't read enum type of enums!");
@@ -2825,7 +2827,7 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
         throw storage::durability::RecoveryFailure("The enum could not be created!");
       }
     }
-    spdlog::info("Metadata of enums are recovered.");
+    memgraph::logging::Info("Metadata of enums are recovered.");
   }
 
   auto get_label_from_id = [&snapshot_id_map](uint64_t label_id) {
@@ -2849,7 +2851,7 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
 
   {
     // Recover vertices (labels and properties).
-    spdlog::info("Recovering vertices.", info.vertices_count);
+    memgraph::logging::Info("Recovering vertices.", info.vertices_count);
     uint64_t last_vertex_gid{0};
 
     if (!snapshot.SetPosition(info.offset_vertex_batches)) {
@@ -2881,9 +2883,9 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
         },
         vertex_batches);
 
-    spdlog::info("Vertices are recovered.");
+    memgraph::logging::Info("Vertices are recovered.");
 
-    spdlog::info("Recovering edges.");
+    memgraph::logging::Info("Recovering edges.");
     // Recover edges.
     if (snapshot_has_edges) {
       // We don't need to check whether we store properties on edge or not, because `LoadPartialEdges` will always
@@ -2904,10 +2906,10 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
           },
           edge_batches);
     }
-    spdlog::info("Edges are recovered.");
+    memgraph::logging::Info("Edges are recovered.");
 
     // Recover vertices (in/out edges).
-    spdlog::info("Recover connectivity.");
+    memgraph::logging::Info("Recover connectivity.");
     recovery_info.vertex_batches.reserve(vertex_batches.size());
     for (const auto batch : vertex_batches) {
       recovery_info.vertex_batches.emplace_back(Gid::FromUint(0), batch.count);
@@ -2943,7 +2945,7 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
         },
         vertex_batches);
 
-    spdlog::info("Connectivity is recovered.");
+    memgraph::logging::Info("Connectivity is recovered.");
 
     // Set initial values for edge/vertex ID generators.
     recovery_info.next_edge_id = highest_edge_gid + 1;
@@ -2952,7 +2954,7 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
 
   // Recover indices.
   {
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -2962,7 +2964,7 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of label indices");
-      spdlog::info("Recovering metadata of {} label indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of label index!");
@@ -2970,14 +2972,14 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
             &indices_constraints.indices.label, get_label_from_id(*label), "The label index already exists!");
         SPDLOG_TRACE("Recovered metadata of label index for :{}", name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of entries for label index statistics!");
-      spdlog::info("Recovering metadata of {} label indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label while recovering label index statistics!");
@@ -2991,14 +2993,14 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
         SPDLOG_TRACE("Recovered metadata of label index statistics for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of label property indices!");
-      spdlog::info("Recovering metadata of {} label+property indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index!");
@@ -3011,14 +3013,14 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
     // Recover label+property indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of entries for label property statistics!");
-      spdlog::info("Recovering metadata of {} label+property indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index statistics!");
@@ -3053,10 +3055,10 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_edge_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     marker = snapshot.ReadMarker();
@@ -3067,7 +3069,7 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
       // Recover edge-type indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type index!");
@@ -3077,13 +3079,13 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
         SPDLOG_TRACE("Recovered metadata of edge-type index for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)));
       }
-      spdlog::info("Metadata of edge-type indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type indices are recovered.");
     }
     {
       // Recover edge-type + property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type + property index!");
@@ -3096,14 +3098,14 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of edge-type + property indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type + property indices are recovered.");
     }
 
     // Recover text indices.
     {
       auto size_opt = snapshot.ReadUint();
       const auto size = size_opt.value_or(0);
-      spdlog::info("Recovering metadata of {} text indices.", size);
+      memgraph::logging::Info("Recovering metadata of {} text indices.", size);
       for (uint64_t i = 0; i < size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -3117,15 +3119,15 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
                      index_name.value(),
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of text indices are recovered.");
+      memgraph::logging::Info("Metadata of text indices are recovered.");
     }
 
-    spdlog::info("Metadata of indices are recovered.");
+    memgraph::logging::Info("Metadata of indices are recovered.");
   }
 
   // Recover constraints.
   {
-    spdlog::info("Recovering metadata of constraints.");
+    memgraph::logging::Info("Recovering metadata of constraints.");
     if (!snapshot.SetPosition(info.offset_constraints)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -3136,7 +3138,7 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of existence constraints!");
-      spdlog::info("Recovering metadata of {} existence constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} existence constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of existence constraints!");
@@ -3149,7 +3151,7 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of existence constraints are recovered.");
+      memgraph::logging::Info("Metadata of existence constraints are recovered.");
     }
 
     // Recover unique constraints.
@@ -3158,7 +3160,7 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of unique constraints!");
-      spdlog::info("Recovering metadata of {} unique constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} unique constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of unique constraints!");
@@ -3176,12 +3178,12 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
         SPDLOG_TRACE("Recovered metadata of unique constraints for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of unique constraints are recovered.");
+      memgraph::logging::Info("Metadata of unique constraints are recovered.");
     }
-    spdlog::info("Metadata of constraints are recovered.");
+    memgraph::logging::Info("Metadata of constraints are recovered.");
   }
 
-  spdlog::info("Recovering metadata.");
+  memgraph::logging::Info("Recovering metadata.");
   // Recover epoch history
   {
     if (!snapshot.SetPosition(info.offset_epoch_history)) throw RecoveryFailure("Couldn't read data from snapshot!");
@@ -3208,7 +3210,7 @@ RecoveredSnapshot LoadSnapshotVersion18or19(Decoder &snapshot, const std::filesy
     }
   }
 
-  spdlog::info("Metadata recovered.");
+  memgraph::logging::Info("Metadata recovered.");
   // Recover timestamp.
   recovery_info.next_timestamp = info.start_timestamp + 1;
 
@@ -3242,14 +3244,14 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
 
   // Read snapshot info.
   const auto info = ReadSnapshotInfo(path);
-  spdlog::info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
+  memgraph::logging::Info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
   // Check for edges.
   const auto snapshot_has_edges = info.offset_edges != 0;
 
   // Recover mapper.
   std::unordered_map<uint64_t, uint64_t> snapshot_id_map;
   {
-    spdlog::info("Recovering mapper metadata.");
+    memgraph::logging::Info("Recovering mapper metadata.");
     if (!snapshot.SetPosition(info.offset_mapper)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -3272,7 +3274,7 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
   // Recover enums.
   // TODO: when we have enum deletion/edits we will need to handle remapping
   {
-    spdlog::info("Recovering metadata of enums.");
+    memgraph::logging::Info("Recovering metadata of enums.");
     if (!snapshot.SetPosition(info.offset_enums)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -3282,7 +3284,7 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
 
     auto size = snapshot.ReadUint();
     if (!size) throw RecoveryFailure("Couldn't read the number of enums!");
-    spdlog::info("Recovering metadata of {} enums.", *size);
+    memgraph::logging::Info("Recovering metadata of {} enums.", *size);
     for (uint64_t i = 0; i < *size; ++i) {
       auto etype = snapshot.ReadString();
       if (!etype) throw RecoveryFailure("Couldn't read enum type of enums!");
@@ -3303,7 +3305,7 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
         throw storage::durability::RecoveryFailure("The enum could not be created!");
       }
     }
-    spdlog::info("Metadata of enums are recovered.");
+    memgraph::logging::Info("Metadata of enums are recovered.");
   }
 
   auto get_label_from_id = [&snapshot_id_map](uint64_t label_id) {
@@ -3327,7 +3329,7 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
 
   {
     // Recover vertices (labels and properties).
-    spdlog::info("Recovering vertices.", info.vertices_count);
+    memgraph::logging::Info("Recovering vertices.", info.vertices_count);
     uint64_t last_vertex_gid{0};
 
     if (!snapshot.SetPosition(info.offset_vertex_batches)) {
@@ -3359,9 +3361,9 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
         },
         vertex_batches);
 
-    spdlog::info("Vertices are recovered.");
+    memgraph::logging::Info("Vertices are recovered.");
 
-    spdlog::info("Recovering edges.");
+    memgraph::logging::Info("Recovering edges.");
     // Recover edges.
     if (snapshot_has_edges) {
       // We don't need to check whether we store properties on edge or not, because `LoadPartialEdges` will always
@@ -3382,10 +3384,10 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
           },
           edge_batches);
     }
-    spdlog::info("Edges are recovered.");
+    memgraph::logging::Info("Edges are recovered.");
 
     // Recover vertices (in/out edges).
-    spdlog::info("Recover connectivity.");
+    memgraph::logging::Info("Recover connectivity.");
     recovery_info.vertex_batches.reserve(vertex_batches.size());
     for (const auto batch : vertex_batches) {
       recovery_info.vertex_batches.emplace_back(Gid::FromUint(0), batch.count);
@@ -3421,7 +3423,7 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
         },
         vertex_batches);
 
-    spdlog::info("Connectivity is recovered.");
+    memgraph::logging::Info("Connectivity is recovered.");
 
     // Set initial values for edge/vertex ID generators.
     recovery_info.next_edge_id = highest_edge_gid + 1;
@@ -3430,7 +3432,7 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
 
   // Recover indices.
   {
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -3440,7 +3442,7 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of label indices");
-      spdlog::info("Recovering metadata of {} label indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of label index!");
@@ -3448,14 +3450,14 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
             &indices_constraints.indices.label, get_label_from_id(*label), "The label index already exists!");
         SPDLOG_TRACE("Recovered metadata of label index for :{}", name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of entries for label index statistics!");
-      spdlog::info("Recovering metadata of {} label indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label while recovering label index statistics!");
@@ -3469,14 +3471,14 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
         SPDLOG_TRACE("Recovered metadata of label index statistics for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of label property indices!");
-      spdlog::info("Recovering metadata of {} label+property indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index!");
@@ -3489,14 +3491,14 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
     // Recover label+property indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of entries for label property statistics!");
-      spdlog::info("Recovering metadata of {} label+property indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index statistics!");
@@ -3531,10 +3533,10 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_edge_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     marker = snapshot.ReadMarker();
@@ -3545,7 +3547,7 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
       // Recover edge-type indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type index!");
@@ -3555,13 +3557,13 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
         SPDLOG_TRACE("Recovered metadata of edge-type index for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)));
       }
-      spdlog::info("Metadata of edge-type indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type indices are recovered.");
     }
     {
       // Recover edge-type + property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type + property index!");
@@ -3574,14 +3576,14 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of edge-type + property indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type + property indices are recovered.");
     }
 
     // Recover point indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of point indices!");
-      spdlog::info("Recovering metadata of {} point indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} point indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for point index!");
@@ -3594,14 +3596,14 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of point indices are recovered.");
+      memgraph::logging::Info("Metadata of point indices are recovered.");
     }
 
     // Recover text indices.
     {
       auto size_opt = snapshot.ReadUint();
       const auto size = size_opt.value_or(0);
-      spdlog::info("Recovering metadata of {} text indices.", size);
+      memgraph::logging::Info("Recovering metadata of {} text indices.", size);
       for (uint64_t i = 0; i < size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -3615,15 +3617,15 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
                      index_name.value(),
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of text indices are recovered.");
+      memgraph::logging::Info("Metadata of text indices are recovered.");
     }
 
-    spdlog::info("Metadata of indices are recovered.");
+    memgraph::logging::Info("Metadata of indices are recovered.");
   }
 
   // Recover constraints.
   {
-    spdlog::info("Recovering metadata of constraints.");
+    memgraph::logging::Info("Recovering metadata of constraints.");
     if (!snapshot.SetPosition(info.offset_constraints)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -3634,7 +3636,7 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of existence constraints!");
-      spdlog::info("Recovering metadata of {} existence constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} existence constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of existence constraints!");
@@ -3647,7 +3649,7 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of existence constraints are recovered.");
+      memgraph::logging::Info("Metadata of existence constraints are recovered.");
     }
 
     // Recover unique constraints.
@@ -3656,7 +3658,7 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of unique constraints!");
-      spdlog::info("Recovering metadata of {} unique constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} unique constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of unique constraints!");
@@ -3674,7 +3676,7 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
         SPDLOG_TRACE("Recovered metadata of unique constraints for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of unique constraints are recovered.");
+      memgraph::logging::Info("Metadata of unique constraints are recovered.");
     }
 
     // Recover type constraints.
@@ -3684,7 +3686,7 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of type constraints!");
 
-      spdlog::info("Recovering metadata of {} type constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} type constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of type constraints!");
@@ -3702,13 +3704,13 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of type constraints are recovered.");
+      memgraph::logging::Info("Metadata of type constraints are recovered.");
     }
 
-    spdlog::info("Metadata of constraints are recovered.");
+    memgraph::logging::Info("Metadata of constraints are recovered.");
   }
 
-  spdlog::info("Recovering metadata.");
+  memgraph::logging::Info("Recovering metadata.");
   // Recover epoch history
   {
     if (!snapshot.SetPosition(info.offset_epoch_history)) throw RecoveryFailure("Couldn't read data from snapshot!");
@@ -3735,7 +3737,7 @@ RecoveredSnapshot LoadSnapshotVersion20or21(Decoder &snapshot, const std::filesy
     }
   }
 
-  spdlog::info("Metadata recovered.");
+  memgraph::logging::Info("Metadata recovered.");
   // Recover timestamp.
   recovery_info.next_timestamp = info.start_timestamp + 1;
 
@@ -3770,14 +3772,14 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
 
   // Read snapshot info.
   const auto info = ReadSnapshotInfo(path);
-  spdlog::info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
+  memgraph::logging::Info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
   // Check for edges.
   const bool snapshot_has_edges = info.offset_edges != 0;
 
   // Recover mapper.
   std::unordered_map<uint64_t, uint64_t> snapshot_id_map;
   {
-    spdlog::info("Recovering mapper metadata.");
+    memgraph::logging::Info("Recovering mapper metadata.");
     if (!snapshot.SetPosition(info.offset_mapper)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -3800,7 +3802,7 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
   // Recover enums.
   // TODO: when we have enum deletion/edits we will need to handle remapping
   {
-    spdlog::info("Recovering metadata of enums.");
+    memgraph::logging::Info("Recovering metadata of enums.");
     if (!snapshot.SetPosition(info.offset_enums)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -3810,7 +3812,7 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
 
     auto size = snapshot.ReadUint();
     if (!size) throw RecoveryFailure("Couldn't read the number of enums!");
-    spdlog::info("Recovering metadata of {} enums.", *size);
+    memgraph::logging::Info("Recovering metadata of {} enums.", *size);
     for (uint64_t i = 0; i < *size; ++i) {
       auto etype = snapshot.ReadString();
       if (!etype) throw RecoveryFailure("Couldn't read enum type of enums!");
@@ -3831,7 +3833,7 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
         throw storage::durability::RecoveryFailure("The enum could not be created!");
       }
     }
-    spdlog::info("Metadata of enums are recovered.");
+    memgraph::logging::Info("Metadata of enums are recovered.");
   }
 
   auto get_label_from_id = [&snapshot_id_map](uint64_t label_id) {
@@ -3855,7 +3857,7 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
 
   {
     // Recover vertices (labels and properties).
-    spdlog::info("Recovering vertices.", info.vertices_count);
+    memgraph::logging::Info("Recovering vertices.", info.vertices_count);
     uint64_t last_vertex_gid{0};
 
     if (!snapshot.SetPosition(info.offset_vertex_batches)) {
@@ -3889,9 +3891,9 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
         },
         vertex_batches);
 
-    spdlog::info("Vertices are recovered.");
+    memgraph::logging::Info("Vertices are recovered.");
 
-    spdlog::info("Recovering edges.");
+    memgraph::logging::Info("Recovering edges.");
     // Recover edges.
     if (snapshot_has_edges) {
       // We don't need to check whether we store properties on edge or not, because `LoadPartialEdges` will always
@@ -3913,10 +3915,10 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
           },
           edge_batches);
     }
-    spdlog::info("Edges are recovered.");
+    memgraph::logging::Info("Edges are recovered.");
 
     // Recover vertices (in/out edges).
-    spdlog::info("Recover connectivity.");
+    memgraph::logging::Info("Recover connectivity.");
     recovery_info.vertex_batches.reserve(vertex_batches.size());
     for (const auto batch : vertex_batches) {
       recovery_info.vertex_batches.emplace_back(Gid::FromUint(0), batch.count);
@@ -3954,7 +3956,7 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
         },
         vertex_batches);
 
-    spdlog::info("Connectivity is recovered.");
+    memgraph::logging::Info("Connectivity is recovered.");
 
     // Set initial values for edge/vertex ID generators.
     recovery_info.next_edge_id = highest_edge_gid + 1;
@@ -3963,7 +3965,7 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
 
   // Recover indices.
   {
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -3973,7 +3975,7 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of label indices");
-      spdlog::info("Recovering metadata of {} label indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of label index!");
@@ -3981,14 +3983,14 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
             &indices_constraints.indices.label, get_label_from_id(*label), "The label index already exists!");
         SPDLOG_TRACE("Recovered metadata of label index for :{}", name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of entries for label index statistics!");
-      spdlog::info("Recovering metadata of {} label indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label while recovering label index statistics!");
@@ -4002,14 +4004,14 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
         SPDLOG_TRACE("Recovered metadata of label index statistics for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of label property indices!");
-      spdlog::info("Recovering metadata of {} label+property indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index!");
@@ -4022,14 +4024,14 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
     // Recover label+property indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of entries for label property statistics!");
-      spdlog::info("Recovering metadata of {} label+property indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index statistics!");
@@ -4064,10 +4066,10 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_edge_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     marker = snapshot.ReadMarker();
@@ -4078,7 +4080,7 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
       // Recover edge-type indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type index!");
@@ -4088,13 +4090,13 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
         SPDLOG_TRACE("Recovered metadata of edge-type index for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)));
       }
-      spdlog::info("Metadata of edge-type indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type indices are recovered.");
     }
     {
       // Recover edge-type + property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type+property indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type + property index!");
@@ -4107,14 +4109,14 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of edge-type + property indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type + property indices are recovered.");
     }
 
     // Recover point indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of point indices!");
-      spdlog::info("Recovering metadata of {} point indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} point indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for point index!");
@@ -4127,14 +4129,14 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of point indices are recovered.");
+      memgraph::logging::Info("Metadata of point indices are recovered.");
     }
 
     // Recover vector indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of vector indices!");
-      spdlog::info("Recovering metadata of {} vector indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} vector indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read vector index name!");
@@ -4173,14 +4175,14 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
         indices_constraints.indices.vector_indices.emplace_back(
             VectorIndexRecoveryInfo{.spec = std::move(spec), .index_entries = {}});
       }
-      spdlog::info("Metadata of vector indices are recovered.");
+      memgraph::logging::Info("Metadata of vector indices are recovered.");
     }
 
     // Recover text indices.
     {
       auto size_opt = snapshot.ReadUint();
       const auto size = size_opt.value_or(0);
-      spdlog::info("Recovering metadata of {} text indices.", size);
+      memgraph::logging::Info("Recovering metadata of {} text indices.", size);
       for (uint64_t i = 0; i < size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -4194,15 +4196,15 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
                      index_name.value(),
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of text indices are recovered.");
+      memgraph::logging::Info("Metadata of text indices are recovered.");
     }
 
-    spdlog::info("Metadata of indices are recovered.");
+    memgraph::logging::Info("Metadata of indices are recovered.");
   }
 
   // Recover constraints.
   {
-    spdlog::info("Recovering metadata of constraints.");
+    memgraph::logging::Info("Recovering metadata of constraints.");
     if (!snapshot.SetPosition(info.offset_constraints)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -4213,7 +4215,7 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of existence constraints!");
-      spdlog::info("Recovering metadata of {} existence constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} existence constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of existence constraints!");
@@ -4226,7 +4228,7 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of existence constraints are recovered.");
+      memgraph::logging::Info("Metadata of existence constraints are recovered.");
     }
 
     // Recover unique constraints.
@@ -4235,7 +4237,7 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of unique constraints!");
-      spdlog::info("Recovering metadata of {} unique constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} unique constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of unique constraints!");
@@ -4253,7 +4255,7 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
         SPDLOG_TRACE("Recovered metadata of unique constraints for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of unique constraints are recovered.");
+      memgraph::logging::Info("Metadata of unique constraints are recovered.");
     }
 
     // Recover type constraints.
@@ -4263,7 +4265,7 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of type constraints!");
 
-      spdlog::info("Recovering metadata of {} type constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} type constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of type constraints!");
@@ -4281,13 +4283,13 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of type constraints are recovered.");
+      memgraph::logging::Info("Metadata of type constraints are recovered.");
     }
 
-    spdlog::info("Metadata of constraints are recovered.");
+    memgraph::logging::Info("Metadata of constraints are recovered.");
   }
 
-  spdlog::info("Recovering metadata.");
+  memgraph::logging::Info("Recovering metadata.");
   // Recover epoch history
   {
     if (!snapshot.SetPosition(info.offset_epoch_history)) throw RecoveryFailure("Couldn't read data from snapshot!");
@@ -4314,7 +4316,7 @@ RecoveredSnapshot LoadSnapshotVersion22or23(Decoder &snapshot, const std::filesy
     }
   }
 
-  spdlog::info("Metadata recovered.");
+  memgraph::logging::Info("Metadata recovered.");
   // Recover timestamp.
   recovery_info.next_timestamp = info.start_timestamp + 1;
 
@@ -4349,14 +4351,14 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
 
   // Read snapshot info.
   const auto info = ReadSnapshotInfo(path);
-  spdlog::info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
+  memgraph::logging::Info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
   // Check for edges.
   bool const snapshot_has_edges = info.offset_edges != 0;
 
   // Recover mapper.
   std::unordered_map<uint64_t, uint64_t> snapshot_id_map;
   {
-    spdlog::info("Recovering mapper metadata.");
+    memgraph::logging::Info("Recovering mapper metadata.");
     if (!snapshot.SetPosition(info.offset_mapper)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -4379,7 +4381,7 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
   // Recover enums.
   // TODO: when we have enum deletion/edits we will need to handle remapping
   {
-    spdlog::info("Recovering metadata of enums.");
+    memgraph::logging::Info("Recovering metadata of enums.");
     if (!snapshot.SetPosition(info.offset_enums)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -4389,7 +4391,7 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
 
     auto size = snapshot.ReadUint();
     if (!size) throw RecoveryFailure("Couldn't read the number of enums!");
-    spdlog::info("Recovering metadata of {} enums.", *size);
+    memgraph::logging::Info("Recovering metadata of {} enums.", *size);
     for (uint64_t i = 0; i < *size; ++i) {
       auto etype = snapshot.ReadString();
       if (!etype) throw RecoveryFailure("Couldn't read enum type of enums!");
@@ -4410,7 +4412,7 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
         throw RecoveryFailure("The enum could not be created!");
       }
     }
-    spdlog::info("Metadata of enums are recovered.");
+    memgraph::logging::Info("Metadata of enums are recovered.");
   }
 
   auto get_label_from_id = [&snapshot_id_map](uint64_t label_id) {
@@ -4434,7 +4436,7 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
 
   {
     // Recover vertices (labels and properties).
-    spdlog::info("Recovering vertices.");
+    memgraph::logging::Info("Recovering vertices.");
     uint64_t last_vertex_gid{0};
 
     if (!snapshot.SetPosition(info.offset_vertex_batches)) {
@@ -4470,9 +4472,9 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
           vertex_batches);
     }
 
-    spdlog::info("Vertices are recovered.");
+    memgraph::logging::Info("Vertices are recovered.");
 
-    spdlog::info("Recovering edges.");
+    memgraph::logging::Info("Recovering edges.");
     // Recover edges.
     if (snapshot_has_edges) {
       // We don't need to check whether we store properties on edge or not, because `LoadPartialEdges` will always
@@ -4496,10 +4498,10 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
             edge_batches);
       }
     }
-    spdlog::info("Edges are recovered.");
+    memgraph::logging::Info("Edges are recovered.");
 
     // Recover vertices (in/out edges).
-    spdlog::info("Recover connectivity.");
+    memgraph::logging::Info("Recover connectivity.");
     recovery_info.vertex_batches.reserve(vertex_batches.size());
     for (const auto batch : vertex_batches) {
       recovery_info.vertex_batches.emplace_back(Gid::FromUint(0), batch.count);
@@ -4538,7 +4540,7 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
           },
           vertex_batches);
     }
-    spdlog::info("Connectivity is recovered.");
+    memgraph::logging::Info("Connectivity is recovered.");
 
     // Set initial values for edge/vertex ID generators.
     recovery_info.next_edge_id = highest_edge_gid + 1;
@@ -4547,7 +4549,7 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
 
   // Recover indices.
   {
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -4557,7 +4559,7 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of label indices");
-      spdlog::info("Recovering metadata of {} label indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of label index!");
@@ -4565,14 +4567,14 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
             &indices_constraints.indices.label, get_label_from_id(*label), "The label index already exists!");
         SPDLOG_TRACE("Recovered metadata of label index for :{}", name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of entries for label index statistics!");
-      spdlog::info("Recovering metadata of {} label indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label while recovering label index statistics!");
@@ -4586,14 +4588,14 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of label index statistics for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of label properties indices.");
-      spdlog::info("Recovering metadata of {} label+properties indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+properties indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label properties index.");
@@ -4626,14 +4628,14 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
                                                    }) | r::to_vector,
                                                    ", ")));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
     // Recover label+property indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of entries for label property statistics!");
-      spdlog::info("Recovering metadata of {} label+property indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index statistics!");
@@ -4676,10 +4678,10 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_edge_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     marker = snapshot.ReadMarker();
@@ -4690,7 +4692,7 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
       // Recover edge-type indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type index!");
@@ -4700,13 +4702,13 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of edge-type index for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)));
       }
-      spdlog::info("Metadata of edge-type indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type indices are recovered.");
     }
     {
       // Recover edge-type + property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type + property index!");
@@ -4719,14 +4721,14 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of edge-type + property indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type + property indices are recovered.");
     }
 
     {
       // Recover global edge property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of global edge property indices");
-      spdlog::info("Recovering metadata of {} global edge property indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} global edge property indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto property = snapshot.ReadUint();
         if (!property) throw RecoveryFailure("Couldn't read property of global edge property index!");
@@ -4736,14 +4738,14 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of global edge property index for ({})",
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of global edge property indices are recovered.");
+      memgraph::logging::Info("Metadata of global edge property indices are recovered.");
     }
 
     // Recover point indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of point indices!");
-      spdlog::info("Recovering metadata of {} point indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} point indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for point index!");
@@ -4756,14 +4758,14 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of point indices are recovered.");
+      memgraph::logging::Info("Metadata of point indices are recovered.");
     }
 
     // Recover vector indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of vector indices!");
-      spdlog::info("Recovering metadata of {} vector indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} vector indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read vector index name!");
@@ -4802,14 +4804,14 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
         indices_constraints.indices.vector_indices.emplace_back(
             VectorIndexRecoveryInfo{.spec = std::move(spec), .index_entries = {}});
       }
-      spdlog::info("Metadata of vector indices are recovered.");
+      memgraph::logging::Info("Metadata of vector indices are recovered.");
     }
 
     // Recover text indices.
     {
       auto size_opt = snapshot.ReadUint();
       const auto size = size_opt.value_or(0);
-      spdlog::info("Recovering metadata of {} text indices.", size);
+      memgraph::logging::Info("Recovering metadata of {} text indices.", size);
       for (uint64_t i = 0; i < size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -4823,15 +4825,15 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
                      index_name.value(),
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of text indices are recovered.");
+      memgraph::logging::Info("Metadata of text indices are recovered.");
     }
 
-    spdlog::info("Metadata of indices are recovered.");
+    memgraph::logging::Info("Metadata of indices are recovered.");
   }
 
   // Recover constraints.
   {
-    spdlog::info("Recovering metadata of constraints.");
+    memgraph::logging::Info("Recovering metadata of constraints.");
     if (!snapshot.SetPosition(info.offset_constraints)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -4842,7 +4844,7 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of existence constraints!");
-      spdlog::info("Recovering metadata of {} existence constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} existence constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of existence constraints!");
@@ -4855,7 +4857,7 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of existence constraints are recovered.");
+      memgraph::logging::Info("Metadata of existence constraints are recovered.");
     }
 
     // Recover unique constraints.
@@ -4864,7 +4866,7 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of unique constraints!");
-      spdlog::info("Recovering metadata of {} unique constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} unique constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of unique constraints!");
@@ -4882,7 +4884,7 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of unique constraints for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of unique constraints are recovered.");
+      memgraph::logging::Info("Metadata of unique constraints are recovered.");
     }
 
     // Recover type constraints.
@@ -4892,7 +4894,7 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of type constraints!");
 
-      spdlog::info("Recovering metadata of {} type constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} type constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of type constraints!");
@@ -4910,13 +4912,13 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of type constraints are recovered.");
+      memgraph::logging::Info("Metadata of type constraints are recovered.");
     }
 
-    spdlog::info("Metadata of constraints are recovered.");
+    memgraph::logging::Info("Metadata of constraints are recovered.");
   }
 
-  spdlog::info("Recovering metadata.");
+  memgraph::logging::Info("Recovering metadata.");
   // Recover epoch history
   {
     if (!snapshot.SetPosition(info.offset_epoch_history)) throw RecoveryFailure("Couldn't read data from snapshot!");
@@ -4943,7 +4945,7 @@ RecoveredSnapshot LoadSnapshotVersion24(Decoder &snapshot, std::filesystem::path
     }
   }
 
-  spdlog::info("Metadata recovered.");
+  memgraph::logging::Info("Metadata recovered.");
   // Recover timestamp.
   recovery_info.next_timestamp = info.start_timestamp + 1;
 
@@ -4978,14 +4980,14 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
 
   // Read snapshot info.
   const auto info = ReadSnapshotInfo(path);
-  spdlog::info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
+  memgraph::logging::Info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
   // Check for edges.
   bool const snapshot_has_edges = info.offset_edges != 0;
 
   // Recover mapper.
   std::unordered_map<uint64_t, uint64_t> snapshot_id_map;
   {
-    spdlog::info("Recovering mapper metadata.");
+    memgraph::logging::Info("Recovering mapper metadata.");
     if (!snapshot.SetPosition(info.offset_mapper)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -5008,7 +5010,7 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
   // Recover enums.
   // TODO: when we have enum deletion/edits we will need to handle remapping
   {
-    spdlog::info("Recovering metadata of enums.");
+    memgraph::logging::Info("Recovering metadata of enums.");
     if (!snapshot.SetPosition(info.offset_enums)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -5018,7 +5020,7 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
 
     auto size = snapshot.ReadUint();
     if (!size) throw RecoveryFailure("Couldn't read the number of enums!");
-    spdlog::info("Recovering metadata of {} enums.", *size);
+    memgraph::logging::Info("Recovering metadata of {} enums.", *size);
     for (uint64_t i = 0; i < *size; ++i) {
       auto etype = snapshot.ReadString();
       if (!etype) throw RecoveryFailure("Couldn't read enum type of enums!");
@@ -5039,7 +5041,7 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
         throw RecoveryFailure("The enum could not be created!");
       }
     }
-    spdlog::info("Metadata of enums are recovered.");
+    memgraph::logging::Info("Metadata of enums are recovered.");
   }
 
   auto get_label_from_id = [&snapshot_id_map](uint64_t label_id) {
@@ -5082,7 +5084,7 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
 
   {
     // Recover vertices (labels and properties).
-    spdlog::info("Recovering vertices.");
+    memgraph::logging::Info("Recovering vertices.");
     uint64_t last_vertex_gid{0};
 
     if (!snapshot.SetPosition(info.offset_vertex_batches)) {
@@ -5118,9 +5120,9 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
           vertex_batches);
     }
 
-    spdlog::info("Vertices are recovered.");
+    memgraph::logging::Info("Vertices are recovered.");
 
-    spdlog::info("Recovering edges.");
+    memgraph::logging::Info("Recovering edges.");
     // Recover edges.
     if (snapshot_has_edges) {
       // We don't need to check whether we store properties on edge or not, because `LoadPartialEdges` will always
@@ -5144,10 +5146,10 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
             edge_batches);
       }
     }
-    spdlog::info("Edges are recovered.");
+    memgraph::logging::Info("Edges are recovered.");
 
     // Recover vertices (in/out edges).
-    spdlog::info("Recover connectivity.");
+    memgraph::logging::Info("Recover connectivity.");
     recovery_info.vertex_batches.reserve(vertex_batches.size());
     for (const auto batch : vertex_batches) {
       recovery_info.vertex_batches.emplace_back(Gid::FromUint(0), batch.count);
@@ -5186,7 +5188,7 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
           },
           vertex_batches);
     }
-    spdlog::info("Connectivity is recovered.");
+    memgraph::logging::Info("Connectivity is recovered.");
 
     // Set initial values for edge/vertex ID generators.
     recovery_info.next_edge_id = highest_edge_gid + 1;
@@ -5195,7 +5197,7 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
 
   // Recover indices.
   {
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -5205,7 +5207,7 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of label indices");
-      spdlog::info("Recovering metadata of {} label indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of label index!");
@@ -5213,14 +5215,14 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
             &indices_constraints.indices.label, get_label_from_id(*label), "The label index already exists!");
         SPDLOG_TRACE("Recovered metadata of label index for :{}", name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of entries for label index statistics!");
-      spdlog::info("Recovering metadata of {} label indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label while recovering label index statistics!");
@@ -5234,14 +5236,14 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of label index statistics for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of label properties indices.");
-      spdlog::info("Recovering metadata of {} label+properties indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+properties indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label properties index.");
@@ -5260,14 +5262,14 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
                                                    }) | r::to_vector,
                                                    ", ")));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
     // Recover label+property indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of entries for label property statistics!");
-      spdlog::info("Recovering metadata of {} label+property indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index statistics!");
@@ -5297,10 +5299,10 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_edge_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     marker = snapshot.ReadMarker();
@@ -5311,7 +5313,7 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
       // Recover edge-type indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type index!");
@@ -5321,13 +5323,13 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of edge-type index for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)));
       }
-      spdlog::info("Metadata of edge-type indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type indices are recovered.");
     }
     {
       // Recover edge-type + property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type + property index!");
@@ -5340,14 +5342,14 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of edge-type + property indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type + property indices are recovered.");
     }
 
     {
       // Recover global edge property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of global edge property indices");
-      spdlog::info("Recovering metadata of {} global edge property indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} global edge property indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto property = snapshot.ReadUint();
         if (!property) throw RecoveryFailure("Couldn't read property of global edge property index!");
@@ -5357,14 +5359,14 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of global edge property index for ({})",
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of global edge property indices are recovered.");
+      memgraph::logging::Info("Metadata of global edge property indices are recovered.");
     }
 
     // Recover point indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of point indices!");
-      spdlog::info("Recovering metadata of {} point indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} point indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for point index!");
@@ -5377,14 +5379,14 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of point indices are recovered.");
+      memgraph::logging::Info("Metadata of point indices are recovered.");
     }
 
     // Recover vector indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of vector indices!");
-      spdlog::info("Recovering metadata of {} vector indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} vector indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read vector index name!");
@@ -5423,14 +5425,14 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
         indices_constraints.indices.vector_indices.emplace_back(
             VectorIndexRecoveryInfo{.spec = std::move(spec), .index_entries = {}});
       }
-      spdlog::info("Metadata of vector indices are recovered.");
+      memgraph::logging::Info("Metadata of vector indices are recovered.");
     }
 
     // Recover text indices.
     {
       auto size_opt = snapshot.ReadUint();
       const auto size = size_opt.value_or(0);
-      spdlog::info("Recovering metadata of {} text indices.", size);
+      memgraph::logging::Info("Recovering metadata of {} text indices.", size);
       for (uint64_t i = 0; i < size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -5444,15 +5446,15 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
                      index_name.value(),
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of text indices are recovered.");
+      memgraph::logging::Info("Metadata of text indices are recovered.");
     }
 
-    spdlog::info("Metadata of indices are recovered.");
+    memgraph::logging::Info("Metadata of indices are recovered.");
   }
 
   // Recover constraints.
   {
-    spdlog::info("Recovering metadata of constraints.");
+    memgraph::logging::Info("Recovering metadata of constraints.");
     if (!snapshot.SetPosition(info.offset_constraints)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -5463,7 +5465,7 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of existence constraints!");
-      spdlog::info("Recovering metadata of {} existence constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} existence constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of existence constraints!");
@@ -5476,7 +5478,7 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of existence constraints are recovered.");
+      memgraph::logging::Info("Metadata of existence constraints are recovered.");
     }
 
     // Recover unique constraints.
@@ -5485,7 +5487,7 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of unique constraints!");
-      spdlog::info("Recovering metadata of {} unique constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} unique constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of unique constraints!");
@@ -5503,7 +5505,7 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of unique constraints for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of unique constraints are recovered.");
+      memgraph::logging::Info("Metadata of unique constraints are recovered.");
     }
 
     // Recover type constraints.
@@ -5513,7 +5515,7 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of type constraints!");
 
-      spdlog::info("Recovering metadata of {} type constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} type constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of type constraints!");
@@ -5531,13 +5533,13 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of type constraints are recovered.");
+      memgraph::logging::Info("Metadata of type constraints are recovered.");
     }
 
-    spdlog::info("Metadata of constraints are recovered.");
+    memgraph::logging::Info("Metadata of constraints are recovered.");
   }
 
-  spdlog::info("Recovering metadata.");
+  memgraph::logging::Info("Recovering metadata.");
   // Recover epoch history
   {
     if (!snapshot.SetPosition(info.offset_epoch_history)) throw RecoveryFailure("Couldn't read data from snapshot!");
@@ -5564,7 +5566,7 @@ RecoveredSnapshot LoadSnapshotVersion25(Decoder &snapshot, std::filesystem::path
     }
   }
 
-  spdlog::info("Metadata recovered.");
+  memgraph::logging::Info("Metadata recovered.");
   // Recover timestamp.
   recovery_info.next_timestamp = info.start_timestamp + 1;
 
@@ -5599,14 +5601,14 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
 
   // Read snapshot info.
   const auto info = ReadSnapshotInfo(path);
-  spdlog::info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
+  memgraph::logging::Info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
   // Check for edges.
   bool const snapshot_has_edges = info.offset_edges != 0;
 
   // Recover mapper.
   std::unordered_map<uint64_t, uint64_t> snapshot_id_map;
   {
-    spdlog::info("Recovering mapper metadata.");
+    memgraph::logging::Info("Recovering mapper metadata.");
     if (!snapshot.SetPosition(info.offset_mapper)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -5629,7 +5631,7 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
   // Recover enums.
   // TODO: when we have enum deletion/edits we will need to handle remapping
   {
-    spdlog::info("Recovering metadata of enums.");
+    memgraph::logging::Info("Recovering metadata of enums.");
     if (!snapshot.SetPosition(info.offset_enums)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -5639,7 +5641,7 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
 
     auto size = snapshot.ReadUint();
     if (!size) throw RecoveryFailure("Couldn't read the number of enums!");
-    spdlog::info("Recovering metadata of {} enums.", *size);
+    memgraph::logging::Info("Recovering metadata of {} enums.", *size);
     for (uint64_t i = 0; i < *size; ++i) {
       auto etype = snapshot.ReadString();
       if (!etype) throw RecoveryFailure("Couldn't read enum type of enums!");
@@ -5660,7 +5662,7 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
         throw RecoveryFailure("The enum could not be created!");
       }
     }
-    spdlog::info("Metadata of enums are recovered.");
+    memgraph::logging::Info("Metadata of enums are recovered.");
   }
 
   auto get_label_from_id = [&snapshot_id_map](uint64_t label_id) {
@@ -5703,7 +5705,7 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
 
   {
     // Recover vertices (labels and properties).
-    spdlog::info("Recovering vertices.");
+    memgraph::logging::Info("Recovering vertices.");
     uint64_t last_vertex_gid{0};
 
     if (!snapshot.SetPosition(info.offset_vertex_batches)) {
@@ -5739,9 +5741,9 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
           vertex_batches);
     }
 
-    spdlog::info("Vertices are recovered.");
+    memgraph::logging::Info("Vertices are recovered.");
 
-    spdlog::info("Recovering edges.");
+    memgraph::logging::Info("Recovering edges.");
     // Recover edges.
     if (snapshot_has_edges) {
       // We don't need to check whether we store properties on edge or not, because `LoadPartialEdges` will always
@@ -5765,10 +5767,10 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
             edge_batches);
       }
     }
-    spdlog::info("Edges are recovered.");
+    memgraph::logging::Info("Edges are recovered.");
 
     // Recover vertices (in/out edges).
-    spdlog::info("Recover connectivity.");
+    memgraph::logging::Info("Recover connectivity.");
     recovery_info.vertex_batches.reserve(vertex_batches.size());
     for (const auto batch : vertex_batches) {
       recovery_info.vertex_batches.emplace_back(Gid::FromUint(0), batch.count);
@@ -5807,7 +5809,7 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
           },
           vertex_batches);
     }
-    spdlog::info("Connectivity is recovered.");
+    memgraph::logging::Info("Connectivity is recovered.");
 
     // Set initial values for edge/vertex ID generators.
     recovery_info.next_edge_id = highest_edge_gid + 1;
@@ -5816,7 +5818,7 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
 
   // Recover indices.
   {
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -5826,7 +5828,7 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of label indices");
-      spdlog::info("Recovering metadata of {} label indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of label index!");
@@ -5834,14 +5836,14 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
             &indices_constraints.indices.label, get_label_from_id(*label), "The label index already exists!");
         SPDLOG_TRACE("Recovered metadata of label index for :{}", name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of entries for label index statistics!");
-      spdlog::info("Recovering metadata of {} label indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label while recovering label index statistics!");
@@ -5855,14 +5857,14 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of label index statistics for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of label properties indices.");
-      spdlog::info("Recovering metadata of {} label+properties indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+properties indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label properties index.");
@@ -5881,14 +5883,14 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
                                                    }) | r::to_vector,
                                                    ", ")));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
     // Recover label+property indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of entries for label property statistics!");
-      spdlog::info("Recovering metadata of {} label+property indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index statistics!");
@@ -5918,10 +5920,10 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_edge_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     marker = snapshot.ReadMarker();
@@ -5932,7 +5934,7 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
       // Recover edge-type indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type index!");
@@ -5942,13 +5944,13 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of edge-type index for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)));
       }
-      spdlog::info("Metadata of edge-type indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type indices are recovered.");
     }
     {
       // Recover edge-type + property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type + property index!");
@@ -5961,14 +5963,14 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of edge-type + property indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type + property indices are recovered.");
     }
 
     {
       // Recover global edge property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of global edge property indices");
-      spdlog::info("Recovering metadata of {} global edge property indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} global edge property indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto property = snapshot.ReadUint();
         if (!property) throw RecoveryFailure("Couldn't read property of global edge property index!");
@@ -5978,14 +5980,14 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of global edge property index for ({})",
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of global edge property indices are recovered.");
+      memgraph::logging::Info("Metadata of global edge property indices are recovered.");
     }
 
     // Recover point indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of point indices!");
-      spdlog::info("Recovering metadata of {} point indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} point indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for point index!");
@@ -5998,14 +6000,14 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of point indices are recovered.");
+      memgraph::logging::Info("Metadata of point indices are recovered.");
     }
 
     // Recover vector indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of vector indices!");
-      spdlog::info("Recovering metadata of {} vector indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} vector indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read vector index name!");
@@ -6046,14 +6048,14 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
         indices_constraints.indices.vector_indices.emplace_back(
             VectorIndexRecoveryInfo{.spec = std::move(spec), .index_entries = {}});
       }
-      spdlog::info("Metadata of vector indices are recovered.");
+      memgraph::logging::Info("Metadata of vector indices are recovered.");
     }
 
     // Recover text indices.
     {
       auto size_opt = snapshot.ReadUint();
       const auto size = size_opt.value_or(0);
-      spdlog::info("Recovering metadata of {} text indices.", size);
+      memgraph::logging::Info("Recovering metadata of {} text indices.", size);
       for (uint64_t i = 0; i < size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -6067,15 +6069,15 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
                      index_name.value(),
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of text indices are recovered.");
+      memgraph::logging::Info("Metadata of text indices are recovered.");
     }
 
-    spdlog::info("Metadata of indices are recovered.");
+    memgraph::logging::Info("Metadata of indices are recovered.");
   }
 
   // Recover constraints.
   {
-    spdlog::info("Recovering metadata of constraints.");
+    memgraph::logging::Info("Recovering metadata of constraints.");
     if (!snapshot.SetPosition(info.offset_constraints)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -6086,7 +6088,7 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of existence constraints!");
-      spdlog::info("Recovering metadata of {} existence constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} existence constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of existence constraints!");
@@ -6099,7 +6101,7 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of existence constraints are recovered.");
+      memgraph::logging::Info("Metadata of existence constraints are recovered.");
     }
 
     // Recover unique constraints.
@@ -6108,7 +6110,7 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of unique constraints!");
-      spdlog::info("Recovering metadata of {} unique constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} unique constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of unique constraints!");
@@ -6126,7 +6128,7 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of unique constraints for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of unique constraints are recovered.");
+      memgraph::logging::Info("Metadata of unique constraints are recovered.");
     }
 
     // Recover type constraints.
@@ -6136,7 +6138,7 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of type constraints!");
 
-      spdlog::info("Recovering metadata of {} type constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} type constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of type constraints!");
@@ -6154,13 +6156,13 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of type constraints are recovered.");
+      memgraph::logging::Info("Metadata of type constraints are recovered.");
     }
 
-    spdlog::info("Metadata of constraints are recovered.");
+    memgraph::logging::Info("Metadata of constraints are recovered.");
   }
 
-  spdlog::info("Recovering metadata.");
+  memgraph::logging::Info("Recovering metadata.");
   // Recover epoch history
   {
     if (!snapshot.SetPosition(info.offset_epoch_history)) throw RecoveryFailure("Couldn't read data from snapshot!");
@@ -6187,7 +6189,7 @@ RecoveredSnapshot LoadSnapshotVersion26(Decoder &snapshot, std::filesystem::path
     }
   }
 
-  spdlog::info("Metadata recovered.");
+  memgraph::logging::Info("Metadata recovered.");
   // Recover timestamp.
   recovery_info.next_timestamp = info.start_timestamp + 1;
 
@@ -6222,14 +6224,14 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
 
   // Read snapshot info.
   const auto info = ReadSnapshotInfo(path);
-  spdlog::info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
+  memgraph::logging::Info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
   // Check for edges.
   bool const snapshot_has_edges = info.offset_edges != 0;
 
   // Recover mapper.
   std::unordered_map<uint64_t, uint64_t> snapshot_id_map;
   {
-    spdlog::info("Recovering mapper metadata.");
+    memgraph::logging::Info("Recovering mapper metadata.");
     if (!snapshot.SetPosition(info.offset_mapper)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -6252,7 +6254,7 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
   // Recover enums.
   // TODO: when we have enum deletion/edits we will need to handle remapping
   {
-    spdlog::info("Recovering metadata of enums.");
+    memgraph::logging::Info("Recovering metadata of enums.");
     if (!snapshot.SetPosition(info.offset_enums)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -6262,7 +6264,7 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
 
     auto size = snapshot.ReadUint();
     if (!size) throw RecoveryFailure("Couldn't read the number of enums!");
-    spdlog::info("Recovering metadata of {} enums.", *size);
+    memgraph::logging::Info("Recovering metadata of {} enums.", *size);
     for (uint64_t i = 0; i < *size; ++i) {
       auto etype = snapshot.ReadString();
       if (!etype) throw RecoveryFailure("Couldn't read enum type of enums!");
@@ -6283,7 +6285,7 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
         throw RecoveryFailure("The enum could not be created!");
       }
     }
-    spdlog::info("Metadata of enums are recovered.");
+    memgraph::logging::Info("Metadata of enums are recovered.");
   }
 
   auto get_label_from_id = [&snapshot_id_map](uint64_t label_id) {
@@ -6326,7 +6328,7 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
 
   {
     // Recover vertices (labels and properties).
-    spdlog::info("Recovering vertices.");
+    memgraph::logging::Info("Recovering vertices.");
     uint64_t last_vertex_gid{0};
 
     if (!snapshot.SetPosition(info.offset_vertex_batches)) {
@@ -6362,9 +6364,9 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
           vertex_batches);
     }
 
-    spdlog::info("Vertices are recovered.");
+    memgraph::logging::Info("Vertices are recovered.");
 
-    spdlog::info("Recovering edges.");
+    memgraph::logging::Info("Recovering edges.");
     // Recover edges.
     if (snapshot_has_edges) {
       // We don't need to check whether we store properties on edge or not, because `LoadPartialEdges` will always
@@ -6388,10 +6390,10 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
             edge_batches);
       }
     }
-    spdlog::info("Edges are recovered.");
+    memgraph::logging::Info("Edges are recovered.");
 
     // Recover vertices (in/out edges).
-    spdlog::info("Recover connectivity.");
+    memgraph::logging::Info("Recover connectivity.");
     recovery_info.vertex_batches.reserve(vertex_batches.size());
     for (const auto batch : vertex_batches) {
       recovery_info.vertex_batches.emplace_back(Gid::FromUint(0), batch.count);
@@ -6430,7 +6432,7 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
           },
           vertex_batches);
     }
-    spdlog::info("Connectivity is recovered.");
+    memgraph::logging::Info("Connectivity is recovered.");
 
     // Set initial values for edge/vertex ID generators.
     recovery_info.next_edge_id = highest_edge_gid + 1;
@@ -6439,7 +6441,7 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
 
   // Recover indices.
   {
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -6449,7 +6451,7 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of label indices");
-      spdlog::info("Recovering metadata of {} label indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of label index!");
@@ -6457,14 +6459,14 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
             &indices_constraints.indices.label, get_label_from_id(*label), "The label index already exists!");
         SPDLOG_TRACE("Recovered metadata of label index for :{}", name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of entries for label index statistics!");
-      spdlog::info("Recovering metadata of {} label indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label while recovering label index statistics!");
@@ -6478,14 +6480,14 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
         SPDLOG_TRACE("Recovered metadata of label index statistics for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of label properties indices.");
-      spdlog::info("Recovering metadata of {} label+properties indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+properties indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label properties index.");
@@ -6504,14 +6506,14 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
                                                    }) | r::to_vector,
                                                    ", ")));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
     // Recover label+property indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of entries for label property statistics!");
-      spdlog::info("Recovering metadata of {} label+property indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index statistics!");
@@ -6541,10 +6543,10 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_edge_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     marker = snapshot.ReadMarker();
@@ -6555,7 +6557,7 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
       // Recover edge-type indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type index!");
@@ -6565,13 +6567,13 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
         SPDLOG_TRACE("Recovered metadata of edge-type index for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)));
       }
-      spdlog::info("Metadata of edge-type indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type indices are recovered.");
     }
     {
       // Recover edge-type + property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type + property index!");
@@ -6584,14 +6586,14 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of edge-type + property indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type + property indices are recovered.");
     }
 
     {
       // Recover global edge property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of global edge property indices");
-      spdlog::info("Recovering metadata of {} global edge property indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} global edge property indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto property = snapshot.ReadUint();
         if (!property) throw RecoveryFailure("Couldn't read property of global edge property index!");
@@ -6601,14 +6603,14 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
         SPDLOG_TRACE("Recovered metadata of global edge property index for ({})",
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of global edge property indices are recovered.");
+      memgraph::logging::Info("Metadata of global edge property indices are recovered.");
     }
 
     // Recover point indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of point indices!");
-      spdlog::info("Recovering metadata of {} point indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} point indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for point index!");
@@ -6621,14 +6623,14 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of point indices are recovered.");
+      memgraph::logging::Info("Metadata of point indices are recovered.");
     }
 
     // Recover vector indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of vector indices!");
-      spdlog::info("Recovering metadata of {} vector indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} vector indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read vector index name!");
@@ -6671,14 +6673,14 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
         indices_constraints.indices.vector_indices.emplace_back(
             VectorIndexRecoveryInfo{.spec = std::move(spec), .index_entries = {}});
       }
-      spdlog::info("Metadata of vector indices are recovered.");
+      memgraph::logging::Info("Metadata of vector indices are recovered.");
     }
 
     // Recover vector edge indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of vector indices!");
-      spdlog::info("Recovering metadata of {} vector indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} vector indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read vector index name!");
@@ -6721,14 +6723,14 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
                                         .scalar_kind = static_cast<unum::usearch::scalar_kind_t>(*scalar_kind)},
             .index_entries = {}});
       }
-      spdlog::info("Metadata of vector indices are recovered.");
+      memgraph::logging::Info("Metadata of vector indices are recovered.");
     }
 
     // Recover text indices.
     {
       auto size_opt = snapshot.ReadUint();
       const auto size = size_opt.value_or(0);
-      spdlog::info("Recovering metadata of {} text indices.", size);
+      memgraph::logging::Info("Recovering metadata of {} text indices.", size);
       for (uint64_t i = 0; i < size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -6742,15 +6744,15 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
                      index_name.value(),
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of text indices are recovered.");
+      memgraph::logging::Info("Metadata of text indices are recovered.");
     }
 
-    spdlog::info("Metadata of indices are recovered.");
+    memgraph::logging::Info("Metadata of indices are recovered.");
   }
 
   // Recover constraints.
   {
-    spdlog::info("Recovering metadata of constraints.");
+    memgraph::logging::Info("Recovering metadata of constraints.");
     if (!snapshot.SetPosition(info.offset_constraints)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -6761,7 +6763,7 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of existence constraints!");
-      spdlog::info("Recovering metadata of {} existence constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} existence constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of existence constraints!");
@@ -6774,7 +6776,7 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of existence constraints are recovered.");
+      memgraph::logging::Info("Metadata of existence constraints are recovered.");
     }
 
     // Recover unique constraints.
@@ -6783,7 +6785,7 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of unique constraints!");
-      spdlog::info("Recovering metadata of {} unique constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} unique constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of unique constraints!");
@@ -6801,7 +6803,7 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
         SPDLOG_TRACE("Recovered metadata of unique constraints for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of unique constraints are recovered.");
+      memgraph::logging::Info("Metadata of unique constraints are recovered.");
     }
 
     // Recover type constraints.
@@ -6811,7 +6813,7 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of type constraints!");
 
-      spdlog::info("Recovering metadata of {} type constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} type constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of type constraints!");
@@ -6829,13 +6831,13 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of type constraints are recovered.");
+      memgraph::logging::Info("Metadata of type constraints are recovered.");
     }
 
-    spdlog::info("Metadata of constraints are recovered.");
+    memgraph::logging::Info("Metadata of constraints are recovered.");
   }
 
-  spdlog::info("Recovering metadata.");
+  memgraph::logging::Info("Recovering metadata.");
   // Recover epoch history
   {
     if (!snapshot.SetPosition(info.offset_epoch_history)) throw RecoveryFailure("Couldn't read data from snapshot!");
@@ -6862,7 +6864,7 @@ RecoveredSnapshot LoadSnapshotVersion27or28(Decoder &snapshot, std::filesystem::
     }
   }
 
-  spdlog::info("Metadata recovered.");
+  memgraph::logging::Info("Metadata recovered.");
   // Recover timestamp.
   recovery_info.next_timestamp = info.start_timestamp + 1;
 
@@ -6897,14 +6899,14 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
 
   // Read snapshot info.
   const auto info = ReadSnapshotInfo(path);
-  spdlog::info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
+  memgraph::logging::Info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
   // Check for edges.
   bool const snapshot_has_edges = info.offset_edges != 0;
 
   // Recover mapper.
   std::unordered_map<uint64_t, uint64_t> snapshot_id_map;
   {
-    spdlog::info("Recovering mapper metadata.");
+    memgraph::logging::Info("Recovering mapper metadata.");
     if (!snapshot.SetPosition(info.offset_mapper)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -6927,7 +6929,7 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
   // Recover enums.
   // TODO: when we have enum deletion/edits we will need to handle remapping
   {
-    spdlog::info("Recovering metadata of enums.");
+    memgraph::logging::Info("Recovering metadata of enums.");
     if (!snapshot.SetPosition(info.offset_enums)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -6937,7 +6939,7 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
 
     auto size = snapshot.ReadUint();
     if (!size) throw RecoveryFailure("Couldn't read the number of enums!");
-    spdlog::info("Recovering metadata of {} enums.", *size);
+    memgraph::logging::Info("Recovering metadata of {} enums.", *size);
     for (uint64_t i = 0; i < *size; ++i) {
       auto etype = snapshot.ReadString();
       if (!etype) throw RecoveryFailure("Couldn't read enum type of enums!");
@@ -6958,7 +6960,7 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
         throw RecoveryFailure("The enum could not be created!");
       }
     }
-    spdlog::info("Metadata of enums are recovered.");
+    memgraph::logging::Info("Metadata of enums are recovered.");
   }
 
   auto get_label_from_id = [&snapshot_id_map](uint64_t label_id) {
@@ -7001,7 +7003,7 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
 
   {
     // Recover vertices (labels and properties).
-    spdlog::info("Recovering vertices.");
+    memgraph::logging::Info("Recovering vertices.");
     uint64_t last_vertex_gid{0};
 
     if (!snapshot.SetPosition(info.offset_vertex_batches)) {
@@ -7037,9 +7039,9 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
           vertex_batches);
     }
 
-    spdlog::info("Vertices are recovered.");
+    memgraph::logging::Info("Vertices are recovered.");
 
-    spdlog::info("Recovering edges.");
+    memgraph::logging::Info("Recovering edges.");
     // Recover edges.
     if (snapshot_has_edges) {
       // We don't need to check whether we store properties on edge or not, because `LoadPartialEdges` will always
@@ -7063,10 +7065,10 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
             edge_batches);
       }
     }
-    spdlog::info("Edges are recovered.");
+    memgraph::logging::Info("Edges are recovered.");
 
     // Recover vertices (in/out edges).
-    spdlog::info("Recover connectivity.");
+    memgraph::logging::Info("Recover connectivity.");
     recovery_info.vertex_batches.reserve(vertex_batches.size());
     for (const auto batch : vertex_batches) {
       recovery_info.vertex_batches.emplace_back(Gid::FromUint(0), batch.count);
@@ -7105,7 +7107,7 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
           },
           vertex_batches);
     }
-    spdlog::info("Connectivity is recovered.");
+    memgraph::logging::Info("Connectivity is recovered.");
 
     // Set initial values for edge/vertex ID generators.
     recovery_info.next_edge_id = highest_edge_gid + 1;
@@ -7114,7 +7116,7 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
 
   // Recover indices.
   {
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -7124,7 +7126,7 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of label indices");
-      spdlog::info("Recovering metadata of {} label indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of label index!");
@@ -7132,14 +7134,14 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
             &indices_constraints.indices.label, get_label_from_id(*label), "The label index already exists!");
         SPDLOG_TRACE("Recovered metadata of label index for :{}", name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of entries for label index statistics!");
-      spdlog::info("Recovering metadata of {} label indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label while recovering label index statistics!");
@@ -7153,14 +7155,14 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of label index statistics for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of label properties indices.");
-      spdlog::info("Recovering metadata of {} label+properties indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+properties indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label properties index.");
@@ -7179,14 +7181,14 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
                                                    }) | r::to_vector,
                                                    ", ")));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
     // Recover label+property indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of entries for label property statistics!");
-      spdlog::info("Recovering metadata of {} label+property indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index statistics!");
@@ -7216,10 +7218,10 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_edge_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     marker = snapshot.ReadMarker();
@@ -7230,7 +7232,7 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
       // Recover edge-type indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type index!");
@@ -7240,13 +7242,13 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of edge-type index for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)));
       }
-      spdlog::info("Metadata of edge-type indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type indices are recovered.");
     }
     {
       // Recover edge-type + property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type + property index!");
@@ -7259,14 +7261,14 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of edge-type + property indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type + property indices are recovered.");
     }
 
     {
       // Recover global edge property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of global edge property indices");
-      spdlog::info("Recovering metadata of {} global edge property indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} global edge property indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto property = snapshot.ReadUint();
         if (!property) throw RecoveryFailure("Couldn't read property of global edge property index!");
@@ -7276,14 +7278,14 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of global edge property index for ({})",
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of global edge property indices are recovered.");
+      memgraph::logging::Info("Metadata of global edge property indices are recovered.");
     }
 
     // Recover point indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of point indices!");
-      spdlog::info("Recovering metadata of {} point indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} point indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for point index!");
@@ -7296,14 +7298,14 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of point indices are recovered.");
+      memgraph::logging::Info("Metadata of point indices are recovered.");
     }
 
     // Recover vector indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of vector indices!");
-      spdlog::info("Recovering metadata of {} vector indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} vector indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read vector index name!");
@@ -7346,14 +7348,14 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
         indices_constraints.indices.vector_indices.emplace_back(
             VectorIndexRecoveryInfo{.spec = std::move(spec), .index_entries = {}});
       }
-      spdlog::info("Metadata of vector indices are recovered.");
+      memgraph::logging::Info("Metadata of vector indices are recovered.");
     }
 
     // Recover vector edge indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of vector indices!");
-      spdlog::info("Recovering metadata of {} vector indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} vector indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read vector index name!");
@@ -7396,14 +7398,14 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
                                         .scalar_kind = static_cast<unum::usearch::scalar_kind_t>(*scalar_kind)},
             .index_entries = {}});
       }
-      spdlog::info("Metadata of vector indices are recovered.");
+      memgraph::logging::Info("Metadata of vector indices are recovered.");
     }
 
     // Recover text indices.
     {
       auto size_opt = snapshot.ReadUint();
       const auto size = size_opt.value_or(0);
-      spdlog::info("Recovering metadata of {} text indices.", size);
+      memgraph::logging::Info("Recovering metadata of {} text indices.", size);
       for (uint64_t i = 0; i < size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -7427,15 +7429,15 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
                      index_name.value(),
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of text indices are recovered.");
+      memgraph::logging::Info("Metadata of text indices are recovered.");
     }
 
-    spdlog::info("Metadata of indices are recovered.");
+    memgraph::logging::Info("Metadata of indices are recovered.");
   }
 
   // Recover constraints.
   {
-    spdlog::info("Recovering metadata of constraints.");
+    memgraph::logging::Info("Recovering metadata of constraints.");
     if (!snapshot.SetPosition(info.offset_constraints)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -7446,7 +7448,7 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of existence constraints!");
-      spdlog::info("Recovering metadata of {} existence constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} existence constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of existence constraints!");
@@ -7459,7 +7461,7 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of existence constraints are recovered.");
+      memgraph::logging::Info("Metadata of existence constraints are recovered.");
     }
 
     // Recover unique constraints.
@@ -7468,7 +7470,7 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of unique constraints!");
-      spdlog::info("Recovering metadata of {} unique constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} unique constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of unique constraints!");
@@ -7486,7 +7488,7 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of unique constraints for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of unique constraints are recovered.");
+      memgraph::logging::Info("Metadata of unique constraints are recovered.");
     }
 
     // Recover type constraints.
@@ -7496,7 +7498,7 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of type constraints!");
 
-      spdlog::info("Recovering metadata of {} type constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} type constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of type constraints!");
@@ -7514,13 +7516,13 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of type constraints are recovered.");
+      memgraph::logging::Info("Metadata of type constraints are recovered.");
     }
 
-    spdlog::info("Metadata of constraints are recovered.");
+    memgraph::logging::Info("Metadata of constraints are recovered.");
   }
 
-  spdlog::info("Recovering metadata.");
+  memgraph::logging::Info("Recovering metadata.");
   // Recover epoch history
   {
     if (!snapshot.SetPosition(info.offset_epoch_history)) throw RecoveryFailure("Couldn't read data from snapshot!");
@@ -7547,7 +7549,7 @@ RecoveredSnapshot LoadSnapshotVersion29(Decoder &snapshot, std::filesystem::path
     }
   }
 
-  spdlog::info("Metadata recovered.");
+  memgraph::logging::Info("Metadata recovered.");
   // Recover timestamp.
   recovery_info.next_timestamp = info.start_timestamp + 1;
 
@@ -7583,14 +7585,14 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
 
   // Read snapshot info.
   const auto info = ReadSnapshotInfo(path);
-  spdlog::info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
+  memgraph::logging::Info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
   // Check for edges.
   bool const snapshot_has_edges = info.offset_edges != 0;
 
   // Recover mapper.
   std::unordered_map<uint64_t, uint64_t> snapshot_id_map;
   {
-    spdlog::info("Recovering mapper metadata.");
+    memgraph::logging::Info("Recovering mapper metadata.");
     if (!snapshot.SetPosition(info.offset_mapper)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -7613,7 +7615,7 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
   // Recover enums.
   // TODO: when we have enum deletion/edits we will need to handle remapping
   {
-    spdlog::info("Recovering metadata of enums.");
+    memgraph::logging::Info("Recovering metadata of enums.");
     if (!snapshot.SetPosition(info.offset_enums)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -7623,7 +7625,7 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
 
     auto size = snapshot.ReadUint();
     if (!size) throw RecoveryFailure("Couldn't read the number of enums!");
-    spdlog::info("Recovering metadata of {} enums.", *size);
+    memgraph::logging::Info("Recovering metadata of {} enums.", *size);
     for (uint64_t i = 0; i < *size; ++i) {
       auto etype = snapshot.ReadString();
       if (!etype) throw RecoveryFailure("Couldn't read enum type of enums!");
@@ -7644,7 +7646,7 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
         throw RecoveryFailure("The enum could not be created!");
       }
     }
-    spdlog::info("Metadata of enums are recovered.");
+    memgraph::logging::Info("Metadata of enums are recovered.");
   }
 
   auto get_label_from_id = [&snapshot_id_map](uint64_t label_id) {
@@ -7687,7 +7689,7 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
 
   {
     // Recover vertices (labels and properties).
-    spdlog::info("Recovering vertices.");
+    memgraph::logging::Info("Recovering vertices.");
     uint64_t last_vertex_gid{0};
 
     if (!snapshot.SetPosition(info.offset_vertex_batches)) {
@@ -7723,9 +7725,9 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
           vertex_batches);
     }
 
-    spdlog::info("Vertices are recovered.");
+    memgraph::logging::Info("Vertices are recovered.");
 
-    spdlog::info("Recovering edges.");
+    memgraph::logging::Info("Recovering edges.");
     // Recover edges.
     if (snapshot_has_edges) {
       // We don't need to check whether we store properties on edge or not, because `LoadPartialEdges` will always
@@ -7749,10 +7751,10 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
             edge_batches);
       }
     }
-    spdlog::info("Edges are recovered.");
+    memgraph::logging::Info("Edges are recovered.");
 
     // Recover vertices (in/out edges).
-    spdlog::info("Recover connectivity.");
+    memgraph::logging::Info("Recover connectivity.");
     recovery_info.vertex_batches.reserve(vertex_batches.size());
     for (const auto batch : vertex_batches) {
       recovery_info.vertex_batches.emplace_back(Gid::FromUint(0), batch.count);
@@ -7791,7 +7793,7 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
           },
           vertex_batches);
     }
-    spdlog::info("Connectivity is recovered.");
+    memgraph::logging::Info("Connectivity is recovered.");
 
     // Set initial values for edge/vertex ID generators.
     recovery_info.next_edge_id = highest_edge_gid + 1;
@@ -7800,7 +7802,7 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
 
   // Recover indices.
   {
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -7810,7 +7812,7 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of label indices");
-      spdlog::info("Recovering metadata of {} label indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of label index!");
@@ -7818,14 +7820,14 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
             &indices_constraints.indices.label, get_label_from_id(*label), "The label index already exists!");
         SPDLOG_TRACE("Recovered metadata of label index for :{}", name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of entries for label index statistics!");
-      spdlog::info("Recovering metadata of {} label indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label while recovering label index statistics!");
@@ -7839,14 +7841,14 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of label index statistics for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of label properties indices.");
-      spdlog::info("Recovering metadata of {} label+properties indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+properties indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label properties index.");
@@ -7865,14 +7867,14 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
                                                    }) | r::to_vector,
                                                    ", ")));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
     // Recover label+property indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of entries for label property statistics!");
-      spdlog::info("Recovering metadata of {} label+property indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index statistics!");
@@ -7902,10 +7904,10 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_edge_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     marker = snapshot.ReadMarker();
@@ -7916,7 +7918,7 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
       // Recover edge-type indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type index!");
@@ -7926,13 +7928,13 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of edge-type index for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)));
       }
-      spdlog::info("Metadata of edge-type indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type indices are recovered.");
     }
     {
       // Recover edge-type + property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type + property index!");
@@ -7945,14 +7947,14 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of edge-type + property indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type + property indices are recovered.");
     }
 
     {
       // Recover global edge property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of global edge property indices");
-      spdlog::info("Recovering metadata of {} global edge property indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} global edge property indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto property = snapshot.ReadUint();
         if (!property) throw RecoveryFailure("Couldn't read property of global edge property index!");
@@ -7962,14 +7964,14 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of global edge property index for ({})",
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of global edge property indices are recovered.");
+      memgraph::logging::Info("Metadata of global edge property indices are recovered.");
     }
 
     // Recover point indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of point indices!");
-      spdlog::info("Recovering metadata of {} point indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} point indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for point index!");
@@ -7982,14 +7984,14 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of point indices are recovered.");
+      memgraph::logging::Info("Metadata of point indices are recovered.");
     }
 
     // Recover vector indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of vector indices!");
-      spdlog::info("Recovering metadata of {} vector indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} vector indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read vector index name!");
@@ -8032,14 +8034,14 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
         indices_constraints.indices.vector_indices.emplace_back(
             VectorIndexRecoveryInfo{.spec = std::move(spec), .index_entries = {}});
       }
-      spdlog::info("Metadata of vector indices are recovered.");
+      memgraph::logging::Info("Metadata of vector indices are recovered.");
     }
 
     // Recover vector edge indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of vector indices!");
-      spdlog::info("Recovering metadata of {} vector indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} vector indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read vector index name!");
@@ -8082,14 +8084,14 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
                                         .scalar_kind = static_cast<unum::usearch::scalar_kind_t>(*scalar_kind)},
             .index_entries = {}});
       }
-      spdlog::info("Metadata of vector indices are recovered.");
+      memgraph::logging::Info("Metadata of vector indices are recovered.");
     }
 
     // Recover text indices.
     {
       auto size_opt = snapshot.ReadUint();
       const auto size = size_opt.value_or(0);
-      spdlog::info("Recovering metadata of {} text indices.", size);
+      memgraph::logging::Info("Recovering metadata of {} text indices.", size);
       for (uint64_t i = 0; i < size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -8115,15 +8117,15 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
                      index_name.value(),
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of text indices are recovered.");
+      memgraph::logging::Info("Metadata of text indices are recovered.");
     }
 
-    spdlog::info("Metadata of indices are recovered.");
+    memgraph::logging::Info("Metadata of indices are recovered.");
   }
 
   // Recover constraints.
   {
-    spdlog::info("Recovering metadata of constraints.");
+    memgraph::logging::Info("Recovering metadata of constraints.");
     if (!snapshot.SetPosition(info.offset_constraints)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -8134,7 +8136,7 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of existence constraints!");
-      spdlog::info("Recovering metadata of {} existence constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} existence constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of existence constraints!");
@@ -8147,7 +8149,7 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of existence constraints are recovered.");
+      memgraph::logging::Info("Metadata of existence constraints are recovered.");
     }
 
     // Recover unique constraints.
@@ -8156,7 +8158,7 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of unique constraints!");
-      spdlog::info("Recovering metadata of {} unique constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} unique constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of unique constraints!");
@@ -8174,7 +8176,7 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of unique constraints for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of unique constraints are recovered.");
+      memgraph::logging::Info("Metadata of unique constraints are recovered.");
     }
 
     // Recover type constraints.
@@ -8184,7 +8186,7 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of type constraints!");
 
-      spdlog::info("Recovering metadata of {} type constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} type constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of type constraints!");
@@ -8202,13 +8204,13 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of type constraints are recovered.");
+      memgraph::logging::Info("Metadata of type constraints are recovered.");
     }
 
-    spdlog::info("Metadata of constraints are recovered.");
+    memgraph::logging::Info("Metadata of constraints are recovered.");
   }
 
-  spdlog::info("Recovering metadata.");
+  memgraph::logging::Info("Recovering metadata.");
   // Recover epoch history
   {
     if (!snapshot.SetPosition(info.offset_epoch_history)) throw RecoveryFailure("Couldn't read data from snapshot!");
@@ -8237,7 +8239,7 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
 
   // Recover TTL data if available
   if (info.offset_ttl != SnapshotInfo::kInvalidOffset) {
-    spdlog::info("Recovering TTL data.");
+    memgraph::logging::Info("Recovering TTL data.");
     if (!snapshot.SetPosition(info.offset_ttl)) throw RecoveryFailure("Couldn't read TTL data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -8293,10 +8295,10 @@ RecoveredSnapshot LoadSnapshotVersion30(Decoder &snapshot, std::filesystem::path
       ttl->Disable();
     }
 
-    spdlog::info("TTL data recovered.");
+    memgraph::logging::Info("TTL data recovered.");
   }
 
-  spdlog::info("Metadata recovered.");
+  memgraph::logging::Info("Metadata recovered.");
   // Recover timestamp.
   recovery_info.next_timestamp = info.start_timestamp + 1;
   recovery_info.num_committed_txns = info.num_committed_txns;
@@ -8333,14 +8335,14 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
 
   // Read snapshot info.
   const auto info = ReadSnapshotInfo(path);
-  spdlog::info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
+  memgraph::logging::Info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
   // Check for edges.
   bool const snapshot_has_edges = info.offset_edges != 0;
 
   // Recover mapper.
   std::unordered_map<uint64_t, uint64_t> snapshot_id_map;
   {
-    spdlog::info("Recovering mapper metadata.");
+    memgraph::logging::Info("Recovering mapper metadata.");
     if (!snapshot.SetPosition(info.offset_mapper)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -8363,7 +8365,7 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
   // Recover enums.
   // TODO: when we have enum deletion/edits we will need to handle remapping
   {
-    spdlog::info("Recovering metadata of enums.");
+    memgraph::logging::Info("Recovering metadata of enums.");
     if (!snapshot.SetPosition(info.offset_enums)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -8373,7 +8375,7 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
 
     auto size = snapshot.ReadUint();
     if (!size) throw RecoveryFailure("Couldn't read the number of enums!");
-    spdlog::info("Recovering metadata of {} enums.", *size);
+    memgraph::logging::Info("Recovering metadata of {} enums.", *size);
     for (uint64_t i = 0; i < *size; ++i) {
       auto etype = snapshot.ReadString();
       if (!etype) throw RecoveryFailure("Couldn't read enum type of enums!");
@@ -8394,7 +8396,7 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
         throw RecoveryFailure("The enum could not be created!");
       }
     }
-    spdlog::info("Metadata of enums are recovered.");
+    memgraph::logging::Info("Metadata of enums are recovered.");
   }
 
   auto get_label_from_id = [&snapshot_id_map](uint64_t label_id) {
@@ -8437,7 +8439,7 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
 
   {
     // Recover vertices (labels and properties).
-    spdlog::info("Recovering vertices.");
+    memgraph::logging::Info("Recovering vertices.");
     uint64_t last_vertex_gid{0};
 
     if (!snapshot.SetPosition(info.offset_vertex_batches)) {
@@ -8473,9 +8475,9 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
           vertex_batches);
     }
 
-    spdlog::info("Vertices are recovered.");
+    memgraph::logging::Info("Vertices are recovered.");
 
-    spdlog::info("Recovering edges.");
+    memgraph::logging::Info("Recovering edges.");
     // Recover edges.
     if (snapshot_has_edges) {
       // We don't need to check whether we store properties on edge or not, because `LoadPartialEdges` will always
@@ -8499,10 +8501,10 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
             edge_batches);
       }
     }
-    spdlog::info("Edges are recovered.");
+    memgraph::logging::Info("Edges are recovered.");
 
     // Recover vertices (in/out edges).
-    spdlog::info("Recover connectivity.");
+    memgraph::logging::Info("Recover connectivity.");
     recovery_info.vertex_batches.reserve(vertex_batches.size());
     for (const auto batch : vertex_batches) {
       recovery_info.vertex_batches.emplace_back(Gid::FromUint(0), batch.count);
@@ -8541,7 +8543,7 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
           },
           vertex_batches);
     }
-    spdlog::info("Connectivity is recovered.");
+    memgraph::logging::Info("Connectivity is recovered.");
 
     // Set initial values for edge/vertex ID generators.
     recovery_info.next_edge_id = highest_edge_gid + 1;
@@ -8550,7 +8552,7 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
 
   // Recover indices.
   {
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -8560,7 +8562,7 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of label indices");
-      spdlog::info("Recovering metadata of {} label indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of label index!");
@@ -8568,14 +8570,14 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
             &indices_constraints.indices.label, get_label_from_id(*label), "The label index already exists!");
         SPDLOG_TRACE("Recovered metadata of label index for :{}", name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of entries for label index statistics!");
-      spdlog::info("Recovering metadata of {} label indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label while recovering label index statistics!");
@@ -8589,14 +8591,14 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of label index statistics for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of label properties indices.");
-      spdlog::info("Recovering metadata of {} label+properties indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+properties indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label properties index.");
@@ -8615,14 +8617,14 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
                                                    }) | r::to_vector,
                                                    ", ")));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
     // Recover label+property indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of entries for label property statistics!");
-      spdlog::info("Recovering metadata of {} label+property indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index statistics!");
@@ -8652,10 +8654,10 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_edge_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     marker = snapshot.ReadMarker();
@@ -8666,7 +8668,7 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
       // Recover edge-type indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type index!");
@@ -8676,13 +8678,13 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of edge-type index for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)));
       }
-      spdlog::info("Metadata of edge-type indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type indices are recovered.");
     }
     {
       // Recover edge-type + property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type + property index!");
@@ -8695,14 +8697,14 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of edge-type + property indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type + property indices are recovered.");
     }
 
     {
       // Recover global edge property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of global edge property indices");
-      spdlog::info("Recovering metadata of {} global edge property indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} global edge property indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto property = snapshot.ReadUint();
         if (!property) throw RecoveryFailure("Couldn't read property of global edge property index!");
@@ -8712,14 +8714,14 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of global edge property index for ({})",
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of global edge property indices are recovered.");
+      memgraph::logging::Info("Metadata of global edge property indices are recovered.");
     }
 
     // Recover point indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of point indices!");
-      spdlog::info("Recovering metadata of {} point indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} point indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for point index!");
@@ -8732,14 +8734,14 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of point indices are recovered.");
+      memgraph::logging::Info("Metadata of point indices are recovered.");
     }
 
     // Recover vector indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of vector indices!");
-      spdlog::info("Recovering metadata of {} vector indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} vector indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read vector index name!");
@@ -8784,14 +8786,14 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
         indices_constraints.indices.vector_indices.emplace_back(
             VectorIndexRecoveryInfo{.spec = std::move(spec), .index_entries = {}});
       }
-      spdlog::info("Metadata of vector indices are recovered.");
+      memgraph::logging::Info("Metadata of vector indices are recovered.");
     }
 
     // Recover vector edge indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of vector indices!");
-      spdlog::info("Recovering metadata of {} vector indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} vector indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read vector index name!");
@@ -8836,7 +8838,7 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
                                         .scalar_kind = static_cast<unum::usearch::scalar_kind_t>(*scalar_kind)},
             .index_entries = {}});
       }
-      spdlog::info("Metadata of vector indices are recovered.");
+      memgraph::logging::Info("Metadata of vector indices are recovered.");
     }
 
     // Recover text indices.
@@ -8845,7 +8847,7 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
       {
         auto size_opt = snapshot.ReadUint();
         const auto size = size_opt.value_or(0);
-        spdlog::info("Recovering metadata of {} text indices.", size);
+        memgraph::logging::Info("Recovering metadata of {} text indices.", size);
         for (uint64_t i = 0; i < size; ++i) {
           auto index_name = snapshot.ReadString();
           if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -8871,13 +8873,13 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
                        index_name.value(),
                        name_id_mapper->IdToName(snapshot_id_map.at(*label)));
         }
-        spdlog::info("Metadata of text indices are recovered.");
+        memgraph::logging::Info("Metadata of text indices are recovered.");
       }
       // Recover text indices on edges
       {
         const auto size_opt = snapshot.ReadUint();
         const auto size = size_opt.value_or(0);
-        spdlog::info("Recovering metadata of {} text indices.", size);
+        memgraph::logging::Info("Recovering metadata of {} text indices.", size);
         for (uint64_t i = 0; i < size; ++i) {
           const auto index_name = snapshot.ReadString();
           if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -8902,16 +8904,16 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
                        index_name.value(),
                        name_id_mapper->IdToName(snapshot_id_map.at(*edge_type_id)));
         }
-        spdlog::info("Metadata of text edge indices are recovered.");
+        memgraph::logging::Info("Metadata of text edge indices are recovered.");
       }
     }
 
-    spdlog::info("Metadata of indices are recovered.");
+    memgraph::logging::Info("Metadata of indices are recovered.");
   }
 
   // Recover constraints.
   {
-    spdlog::info("Recovering metadata of constraints.");
+    memgraph::logging::Info("Recovering metadata of constraints.");
     if (!snapshot.SetPosition(info.offset_constraints)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -8922,7 +8924,7 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of existence constraints!");
-      spdlog::info("Recovering metadata of {} existence constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} existence constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of existence constraints!");
@@ -8935,7 +8937,7 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of existence constraints are recovered.");
+      memgraph::logging::Info("Metadata of existence constraints are recovered.");
     }
 
     // Recover unique constraints.
@@ -8944,7 +8946,7 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of unique constraints!");
-      spdlog::info("Recovering metadata of {} unique constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} unique constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of unique constraints!");
@@ -8962,7 +8964,7 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of unique constraints for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of unique constraints are recovered.");
+      memgraph::logging::Info("Metadata of unique constraints are recovered.");
     }
 
     // Recover type constraints.
@@ -8972,7 +8974,7 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of type constraints!");
 
-      spdlog::info("Recovering metadata of {} type constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} type constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of type constraints!");
@@ -8990,13 +8992,13 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of type constraints are recovered.");
+      memgraph::logging::Info("Metadata of type constraints are recovered.");
     }
 
-    spdlog::info("Metadata of constraints are recovered.");
+    memgraph::logging::Info("Metadata of constraints are recovered.");
   }
 
-  spdlog::info("Recovering metadata.");
+  memgraph::logging::Info("Recovering metadata.");
   // Recover epoch history
   {
     if (!snapshot.SetPosition(info.offset_epoch_history)) throw RecoveryFailure("Couldn't read data from snapshot!");
@@ -9025,7 +9027,7 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
 
   // Recover TTL data if available
   if (info.offset_ttl != SnapshotInfo::kInvalidOffset) {
-    spdlog::info("Recovering TTL data.");
+    memgraph::logging::Info("Recovering TTL data.");
     if (!snapshot.SetPosition(info.offset_ttl)) throw RecoveryFailure("Couldn't read TTL data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -9081,10 +9083,10 @@ RecoveredSnapshot LoadSnapshotVersion31(Decoder &snapshot, std::filesystem::path
       ttl->Disable();
     }
 
-    spdlog::info("TTL data recovered.");
+    memgraph::logging::Info("TTL data recovered.");
   }
 
-  spdlog::info("Metadata recovered.");
+  memgraph::logging::Info("Metadata recovered.");
   // Recover timestamp.
   recovery_info.next_timestamp = info.start_timestamp + 1;
   recovery_info.num_committed_txns = info.num_committed_txns;
@@ -9121,14 +9123,14 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
 
   // Read snapshot info.
   const auto info = ReadSnapshotInfo(path);
-  spdlog::info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
+  memgraph::logging::Info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
   // Check for edges.
   bool const snapshot_has_edges = info.offset_edges != 0;
 
   // Recover mapper.
   std::unordered_map<uint64_t, uint64_t> snapshot_id_map;
   {
-    spdlog::info("Recovering mapper metadata.");
+    memgraph::logging::Info("Recovering mapper metadata.");
     if (!snapshot.SetPosition(info.offset_mapper)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -9151,7 +9153,7 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
   // Recover enums.
   // TODO: when we have enum deletion/edits we will need to handle remapping
   {
-    spdlog::info("Recovering metadata of enums.");
+    memgraph::logging::Info("Recovering metadata of enums.");
     if (!snapshot.SetPosition(info.offset_enums)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -9161,7 +9163,7 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
 
     auto size = snapshot.ReadUint();
     if (!size) throw RecoveryFailure("Couldn't read the number of enums!");
-    spdlog::info("Recovering metadata of {} enums.", *size);
+    memgraph::logging::Info("Recovering metadata of {} enums.", *size);
     for (uint64_t i = 0; i < *size; ++i) {
       auto etype = snapshot.ReadString();
       if (!etype) throw RecoveryFailure("Couldn't read enum type of enums!");
@@ -9182,7 +9184,7 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
         throw RecoveryFailure("The enum could not be created!");
       }
     }
-    spdlog::info("Metadata of enums are recovered.");
+    memgraph::logging::Info("Metadata of enums are recovered.");
   }
 
   auto get_label_from_id = [&snapshot_id_map](uint64_t label_id) {
@@ -9225,7 +9227,7 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
 
   {
     // Recover vertices (labels and properties).
-    spdlog::info("Recovering vertices.");
+    memgraph::logging::Info("Recovering vertices.");
     uint64_t last_vertex_gid{0};
 
     if (!snapshot.SetPosition(info.offset_vertex_batches)) {
@@ -9261,9 +9263,9 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
           vertex_batches);
     }
 
-    spdlog::info("Vertices are recovered.");
+    memgraph::logging::Info("Vertices are recovered.");
 
-    spdlog::info("Recovering edges.");
+    memgraph::logging::Info("Recovering edges.");
     // Recover edges.
     if (snapshot_has_edges) {
       // We don't need to check whether we store properties on edge or not, because `LoadPartialEdges` will always
@@ -9287,10 +9289,10 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
             edge_batches);
       }
     }
-    spdlog::info("Edges are recovered.");
+    memgraph::logging::Info("Edges are recovered.");
 
     // Recover vertices (in/out edges).
-    spdlog::info("Recover connectivity.");
+    memgraph::logging::Info("Recover connectivity.");
     recovery_info.vertex_batches.reserve(vertex_batches.size());
     for (const auto batch : vertex_batches) {
       recovery_info.vertex_batches.emplace_back(Gid::FromUint(0), batch.count);
@@ -9329,7 +9331,7 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
           },
           vertex_batches);
     }
-    spdlog::info("Connectivity is recovered.");
+    memgraph::logging::Info("Connectivity is recovered.");
 
     // Set initial values for edge/vertex ID generators.
     recovery_info.next_edge_id = highest_edge_gid + 1;
@@ -9338,7 +9340,7 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
 
   // Recover indices.
   {
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -9348,7 +9350,7 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of label indices");
-      spdlog::info("Recovering metadata of {} label indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of label index!");
@@ -9356,14 +9358,14 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
             &indices_constraints.indices.label, get_label_from_id(*label), "The label index already exists!");
         SPDLOG_TRACE("Recovered metadata of label index for :{}", name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of entries for label index statistics!");
-      spdlog::info("Recovering metadata of {} label indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label while recovering label index statistics!");
@@ -9377,14 +9379,14 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of label index statistics for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of label properties indices.");
-      spdlog::info("Recovering metadata of {} label+properties indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+properties indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label properties index.");
@@ -9403,14 +9405,14 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
                                                    }) | r::to_vector,
                                                    ", ")));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
     // Recover label+property indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of entries for label property statistics!");
-      spdlog::info("Recovering metadata of {} label+property indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index statistics!");
@@ -9440,10 +9442,10 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_edge_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     marker = snapshot.ReadMarker();
@@ -9454,7 +9456,7 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
       // Recover edge-type indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type index!");
@@ -9464,13 +9466,13 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of edge-type index for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)));
       }
-      spdlog::info("Metadata of edge-type indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type indices are recovered.");
     }
     {
       // Recover edge-type + property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type + property index!");
@@ -9483,14 +9485,14 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of edge-type + property indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type + property indices are recovered.");
     }
 
     {
       // Recover global edge property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of global edge property indices");
-      spdlog::info("Recovering metadata of {} global edge property indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} global edge property indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto property = snapshot.ReadUint();
         if (!property) throw RecoveryFailure("Couldn't read property of global edge property index!");
@@ -9500,14 +9502,14 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of global edge property index for ({})",
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of global edge property indices are recovered.");
+      memgraph::logging::Info("Metadata of global edge property indices are recovered.");
     }
 
     // Recover point indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of point indices!");
-      spdlog::info("Recovering metadata of {} point indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} point indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for point index!");
@@ -9520,14 +9522,14 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of point indices are recovered.");
+      memgraph::logging::Info("Metadata of point indices are recovered.");
     }
 
     // Recover vector indices.
     {
       auto num_indices = snapshot.ReadUint();
       if (!num_indices) throw RecoveryFailure("Couldn't recover the number of vector indices!");
-      spdlog::info("Recovering {} vector indices.", *num_indices);
+      memgraph::logging::Info("Recovering {} vector indices.", *num_indices);
 
       for (uint64_t i = 0; i < *num_indices; ++i) {
         auto index_name = snapshot.ReadString();
@@ -9587,14 +9589,14 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
         indices_constraints.indices.vector_indices.emplace_back(
             VectorIndexRecoveryInfo{.spec = std::move(spec), .index_entries = std::move(index_entries)});
       }
-      spdlog::info("Vector indices are recovered.");
+      memgraph::logging::Info("Vector indices are recovered.");
     }
 
     // Recover vector edge indices (metadata only, no entry data in v33).
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of vector edge indices!");
-      spdlog::info("Recovering {} vector edge indices.", *size);
+      memgraph::logging::Info("Recovering {} vector edge indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read vector edge index name!");
@@ -9631,7 +9633,7 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
                                         .capacity = *capacity,
                                         .scalar_kind = static_cast<unum::usearch::scalar_kind_t>(*scalar_kind)}});
       }
-      spdlog::info("Vector edge indices are recovered.");
+      memgraph::logging::Info("Vector edge indices are recovered.");
     }
 
     // Recover text indices.
@@ -9640,7 +9642,7 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
       {
         auto size_opt = snapshot.ReadUint();
         const auto size = size_opt.value_or(0);
-        spdlog::info("Recovering metadata of {} text indices.", size);
+        memgraph::logging::Info("Recovering metadata of {} text indices.", size);
         for (uint64_t i = 0; i < size; ++i) {
           auto index_name = snapshot.ReadString();
           if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -9666,13 +9668,13 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
                        index_name.value(),
                        name_id_mapper->IdToName(snapshot_id_map.at(*label)));
         }
-        spdlog::info("Metadata of text indices are recovered.");
+        memgraph::logging::Info("Metadata of text indices are recovered.");
       }
       // Recover text indices on edges
       {
         const auto size_opt = snapshot.ReadUint();
         const auto size = size_opt.value_or(0);
-        spdlog::info("Recovering metadata of {} text indices.", size);
+        memgraph::logging::Info("Recovering metadata of {} text indices.", size);
         for (uint64_t i = 0; i < size; ++i) {
           const auto index_name = snapshot.ReadString();
           if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -9697,16 +9699,16 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
                        index_name.value(),
                        name_id_mapper->IdToName(snapshot_id_map.at(*edge_type_id)));
         }
-        spdlog::info("Metadata of text edge indices are recovered.");
+        memgraph::logging::Info("Metadata of text edge indices are recovered.");
       }
     }
 
-    spdlog::info("Metadata of indices are recovered.");
+    memgraph::logging::Info("Metadata of indices are recovered.");
   }
 
   // Recover constraints.
   {
-    spdlog::info("Recovering metadata of constraints.");
+    memgraph::logging::Info("Recovering metadata of constraints.");
     if (!snapshot.SetPosition(info.offset_constraints)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -9717,7 +9719,7 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of existence constraints!");
-      spdlog::info("Recovering metadata of {} existence constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} existence constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of existence constraints!");
@@ -9730,7 +9732,7 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of existence constraints are recovered.");
+      memgraph::logging::Info("Metadata of existence constraints are recovered.");
     }
 
     // Recover unique constraints.
@@ -9739,7 +9741,7 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of unique constraints!");
-      spdlog::info("Recovering metadata of {} unique constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} unique constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of unique constraints!");
@@ -9757,7 +9759,7 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of unique constraints for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of unique constraints are recovered.");
+      memgraph::logging::Info("Metadata of unique constraints are recovered.");
     }
 
     // Recover type constraints.
@@ -9767,7 +9769,7 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of type constraints!");
 
-      spdlog::info("Recovering metadata of {} type constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} type constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of type constraints!");
@@ -9785,13 +9787,13 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of type constraints are recovered.");
+      memgraph::logging::Info("Metadata of type constraints are recovered.");
     }
 
-    spdlog::info("Metadata of constraints are recovered.");
+    memgraph::logging::Info("Metadata of constraints are recovered.");
   }
 
-  spdlog::info("Recovering metadata.");
+  memgraph::logging::Info("Recovering metadata.");
   // Recover epoch history
   {
     if (!snapshot.SetPosition(info.offset_epoch_history)) throw RecoveryFailure("Couldn't read data from snapshot!");
@@ -9820,7 +9822,7 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
 
   // Recover TTL data if available
   if (info.offset_ttl != SnapshotInfo::kInvalidOffset) {
-    spdlog::info("Recovering TTL data.");
+    memgraph::logging::Info("Recovering TTL data.");
     if (!snapshot.SetPosition(info.offset_ttl)) throw RecoveryFailure("Couldn't read TTL data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -9876,10 +9878,10 @@ RecoveredSnapshot LoadSnapshotVersion33(Decoder &snapshot, std::filesystem::path
       ttl->Disable();
     }
 
-    spdlog::info("TTL data recovered.");
+    memgraph::logging::Info("TTL data recovered.");
   }
 
-  spdlog::info("Metadata recovered.");
+  memgraph::logging::Info("Metadata recovered.");
   // Recover timestamp.
   recovery_info.next_timestamp = info.start_timestamp + 1;
   recovery_info.num_committed_txns = info.num_committed_txns;
@@ -9894,7 +9896,7 @@ void RecoverDescriptionStore(Decoder &snapshot, SnapshotInfo const &info, NameId
                              DescriptionStore *description_store) {
   if (info.offset_descriptions == SnapshotInfo::kInvalidOffset || !description_store) return;
 
-  spdlog::info("Recovering description store data.");
+  memgraph::logging::Info("Recovering description store data.");
   if (!snapshot.SetPosition(info.offset_descriptions))
     throw RecoveryFailure("Couldn't read description store data from snapshot!");
 
@@ -9974,7 +9976,7 @@ void RecoverDescriptionStore(Decoder &snapshot, SnapshotInfo const &info, NameId
     }
   }
 
-  spdlog::info("Description store data recovered.");
+  memgraph::logging::Info("Description store data recovered.");
 }
 
 // NOLINTNEXTLINE(readability-function-size)
@@ -10005,14 +10007,14 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
 
   // Read snapshot info.
   const auto info = ReadSnapshotInfo(path);
-  spdlog::info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
+  memgraph::logging::Info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
   // Check for edges.
   bool const snapshot_has_edges = info.offset_edges != 0;
 
   // Recover mapper.
   std::unordered_map<uint64_t, uint64_t> snapshot_id_map;
   {
-    spdlog::info("Recovering mapper metadata.");
+    memgraph::logging::Info("Recovering mapper metadata.");
     if (!snapshot.SetPosition(info.offset_mapper)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -10035,7 +10037,7 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
   // Recover enums.
   // TODO: when we have enum deletion/edits we will need to handle remapping
   {
-    spdlog::info("Recovering metadata of enums.");
+    memgraph::logging::Info("Recovering metadata of enums.");
     if (!snapshot.SetPosition(info.offset_enums)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -10045,7 +10047,7 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
 
     auto size = snapshot.ReadUint();
     if (!size) throw RecoveryFailure("Couldn't read the number of enums!");
-    spdlog::info("Recovering metadata of {} enums.", *size);
+    memgraph::logging::Info("Recovering metadata of {} enums.", *size);
     for (uint64_t i = 0; i < *size; ++i) {
       auto etype = snapshot.ReadString();
       if (!etype) throw RecoveryFailure("Couldn't read enum type of enums!");
@@ -10066,7 +10068,7 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
         throw RecoveryFailure("The enum could not be created!");
       }
     }
-    spdlog::info("Metadata of enums are recovered.");
+    memgraph::logging::Info("Metadata of enums are recovered.");
   }
 
   auto get_label_from_id = [&snapshot_id_map](uint64_t label_id) {
@@ -10109,7 +10111,7 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
 
   {
     // Recover vertices (labels and properties).
-    spdlog::info("Recovering vertices.");
+    memgraph::logging::Info("Recovering vertices.");
     uint64_t last_vertex_gid{0};
 
     if (!snapshot.SetPosition(info.offset_vertex_batches)) {
@@ -10145,9 +10147,9 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
           vertex_batches);
     }
 
-    spdlog::info("Vertices are recovered.");
+    memgraph::logging::Info("Vertices are recovered.");
 
-    spdlog::info("Recovering edges.");
+    memgraph::logging::Info("Recovering edges.");
     // Recover edges.
     if (snapshot_has_edges) {
       // We don't need to check whether we store properties on edge or not, because `LoadPartialEdges` will always
@@ -10171,10 +10173,10 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
             edge_batches);
       }
     }
-    spdlog::info("Edges are recovered.");
+    memgraph::logging::Info("Edges are recovered.");
 
     // Recover vertices (in/out edges).
-    spdlog::info("Recover connectivity.");
+    memgraph::logging::Info("Recover connectivity.");
     recovery_info.vertex_batches.reserve(vertex_batches.size());
     for (const auto batch : vertex_batches) {
       recovery_info.vertex_batches.emplace_back(Gid::FromUint(0), batch.count);
@@ -10213,7 +10215,7 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
           },
           vertex_batches);
     }
-    spdlog::info("Connectivity is recovered.");
+    memgraph::logging::Info("Connectivity is recovered.");
 
     // Set initial values for edge/vertex ID generators.
     recovery_info.next_edge_id = highest_edge_gid + 1;
@@ -10222,7 +10224,7 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
 
   // Recover indices.
   {
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -10232,7 +10234,7 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of label indices");
-      spdlog::info("Recovering metadata of {} label indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of label index!");
@@ -10240,14 +10242,14 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
             &indices_constraints.indices.label, get_label_from_id(*label), "The label index already exists!");
         SPDLOG_TRACE("Recovered metadata of label index for :{}", name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of entries for label index statistics!");
-      spdlog::info("Recovering metadata of {} label indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label while recovering label index statistics!");
@@ -10261,14 +10263,14 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
         SPDLOG_TRACE("Recovered metadata of label index statistics for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of label properties indices.");
-      spdlog::info("Recovering metadata of {} label+properties indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+properties indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label properties index.");
@@ -10287,14 +10289,14 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
                                                    }) | r::to_vector,
                                                    ", ")));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
     // Recover DESC label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of DESC label properties indices.");
-      spdlog::info("Recovering metadata of {} DESC label+properties indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} DESC label+properties indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for DESC label properties index.");
@@ -10303,14 +10305,14 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
                                     {get_label_from_id(*label), property_paths},
                                     "The DESC label+property index already exists!");
       }
-      spdlog::info("Metadata of DESC label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of DESC label+property indices are recovered.");
     }
 
     // Recover label+property indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of entries for label property statistics!");
-      spdlog::info("Recovering metadata of {} label+property indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index statistics!");
@@ -10340,10 +10342,10 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_edge_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     marker = snapshot.ReadMarker();
@@ -10354,7 +10356,7 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
       // Recover edge-type indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type index!");
@@ -10364,13 +10366,13 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
         SPDLOG_TRACE("Recovered metadata of edge-type index for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)));
       }
-      spdlog::info("Metadata of edge-type indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type indices are recovered.");
     }
     {
       // Recover edge-type + property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type + property index!");
@@ -10383,14 +10385,14 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of edge-type + property indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type + property indices are recovered.");
     }
 
     {
       // Recover global edge property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of global edge property indices");
-      spdlog::info("Recovering metadata of {} global edge property indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} global edge property indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto property = snapshot.ReadUint();
         if (!property) throw RecoveryFailure("Couldn't read property of global edge property index!");
@@ -10400,14 +10402,14 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
         SPDLOG_TRACE("Recovered metadata of global edge property index for ({})",
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of global edge property indices are recovered.");
+      memgraph::logging::Info("Metadata of global edge property indices are recovered.");
     }
 
     // Recover point indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of point indices!");
-      spdlog::info("Recovering metadata of {} point indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} point indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for point index!");
@@ -10420,14 +10422,14 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of point indices are recovered.");
+      memgraph::logging::Info("Metadata of point indices are recovered.");
     }
 
     // Recover vector indices.
     {
       auto num_indices = snapshot.ReadUint();
       if (!num_indices) throw RecoveryFailure("Couldn't recover the number of vector indices!");
-      spdlog::info("Recovering {} vector indices.", *num_indices);
+      memgraph::logging::Info("Recovering {} vector indices.", *num_indices);
 
       for (uint64_t i = 0; i < *num_indices; ++i) {
         auto index_name = snapshot.ReadString();
@@ -10487,14 +10489,14 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
         indices_constraints.indices.vector_indices.emplace_back(
             VectorIndexRecoveryInfo{.spec = std::move(spec), .index_entries = std::move(index_entries)});
       }
-      spdlog::info("Vector indices are recovered.");
+      memgraph::logging::Info("Vector indices are recovered.");
     }
 
     // Recover vector edge indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of vector edge indices!");
-      spdlog::info("Recovering {} vector edge indices.", *size);
+      memgraph::logging::Info("Recovering {} vector edge indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read vector edge index name!");
@@ -10553,7 +10555,7 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
         indices_constraints.indices.vector_edge_indices.emplace_back(
             VectorEdgeIndexRecoveryInfo{.spec = std::move(spec), .index_entries = std::move(index_entries)});
       }
-      spdlog::info("Vector edge indices are recovered.");
+      memgraph::logging::Info("Vector edge indices are recovered.");
     }
 
     // Recover text indices.
@@ -10562,7 +10564,7 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
       {
         auto size_opt = snapshot.ReadUint();
         const auto size = size_opt.value_or(0);
-        spdlog::info("Recovering metadata of {} text indices.", size);
+        memgraph::logging::Info("Recovering metadata of {} text indices.", size);
         for (uint64_t i = 0; i < size; ++i) {
           auto index_name = snapshot.ReadString();
           if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -10588,13 +10590,13 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
                        index_name.value(),
                        name_id_mapper->IdToName(snapshot_id_map.at(*label)));
         }
-        spdlog::info("Metadata of text indices are recovered.");
+        memgraph::logging::Info("Metadata of text indices are recovered.");
       }
       // Recover text indices on edges
       {
         const auto size_opt = snapshot.ReadUint();
         const auto size = size_opt.value_or(0);
-        spdlog::info("Recovering metadata of {} text indices.", size);
+        memgraph::logging::Info("Recovering metadata of {} text indices.", size);
         for (uint64_t i = 0; i < size; ++i) {
           const auto index_name = snapshot.ReadString();
           if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -10619,16 +10621,16 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
                        index_name.value(),
                        name_id_mapper->IdToName(snapshot_id_map.at(*edge_type_id)));
         }
-        spdlog::info("Metadata of text edge indices are recovered.");
+        memgraph::logging::Info("Metadata of text edge indices are recovered.");
       }
     }
 
-    spdlog::info("Metadata of indices are recovered.");
+    memgraph::logging::Info("Metadata of indices are recovered.");
   }
 
   // Recover constraints.
   {
-    spdlog::info("Recovering metadata of constraints.");
+    memgraph::logging::Info("Recovering metadata of constraints.");
     if (!snapshot.SetPosition(info.offset_constraints)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -10639,7 +10641,7 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of existence constraints!");
-      spdlog::info("Recovering metadata of {} existence constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} existence constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of existence constraints!");
@@ -10652,7 +10654,7 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of existence constraints are recovered.");
+      memgraph::logging::Info("Metadata of existence constraints are recovered.");
     }
 
     // Recover unique constraints.
@@ -10661,7 +10663,7 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of unique constraints!");
-      spdlog::info("Recovering metadata of {} unique constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} unique constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of unique constraints!");
@@ -10679,7 +10681,7 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
         SPDLOG_TRACE("Recovered metadata of unique constraints for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of unique constraints are recovered.");
+      memgraph::logging::Info("Metadata of unique constraints are recovered.");
     }
 
     // Recover type constraints.
@@ -10689,7 +10691,7 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of type constraints!");
 
-      spdlog::info("Recovering metadata of {} type constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} type constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of type constraints!");
@@ -10707,13 +10709,13 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of type constraints are recovered.");
+      memgraph::logging::Info("Metadata of type constraints are recovered.");
     }
 
-    spdlog::info("Metadata of constraints are recovered.");
+    memgraph::logging::Info("Metadata of constraints are recovered.");
   }
 
-  spdlog::info("Recovering metadata.");
+  memgraph::logging::Info("Recovering metadata.");
   // Recover epoch history
   {
     if (!snapshot.SetPosition(info.offset_epoch_history)) throw RecoveryFailure("Couldn't read data from snapshot!");
@@ -10742,7 +10744,7 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
 
   // Recover TTL data if available
   if (info.offset_ttl != SnapshotInfo::kInvalidOffset) {
-    spdlog::info("Recovering TTL data.");
+    memgraph::logging::Info("Recovering TTL data.");
     if (!snapshot.SetPosition(info.offset_ttl)) throw RecoveryFailure("Couldn't read TTL data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -10798,12 +10800,12 @@ RecoveredSnapshot LoadCurrentVersionSnapshot(Decoder &snapshot, std::filesystem:
       ttl->Disable();
     }
 
-    spdlog::info("TTL data recovered.");
+    memgraph::logging::Info("TTL data recovered.");
   }
 
   RecoverDescriptionStore(snapshot, info, name_id_mapper, description_store);
 
-  spdlog::info("Metadata recovered.");
+  memgraph::logging::Info("Metadata recovered.");
   // Recover timestamp.
   recovery_info.next_timestamp = info.start_timestamp + 1;
   recovery_info.num_committed_txns = info.num_committed_txns;
@@ -10841,14 +10843,14 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
 
   // Read snapshot info.
   const auto info = ReadSnapshotInfo(path);
-  spdlog::info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
+  memgraph::logging::Info("Recovering {} vertices and {} edges.", info.vertices_count, info.edges_count);
   // Check for edges.
   bool const snapshot_has_edges = info.offset_edges != 0;
 
   // Recover mapper.
   std::unordered_map<uint64_t, uint64_t> snapshot_id_map;
   {
-    spdlog::info("Recovering mapper metadata.");
+    memgraph::logging::Info("Recovering mapper metadata.");
     if (!snapshot.SetPosition(info.offset_mapper)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -10871,7 +10873,7 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
   // Recover enums.
   // TODO: when we have enum deletion/edits we will need to handle remapping
   {
-    spdlog::info("Recovering metadata of enums.");
+    memgraph::logging::Info("Recovering metadata of enums.");
     if (!snapshot.SetPosition(info.offset_enums)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -10881,7 +10883,7 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
 
     auto size = snapshot.ReadUint();
     if (!size) throw RecoveryFailure("Couldn't read the number of enums!");
-    spdlog::info("Recovering metadata of {} enums.", *size);
+    memgraph::logging::Info("Recovering metadata of {} enums.", *size);
     for (uint64_t i = 0; i < *size; ++i) {
       auto etype = snapshot.ReadString();
       if (!etype) throw RecoveryFailure("Couldn't read enum type of enums!");
@@ -10902,7 +10904,7 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
         throw RecoveryFailure("The enum could not be created!");
       }
     }
-    spdlog::info("Metadata of enums are recovered.");
+    memgraph::logging::Info("Metadata of enums are recovered.");
   }
 
   auto get_label_from_id = [&snapshot_id_map](uint64_t label_id) {
@@ -10945,7 +10947,7 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
 
   {
     // Recover vertices (labels and properties).
-    spdlog::info("Recovering vertices.");
+    memgraph::logging::Info("Recovering vertices.");
     uint64_t last_vertex_gid{0};
 
     if (!snapshot.SetPosition(info.offset_vertex_batches)) {
@@ -10981,9 +10983,9 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
           vertex_batches);
     }
 
-    spdlog::info("Vertices are recovered.");
+    memgraph::logging::Info("Vertices are recovered.");
 
-    spdlog::info("Recovering edges.");
+    memgraph::logging::Info("Recovering edges.");
     // Recover edges.
     if (snapshot_has_edges) {
       // We don't need to check whether we store properties on edge or not, because `LoadPartialEdges` will always
@@ -11007,10 +11009,10 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
             edge_batches);
       }
     }
-    spdlog::info("Edges are recovered.");
+    memgraph::logging::Info("Edges are recovered.");
 
     // Recover vertices (in/out edges).
-    spdlog::info("Recover connectivity.");
+    memgraph::logging::Info("Recover connectivity.");
     recovery_info.vertex_batches.reserve(vertex_batches.size());
     for (const auto batch : vertex_batches) {
       recovery_info.vertex_batches.emplace_back(Gid::FromUint(0), batch.count);
@@ -11049,7 +11051,7 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
           },
           vertex_batches);
     }
-    spdlog::info("Connectivity is recovered.");
+    memgraph::logging::Info("Connectivity is recovered.");
 
     // Set initial values for edge/vertex ID generators.
     recovery_info.next_edge_id = highest_edge_gid + 1;
@@ -11058,7 +11060,7 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
 
   // Recover indices.
   {
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -11068,7 +11070,7 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of label indices");
-      spdlog::info("Recovering metadata of {} label indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of label index!");
@@ -11076,14 +11078,14 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
             &indices_constraints.indices.label, get_label_from_id(*label), "The label index already exists!");
         SPDLOG_TRACE("Recovered metadata of label index for :{}", name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of entries for label index statistics!");
-      spdlog::info("Recovering metadata of {} label indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label while recovering label index statistics!");
@@ -11097,14 +11099,14 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of label index statistics for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of label indices are recovered.");
+      memgraph::logging::Info("Metadata of label indices are recovered.");
     }
 
     // Recover label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of label properties indices.");
-      spdlog::info("Recovering metadata of {} label+properties indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+properties indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label properties index.");
@@ -11123,14 +11125,14 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
                                                    }) | r::to_vector,
                                                    ", ")));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
     // Recover DESC label+property indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of DESC label properties indices.");
-      spdlog::info("Recovering metadata of {} DESC label+properties indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} DESC label+properties indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for DESC label properties index.");
@@ -11139,14 +11141,14 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
                                     {get_label_from_id(*label), property_paths},
                                     "The DESC label+property index already exists!");
       }
-      spdlog::info("Metadata of DESC label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of DESC label+property indices are recovered.");
     }
 
     // Recover label+property indices statistics.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of entries for label property statistics!");
-      spdlog::info("Recovering metadata of {} label+property indices statistics.", *size);
+      memgraph::logging::Info("Recovering metadata of {} label+property indices statistics.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         const auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for label property index statistics!");
@@ -11176,10 +11178,10 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of label+property indices are recovered.");
+      memgraph::logging::Info("Metadata of label+property indices are recovered.");
     }
 
-    spdlog::info("Recovering metadata of indices.");
+    memgraph::logging::Info("Recovering metadata of indices.");
     if (!snapshot.SetPosition(info.offset_edge_indices)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     marker = snapshot.ReadMarker();
@@ -11190,7 +11192,7 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
       // Recover edge-type indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type index!");
@@ -11200,13 +11202,13 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of edge-type index for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)));
       }
-      spdlog::info("Metadata of edge-type indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type indices are recovered.");
     }
     {
       // Recover edge-type + property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of edge-type indices");
-      spdlog::info("Recovering metadata of {} edge-type indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} edge-type indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto edge_type = snapshot.ReadUint();
         if (!edge_type) throw RecoveryFailure("Couldn't read edge-type of edge-type + property index!");
@@ -11219,14 +11221,14 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*edge_type)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of edge-type + property indices are recovered.");
+      memgraph::logging::Info("Metadata of edge-type + property indices are recovered.");
     }
 
     {
       // Recover global edge property indices.
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of global edge property indices");
-      spdlog::info("Recovering metadata of {} global edge property indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} global edge property indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto property = snapshot.ReadUint();
         if (!property) throw RecoveryFailure("Couldn't read property of global edge property index!");
@@ -11236,14 +11238,14 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of global edge property index for ({})",
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of global edge property indices are recovered.");
+      memgraph::logging::Info("Metadata of global edge property indices are recovered.");
     }
 
     // Recover point indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of point indices!");
-      spdlog::info("Recovering metadata of {} point indices.", *size);
+      memgraph::logging::Info("Recovering metadata of {} point indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label for point index!");
@@ -11256,14 +11258,14 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of point indices are recovered.");
+      memgraph::logging::Info("Metadata of point indices are recovered.");
     }
 
     // Recover vector indices.
     {
       auto num_indices = snapshot.ReadUint();
       if (!num_indices) throw RecoveryFailure("Couldn't recover the number of vector indices!");
-      spdlog::info("Recovering {} vector indices.", *num_indices);
+      memgraph::logging::Info("Recovering {} vector indices.", *num_indices);
 
       for (uint64_t i = 0; i < *num_indices; ++i) {
         auto index_name = snapshot.ReadString();
@@ -11323,14 +11325,14 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
         indices_constraints.indices.vector_indices.emplace_back(
             VectorIndexRecoveryInfo{.spec = std::move(spec), .index_entries = std::move(index_entries)});
       }
-      spdlog::info("Vector indices are recovered.");
+      memgraph::logging::Info("Vector indices are recovered.");
     }
 
     // Recover vector edge indices.
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't recover the number of vector edge indices!");
-      spdlog::info("Recovering {} vector edge indices.", *size);
+      memgraph::logging::Info("Recovering {} vector edge indices.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto index_name = snapshot.ReadString();
         if (!index_name) throw RecoveryFailure("Couldn't read vector edge index name!");
@@ -11389,7 +11391,7 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
         indices_constraints.indices.vector_edge_indices.emplace_back(
             VectorEdgeIndexRecoveryInfo{.spec = std::move(spec), .index_entries = std::move(index_entries)});
       }
-      spdlog::info("Vector edge indices are recovered.");
+      memgraph::logging::Info("Vector edge indices are recovered.");
     }
 
     // Recover text indices.
@@ -11398,7 +11400,7 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
       {
         auto size_opt = snapshot.ReadUint();
         const auto size = size_opt.value_or(0);
-        spdlog::info("Recovering metadata of {} text indices.", size);
+        memgraph::logging::Info("Recovering metadata of {} text indices.", size);
         for (uint64_t i = 0; i < size; ++i) {
           auto index_name = snapshot.ReadString();
           if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -11424,13 +11426,13 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
                        index_name.value(),
                        name_id_mapper->IdToName(snapshot_id_map.at(*label)));
         }
-        spdlog::info("Metadata of text indices are recovered.");
+        memgraph::logging::Info("Metadata of text indices are recovered.");
       }
       // Recover text indices on edges
       {
         const auto size_opt = snapshot.ReadUint();
         const auto size = size_opt.value_or(0);
-        spdlog::info("Recovering metadata of {} text indices.", size);
+        memgraph::logging::Info("Recovering metadata of {} text indices.", size);
         for (uint64_t i = 0; i < size; ++i) {
           const auto index_name = snapshot.ReadString();
           if (!index_name) throw RecoveryFailure("Couldn't read text index name!");
@@ -11455,16 +11457,16 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
                        index_name.value(),
                        name_id_mapper->IdToName(snapshot_id_map.at(*edge_type_id)));
         }
-        spdlog::info("Metadata of text edge indices are recovered.");
+        memgraph::logging::Info("Metadata of text edge indices are recovered.");
       }
     }
 
-    spdlog::info("Metadata of indices are recovered.");
+    memgraph::logging::Info("Metadata of indices are recovered.");
   }
 
   // Recover constraints.
   {
-    spdlog::info("Recovering metadata of constraints.");
+    memgraph::logging::Info("Recovering metadata of constraints.");
     if (!snapshot.SetPosition(info.offset_constraints)) throw RecoveryFailure("Couldn't read data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -11475,7 +11477,7 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of existence constraints!");
-      spdlog::info("Recovering metadata of {} existence constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} existence constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of existence constraints!");
@@ -11488,7 +11490,7 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of existence constraints are recovered.");
+      memgraph::logging::Info("Metadata of existence constraints are recovered.");
     }
 
     // Recover unique constraints.
@@ -11497,7 +11499,7 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
     {
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of unique constraints!");
-      spdlog::info("Recovering metadata of {} unique constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} unique constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of unique constraints!");
@@ -11515,7 +11517,7 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
         SPDLOG_TRACE("Recovered metadata of unique constraints for :{}",
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)));
       }
-      spdlog::info("Metadata of unique constraints are recovered.");
+      memgraph::logging::Info("Metadata of unique constraints are recovered.");
     }
 
     // Recover type constraints.
@@ -11525,7 +11527,7 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
       auto size = snapshot.ReadUint();
       if (!size) throw RecoveryFailure("Couldn't read the number of type constraints!");
 
-      spdlog::info("Recovering metadata of {} type constraints.", *size);
+      memgraph::logging::Info("Recovering metadata of {} type constraints.", *size);
       for (uint64_t i = 0; i < *size; ++i) {
         auto label = snapshot.ReadUint();
         if (!label) throw RecoveryFailure("Couldn't read label of type constraints!");
@@ -11543,13 +11545,13 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
                      name_id_mapper->IdToName(snapshot_id_map.at(*label)),
                      name_id_mapper->IdToName(snapshot_id_map.at(*property)));
       }
-      spdlog::info("Metadata of type constraints are recovered.");
+      memgraph::logging::Info("Metadata of type constraints are recovered.");
     }
 
-    spdlog::info("Metadata of constraints are recovered.");
+    memgraph::logging::Info("Metadata of constraints are recovered.");
   }
 
-  spdlog::info("Recovering metadata.");
+  memgraph::logging::Info("Recovering metadata.");
   // Recover epoch history
   {
     if (!snapshot.SetPosition(info.offset_epoch_history)) throw RecoveryFailure("Couldn't read data from snapshot!");
@@ -11578,7 +11580,7 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
 
   // Recover TTL data if available
   if (info.offset_ttl != SnapshotInfo::kInvalidOffset) {
-    spdlog::info("Recovering TTL data.");
+    memgraph::logging::Info("Recovering TTL data.");
     if (!snapshot.SetPosition(info.offset_ttl)) throw RecoveryFailure("Couldn't read TTL data from snapshot!");
 
     auto marker = snapshot.ReadMarker();
@@ -11634,12 +11636,12 @@ RecoveredSnapshot LoadSnapshotVersion34(Decoder &snapshot, std::filesystem::path
       ttl->Disable();
     }
 
-    spdlog::info("TTL data recovered.");
+    memgraph::logging::Info("TTL data recovered.");
   }
 
   RecoverDescriptionStore(snapshot, info, name_id_mapper, description_store);
 
-  spdlog::info("Metadata recovered.");
+  memgraph::logging::Info("Metadata recovered.");
   // Recover timestamp.
   recovery_info.next_timestamp = info.start_timestamp + 1;
   recovery_info.num_committed_txns = info.num_committed_txns;
@@ -11948,12 +11950,13 @@ void EnsureNecessaryWalFilesExist(const std::filesystem::path &wal_directory, co
       wal_files.emplace_back(info.seq_num, info.from_timestamp, info.to_timestamp, item.path());
     } catch (const RecoveryFailure &e) {
       // We want to find out what happened with the corrupted snapshot file, not delete it
-      spdlog::warn("Found a corrupt WAL file {} because of: {}. WAL file will NOT be deleted.", item.path(), e.what());
+      memgraph::logging::Warn(
+          "Found a corrupt WAL file {} because of: {}. WAL file will NOT be deleted.", item.path(), e.what());
     }
   }
 
   if (error_code) {
-    spdlog::error(
+    memgraph::logging::Error(
         utils::MessageWithLink("Couldn't ensure that only the absolutely necessary WAL files exist "
                                "because an error occurred: {}.",
                                error_code.message(),
@@ -12002,12 +12005,12 @@ auto EnsureRetentionCountSnapshotsExist(const std::filesystem::path &snapshot_di
     } catch (const RecoveryFailure &e) {
       // We use logical timestamp of 0 so that corrupted files get deleted before healthy ones
       old_snapshot_files.emplace_back(0, item.path());
-      spdlog::warn("Found a corrupt snapshot file {} because of: {}", item.path(), e.what());
+      memgraph::logging::Warn("Found a corrupt snapshot file {} because of: {}", item.path(), e.what());
     }
   }
 
   if (error_code) {
-    spdlog::error(
+    memgraph::logging::Error(
         utils::MessageWithLink("Couldn't ensure that exactly {} snapshots exist because an error occurred: {}.",
                                storage->config_.durability.snapshot_retention_count,
                                error_code.message(),
@@ -12062,10 +12065,10 @@ std::optional<std::filesystem::path> CreateSnapshot(Storage *storage, Transactio
     return true;
   };
 
-  spdlog::info("Starting snapshot creation to {}", path);
+  memgraph::logging::Info("Starting snapshot creation to {}", path);
   SnapshotEncoder snapshot;
   if (!snapshot.Initialize(path, kSnapshotMagic, kVersion)) {
-    spdlog::warn(
+    memgraph::logging::Warn(
         "Failed to open snapshot file {}. Not a fatal failure, snapshot creation will be retried on the next scheduled "
         "interval.",
         path);
@@ -12372,7 +12375,7 @@ std::optional<std::filesystem::path> CreateSnapshot(Storage *storage, Transactio
                                storage->config_.durability.snapshot_thread_count,
                                snapshot_aborted,
                                progress)) {
-      spdlog::warn(
+      memgraph::logging::Warn(
           "Failed to execute some tasks when doing a multi-threaded snapshot, snapshot will be aborted and snapshot "
           "creation will be retried on the next scheduled interval");
       snapshot.Close();
@@ -12900,9 +12903,9 @@ std::optional<std::filesystem::path> CreateSnapshot(Storage *storage, Transactio
   }
 
   // Finalize snapshot file.
-  spdlog::trace("Finalizing snapshot file!");
+  memgraph::logging::Trace("Finalizing snapshot file!");
   snapshot.Finalize();
-  spdlog::info("Snapshot creation successful!");
+  memgraph::logging::Info("Snapshot creation successful!");
 
   auto const old_snapshot_files =
       EnsureRetentionCountSnapshotsExist(snapshot_directory, uuid_str, path, file_retainer, storage);

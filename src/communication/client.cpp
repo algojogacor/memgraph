@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "communication/client.hpp"
+#include "logging/log.hpp"
 
 #include <openssl/bio.h>
 #include <openssl/err.h>
@@ -137,7 +138,7 @@ auto Client::Read(size_t len, bool exactly_len, const std::optional<int> timeout
           continue;
         } else {
           // This is a fatal error.
-          spdlog::error("Received an unexpected SSL error: {}", err);
+          memgraph::logging::Error("Received an unexpected SSL error: {}", err);
           return std::unexpected{io::network::ClientCommunicationError::GENERIC_ERROR};
         }
       } else if (got == 0) {

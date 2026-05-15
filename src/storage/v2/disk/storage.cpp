@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "storage/v2/disk/storage.hpp"
+#include "logging/log.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -672,7 +673,8 @@ std::unordered_set<Gid> DiskStorage::MergeVerticesFromMainCacheWithLabelIndexCac
   for (const auto &vertex : main_cache_acc) {
     gids.insert(vertex.gid);
     if (VertexHasLabel(vertex, label, transaction, view)) {
-      spdlog::trace("Loaded vertex with gid: {} from main index storage to label index", vertex.gid.ToString());
+      memgraph::logging::Trace("Loaded vertex with gid: {} from main index storage to label index",
+                               vertex.gid.ToString());
       const uint64_t ts = disk::GetEarliestTimestamp(vertex.delta());
       /// TODO: here are doing serialization and then later deserialization again -> expensive
       LoadVertexToLabelIndexCache(transaction,
@@ -703,7 +705,7 @@ void DiskStorage::LoadVerticesFromDiskLabelIndex(Transaction *transaction, Label
   for (index_it->SeekToFirst(); index_it->Valid(); index_it->Next()) {
     std::string key = index_it->key().ToString();
     Gid curr_gid = Gid::FromString(utils::ExtractGidFromLabelIndexStorage(key));
-    spdlog::trace("Loaded vertex with key: {} from label index storage", key);
+    memgraph::logging::Trace("Loaded vertex with key: {} from label index storage", key);
     if (key.starts_with(serialized_label) && !gids.contains(curr_gid)) {
       // We should pass it->timestamp().ToString() instead of "0"
       // This is hack until RocksDB will support timestamp() in WBWI iterator
@@ -1000,7 +1002,7 @@ void DiskStorage::SetEdgeImportMode(EdgeImportMode edge_import_status) {
   }
 
   edge_import_status_ = edge_import_status;
-  spdlog::trace("Edge import mode changed to: {}", EdgeImportModeToString(edge_import_status));
+  memgraph::logging::Trace("Edge import mode changed to: {}", EdgeImportModeToString(edge_import_status));
 }
 
 EdgeImportMode DiskStorage::GetEdgeImportMode() const {
@@ -1145,10 +1147,12 @@ bool DiskStorage::WriteVertexToVertexColumnFamily(Transaction *transaction, cons
   auto status = transaction->disk_transaction_->Put(
       kvstore_->vertex_chandle, ser_vertex, utils::SerializeProperties(vertex.properties));
   if (status.ok()) {
-    spdlog::trace("rocksdb: Saved vertex with key {} and ts {} to vertex column family", ser_vertex, commit_ts);
+    memgraph::logging::Trace(
+        "rocksdb: Saved vertex with key {} and ts {} to vertex column family", ser_vertex, commit_ts);
     return true;
   }
-  spdlog::error("rocksdb: Failed to save vertex with key {} and ts {} to vertex column family", ser_vertex, commit_ts);
+  memgraph::logging::Error(
+      "rocksdb: Failed to save vertex with key {} and ts {} to vertex column family", ser_vertex, commit_ts);
   return false;
 }
 
@@ -1160,10 +1164,11 @@ bool DiskStorage::WriteEdgeToEdgeColumnFamily(Transaction *transaction, std::str
       transaction->disk_transaction_->Put(kvstore_->edge_chandle, serialized_edge_key, serialized_edge_value);
 
   if (status.ok()) {
-    spdlog::trace("rocksdb: Saved edge {} with ts {} to edge column family", serialized_edge_key, commit_ts);
+    memgraph::logging::Trace("rocksdb: Saved edge {} with ts {} to edge column family", serialized_edge_key, commit_ts);
     return true;
   }
-  spdlog::error("rocksdb: Failed to save edge {} with ts {} to edge column family", serialized_edge_key, commit_ts);
+  memgraph::logging::Error(
+      "rocksdb: Failed to save edge {} with ts {} to edge column family", serialized_edge_key, commit_ts);
   return false;
 }
 
@@ -1186,11 +1191,12 @@ bool DiskStorage::WriteEdgeToConnectivityIndex(Transaction *transaction, std::st
   });
 
   if (put_status.ok()) {
-    spdlog::trace("rocksdb: Saved edge {} to {} edges connectivity index for vertex {}", edge_gid, mode, vertex_gid);
+    memgraph::logging::Trace(
+        "rocksdb: Saved edge {} to {} edges connectivity index for vertex {}", edge_gid, mode, vertex_gid);
     return true;
   }
 
-  spdlog::error(
+  memgraph::logging::Error(
       "rocksdb: Failed to save edge {} to {} edges connectivity index for vertex {}", edge_gid, mode, vertex_gid);
   return false;
 }
@@ -1202,19 +1208,19 @@ bool DiskStorage::DeleteVertexFromDisk(Transaction *transaction, std::string_vie
   auto vertex_in_conn_status = transaction->disk_transaction_->Delete(kvstore_->in_edges_chandle, vertex_gid);
 
   if (vertex_del_status.ok() && vertex_out_conn_status.ok() && vertex_in_conn_status.ok()) {
-    spdlog::trace("rocksdb: Deleted vertex with key {}", vertex);
+    memgraph::logging::Trace("rocksdb: Deleted vertex with key {}", vertex);
     return true;
   }
-  spdlog::error("rocksdb: Failed to delete vertex with key {}", vertex);
+  memgraph::logging::Error("rocksdb: Failed to delete vertex with key {}", vertex);
   return false;
 }
 
 bool DiskStorage::DeleteEdgeFromEdgeColumnFamily(Transaction *transaction, std::string_view edge_gid) {
   if (!transaction->disk_transaction_->Delete(kvstore_->edge_chandle, edge_gid).ok()) {
-    spdlog::error("rocksdb: Failed to delete edge {}", edge_gid);
+    memgraph::logging::Error("rocksdb: Failed to delete edge {}", edge_gid);
     return false;
   }
-  spdlog::trace("rocksdb: Deleted edge from edge column family", edge_gid);
+  memgraph::logging::Trace("rocksdb: Deleted edge from edge column family", edge_gid);
   return true;
 }
 
@@ -1230,17 +1236,17 @@ bool DiskStorage::DeleteEdgeFromDisk(Transaction *transaction, std::string_view 
 
   if (!transaction->vertices_to_delete_.contains(src_vertex_gid)) {
     if (!DeleteEdgeFromConnectivityIndex(transaction, src_vertex_gid, edge_gid, kvstore_->out_edges_chandle, "OUT")) {
-      spdlog::error("rocksdb: Failed to delete edge with key {}", edge_gid);
+      memgraph::logging::Error("rocksdb: Failed to delete edge with key {}", edge_gid);
       return false;
     }
-    spdlog::trace("rocksdb: Deleted edge with key {} from out edges of vertex", edge_gid, src_vertex_gid);
+    memgraph::logging::Trace("rocksdb: Deleted edge with key {} from out edges of vertex", edge_gid, src_vertex_gid);
   }
   if (!transaction->vertices_to_delete_.contains(dst_vertex_gid)) {
     if (!DeleteEdgeFromConnectivityIndex(transaction, dst_vertex_gid, edge_gid, kvstore_->in_edges_chandle, "IN")) {
-      spdlog::error("rocksdb: Failed to delete edge with key {}", edge_gid);
+      memgraph::logging::Error("rocksdb: Failed to delete edge with key {}", edge_gid);
       return false;
     }
-    spdlog::trace("rocksdb: Deleted edge with key {} from in edges of vertex", edge_gid, dst_vertex_gid);
+    memgraph::logging::Trace("rocksdb: Deleted edge with key {} from in edges of vertex", edge_gid, dst_vertex_gid);
   }
 
   return true;
@@ -1259,7 +1265,7 @@ bool DiskStorage::DeleteEdgeFromConnectivityIndex(Transaction *transaction, std:
   auto edges_status = transaction->disk_transaction_->Get(ro, handle, vertex_gid, &edges);
   if (!edges_status.ok()) {
     /// NOTE: Edge could be created and deleted in the same txn, so no need to fail explicitly.
-    spdlog::error("rocksdb: Failed to find {} edges collection of vertex {}.", mode, vertex_gid);
+    memgraph::logging::Error("rocksdb: Failed to find {} edges collection of vertex {}.", mode, vertex_gid);
     return true;
   }
 
@@ -1267,7 +1273,7 @@ bool DiskStorage::DeleteEdgeFromConnectivityIndex(Transaction *transaction, std:
   MG_ASSERT(std::erase(edges_vec, edge_gid) > 0U, "Edge must be in the edges collection of vertex");
   if (edges_vec.empty()) {
     if (!transaction->disk_transaction_->Delete(handle, vertex_gid).ok()) {
-      spdlog::error(
+      memgraph::logging::Error(
           "rocksdb: Failed to delete edge {} from edges connectivity index for vertex {}", edge_gid, vertex_gid);
       return false;
     }
@@ -1275,7 +1281,7 @@ bool DiskStorage::DeleteEdgeFromConnectivityIndex(Transaction *transaction, std:
   }
 
   if (!transaction->disk_transaction_->Put(handle, vertex_gid, utils::Join(edges_vec, ",")).ok()) {
-    spdlog::error(
+    memgraph::logging::Error(
         "rocksdb: Failed to delete edge {} from edges connectivity index for vertex {}", edge_gid, vertex_gid);
     return false;
   }
@@ -1478,9 +1484,9 @@ std::optional<storage::VertexAccessor> DiskStorage::LoadVertexToMainMemoryCache(
                               CreateDeleteDeserializedObjectDelta(transaction, key, std::move(ts)));
 }
 
-VertexAccessor DiskStorage::CreateVertexFromDisk(Transaction *transaction, utils::SkipListDb<Vertex>::Accessor &accessor,
-                                                 storage::Gid gid, VertexKey label_ids, PropertyStore properties,
-                                                 Delta *delta) {
+VertexAccessor DiskStorage::CreateVertexFromDisk(Transaction *transaction,
+                                                 utils::SkipListDb<Vertex>::Accessor &accessor, storage::Gid gid,
+                                                 VertexKey label_ids, PropertyStore properties, Delta *delta) {
   auto [it, inserted] = accessor.insert(Vertex{gid, delta});
   MG_ASSERT(inserted, "The vertex must be inserted here!");
   MG_ASSERT(it != accessor.end(), "Invalid Vertex accessor!");
@@ -1552,8 +1558,10 @@ std::optional<EdgeAccessor> DiskStorage::CreateEdgeFromDisk(const VertexAccessor
   const ModifiedEdgeInfo modified_edge(
       Delta::Action::DELETE_DESERIALIZED_OBJECT, from_vertex->gid, to_vertex->gid, edge_type, edge);
   if (transaction->AddModifiedEdge(gid, modified_edge)) {
-    spdlog::trace("Edge {} added to out edges of vertex with gid {}", gid.ToString(), from_vertex->gid.AsUint());
-    spdlog::trace("Edge {} added to in edges of vertex with gid {}", gid.ToString(), to_vertex->gid.AsUint());
+    memgraph::logging::Trace(
+        "Edge {} added to out edges of vertex with gid {}", gid.ToString(), from_vertex->gid.AsUint());
+    memgraph::logging::Trace(
+        "Edge {} added to in edges of vertex with gid {}", gid.ToString(), to_vertex->gid.AsUint());
     from_vertex->out_edges.emplace_back(edge_type, to_vertex, edge);
     to_vertex->in_edges.emplace_back(edge_type, from_vertex, edge);
     transaction->manyDeltasCache.Invalidate(from_vertex, edge_type, EdgeDirection::OUT);
@@ -1581,7 +1589,7 @@ std::vector<EdgeAccessor> DiskStorage::OutEdges(const VertexAccessor *src_vertex
       transaction->disk_transaction_->Get(ro, kvstore_->out_edges_chandle, src_vertex_gid, &out_edges_str);
 
   if (!conn_index_res.ok()) {
-    spdlog::trace("rocksdb: Couldn't find out edges of vertex {}.", src_vertex_gid);
+    memgraph::logging::Trace("rocksdb: Couldn't find out edges of vertex {}.", src_vertex_gid);
     return {};
   }
 
@@ -1668,7 +1676,7 @@ std::vector<EdgeAccessor> DiskStorage::InEdges(const VertexAccessor *dst_vertex,
       transaction->disk_transaction_->Get(ro, kvstore_->in_edges_chandle, dst_vertex_gid, &in_edges_str);
 
   if (!conn_index_res.ok()) {
-    spdlog::trace("rocksdb: Couldn't find in edges of vertex {}.", dst_vertex_gid);
+    memgraph::logging::Trace("rocksdb: Couldn't find in edges of vertex {}.", dst_vertex_gid);
     return {};
   }
 
@@ -1993,14 +2001,14 @@ std::expected<void, StorageManipulationError> DiskStorage::DiskAccessor::Prepare
   auto commitStatus = transaction_.disk_transaction_->Commit();
   if (!commitStatus.ok()) {
     Abort();
-    spdlog::error("rocksdb: Commit failed with status {}", commitStatus.ToString());
+    memgraph::logging::Error("rocksdb: Commit failed with status {}", commitStatus.ToString());
     return std::unexpected{StorageManipulationError{SerializationError{}}};
   }
 
   delete transaction_.disk_transaction_;
   transaction_.disk_transaction_ = nullptr;
 
-  spdlog::trace("rocksdb: Commit successful");
+  memgraph::logging::Trace("rocksdb: Commit successful");
 
   transaction_.active_indices_->text_->ApplyTrackedChanges(transaction_, disk_storage->name_id_mapper_.get());
   disk_storage->durable_metadata_.UpdateMetaData(
@@ -2541,29 +2549,32 @@ bool DiskStorage::DiskAccessor::LabelPropertyIndexExists(LabelId label,
 }
 
 bool DiskStorage::DiskAccessor::EdgeTypeIndexReady(EdgeTypeId /*edge_type*/) const {
-  spdlog::info("Edge-type index related operations are not yet supported using on-disk storage mode. {}",
-               kErrorMessage);
+  memgraph::logging::Info("Edge-type index related operations are not yet supported using on-disk storage mode. {}",
+                          kErrorMessage);
   return false;
 }
 
 bool DiskStorage::DiskAccessor::EdgeTypePropertyIndexReady(EdgeTypeId /*edge_type*/, PropertyId /*property*/) const {
-  spdlog::info("Edge-type index related operations are not yet supported using on-disk storage mode. {}",
-               kErrorMessage);
+  memgraph::logging::Info("Edge-type index related operations are not yet supported using on-disk storage mode. {}",
+                          kErrorMessage);
   return false;
 }
 
 bool DiskStorage::DiskAccessor::EdgePropertyIndexExists(PropertyId /*property*/) const {
-  spdlog::info("Edge index related operations are not yet supported using on-disk storage mode. {}", kErrorMessage);
+  memgraph::logging::Info("Edge index related operations are not yet supported using on-disk storage mode. {}",
+                          kErrorMessage);
   return false;
 }
 
 bool DiskStorage::DiskAccessor::EdgePropertyIndexReady(PropertyId /*property*/) const {
-  spdlog::info("Edge index related operations are not yet supported using on-disk storage mode. {}", kErrorMessage);
+  memgraph::logging::Info("Edge index related operations are not yet supported using on-disk storage mode. {}",
+                          kErrorMessage);
   return false;
 }
 
 bool DiskStorage::DiskAccessor::PointIndexExists(LabelId /*label*/, PropertyId /*property*/) const {
-  spdlog::info("Point index related operations are not yet supported using on-disk storage mode. {}", kErrorMessage);
+  memgraph::logging::Info("Point index related operations are not yet supported using on-disk storage mode. {}",
+                          kErrorMessage);
   return false;
 }
 

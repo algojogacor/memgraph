@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "utils/file_locker.hpp"
+#include "logging/log.hpp"
 
 #include <spdlog/spdlog.h>
 #include <filesystem>
@@ -24,7 +25,7 @@ namespace memgraph::utils {
 namespace {
 void DeleteFromSystem(const std::filesystem::path &path) {
   if (!utils::DeleteFile(path)) {
-    spdlog::warn("Couldn't delete file {}!", path);
+    memgraph::logging::Warn("Couldn't delete file {}!", path);
   }
 }
 }  // namespace
@@ -32,7 +33,7 @@ void DeleteFromSystem(const std::filesystem::path &path) {
 ////// FileRetainer //////
 void FileRetainer::DeleteFile(const std::filesystem::path &path) {
   if (!std::filesystem::exists(path)) {
-    spdlog::info("File {} doesn't exist.", path);
+    memgraph::logging::Info("File {} doesn't exist.", path);
     return;
   }
 
@@ -47,11 +48,11 @@ void FileRetainer::DeleteFile(const std::filesystem::path &path) {
 
 void FileRetainer::RenameFile(const std::filesystem::path &orig, const std::filesystem::path &dest) {
   if (!std::filesystem::exists(orig)) {
-    spdlog::error("Origin file {} doesn't exist.", orig);
+    memgraph::logging::Error("Origin file {} doesn't exist.", orig);
     return;
   }
   if (std::filesystem::exists(dest)) {
-    spdlog::error("Destination file {} exist.", dest);
+    memgraph::logging::Error("Destination file {} exist.", dest);
     return;
   }
 

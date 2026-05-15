@@ -16,6 +16,7 @@
 #include "coordination/coordinator_communication_config.hpp"
 #include "coordination/instance_state.hpp"
 #include "coordination/replication_lag_info.hpp"
+#include "logging/log.hpp"
 #include "replication_coordination_glue/common.hpp"
 #include "rpc/client.hpp"
 #include "utils/event_counter.hpp"
@@ -92,7 +93,7 @@ class ReplicationInstanceClient {
       auto stream = rpc_client_.Stream<T>(std::forward<Args>(args)...);
 
       if (!stream.SendAndWait().arg_) {
-        spdlog::error("Received unsuccessful response to {}.", T::Request::kType.name);
+        memgraph::logging::Error("Received unsuccessful response to {}.", T::Request::kType.name);
         metrics::IncrementCounter(RpcInfo<T>::failCounter);
         return false;
       }
@@ -100,7 +101,8 @@ class ReplicationInstanceClient {
       metrics::IncrementCounter(RpcInfo<T>::succCounter);
       return true;
     } catch (rpc::RpcFailedException const &e) {
-      spdlog::error("Failed to receive response to {}. Error occurred: {}", T::Request::kType.name, e.what());
+      memgraph::logging::Error(
+          "Failed to receive response to {}. Error occurred: {}", T::Request::kType.name, e.what());
       metrics::IncrementCounter(RpcInfo<T>::failCounter);
       return false;
     }

@@ -12,6 +12,7 @@
 #include <optional>
 #include <ranges>
 #include <utility>
+#include "logging/log.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -455,7 +456,7 @@ auto SessionHL::Route(bolt_map_t const &routing, std::vector<bolt_value_t> const
       ranges::to<std::map<std::string, std::string>>();
 
   if (db) {
-    spdlog::trace("Handling routing request for the database: {}", *db);
+    memgraph::logging::Trace("Handling routing request for the database: {}", *db);
   }
 
   auto routing_table_res = interpreter_.Route(routing_map, db);
@@ -662,9 +663,9 @@ void RuntimeConfig::Configure(const bolt_map_t &run_time_info, bool in_explicit_
 
   // Handle user impersonation (check privileges based on target database)
   if (user) {
-    spdlog::trace("Trying to impersonate user '{}' on database '{}'...",
-                  user->username().value_or("----"),
-                  defined_db.value_or("----"));
+    memgraph::logging::Trace("Trying to impersonate user '{}' on database '{}'...",
+                             user->username().value_or("----"),
+                             defined_db.value_or("----"));
     // Check impersonation privileges with the target database
     ImpersonateUserAuth(session_->session_user_or_role_.get(), user->username().value_or("----"), defined_db);
     // Setup user-related resource monitoring

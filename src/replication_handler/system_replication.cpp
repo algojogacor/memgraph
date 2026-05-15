@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "replication_handler/system_replication.hpp"
+#include "logging/log.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -46,9 +47,9 @@ void SetParameterHandler(system::ReplicaHandlerAccessToState &system_state_acces
   }
 
   if (req.expected_group_timestamp != system_state_access.LastCommitedTS()) {
-    spdlog::debug("SetParameterHandler: bad expected timestamp {},{}",
-                  req.expected_group_timestamp,
-                  system_state_access.LastCommitedTS());
+    memgraph::logging::Debug("SetParameterHandler: bad expected timestamp {},{}",
+                             req.expected_group_timestamp,
+                             system_state_access.LastCommitedTS());
     rpc::SendFinalResponse(res, request_version, res_builder);
     return;
   }
@@ -77,9 +78,9 @@ void UnsetParameterHandler(system::ReplicaHandlerAccessToState &system_state_acc
   }
 
   if (req.expected_group_timestamp != system_state_access.LastCommitedTS()) {
-    spdlog::debug("UnsetParameterHandler: bad expected timestamp {},{}",
-                  req.expected_group_timestamp,
-                  system_state_access.LastCommitedTS());
+    memgraph::logging::Debug("UnsetParameterHandler: bad expected timestamp {},{}",
+                             req.expected_group_timestamp,
+                             system_state_access.LastCommitedTS());
     rpc::SendFinalResponse(res, request_version, res_builder);
     return;
   }
@@ -107,9 +108,9 @@ void DeleteAllParametersHandler(system::ReplicaHandlerAccessToState &system_stat
   }
 
   if (req.expected_group_timestamp != system_state_access.LastCommitedTS()) {
-    spdlog::debug("DeleteAllParametersHandler: bad expected timestamp {},{}",
-                  req.expected_group_timestamp,
-                  system_state_access.LastCommitedTS());
+    memgraph::logging::Debug("DeleteAllParametersHandler: bad expected timestamp {},{}",
+                             req.expected_group_timestamp,
+                             system_state_access.LastCommitedTS());
     rpc::SendFinalResponse(res, request_version, res_builder);
     return;
   }
@@ -179,7 +180,7 @@ void SystemRecoveryHandler(memgraph::system::ReplicaHandlerAccessToState &system
   if (!parameters.ApplyRecovery(req.parameters)) return;
 
   system_state_access.SetLastCommitedTS(req.forced_group_timestamp);
-  spdlog::debug("SystemRecoveryHandler: SUCCESS updated LCTS to {}", req.forced_group_timestamp);
+  memgraph::logging::Debug("SystemRecoveryHandler: SUCCESS updated LCTS to {}", req.forced_group_timestamp);
   res = SystemRecoveryRes(SystemRecoveryRes::Result::SUCCESS);
 }
 
@@ -206,14 +207,14 @@ void FinalizeSystemTxHandler(memgraph::system::ReplicaHandlerAccessToState &syst
   //       If MAIN has changed we need to check this new group_timestamp is consistent with
   //       what we have so far.
   if (req.expected_group_timestamp != system_state_access.LastCommitedTS()) {
-    spdlog::error("Received system delta with expected ts: {} != last commited ts: {}",
-                  req.expected_group_timestamp,
-                  system_state_access.LastCommitedTS());
+    memgraph::logging::Error("Received system delta with expected ts: {} != last commited ts: {}",
+                             req.expected_group_timestamp,
+                             system_state_access.LastCommitedTS());
     return;
   }
 
   system_state_access.SetLastCommitedTS(req.new_group_timestamp);
-  spdlog::debug("FinalizeSystemTxHandler: SUCCESS updated LCTS to {}", req.new_group_timestamp);
+  memgraph::logging::Debug("FinalizeSystemTxHandler: SUCCESS updated LCTS to {}", req.new_group_timestamp);
   res = FinalizeSystemTxRes(true);
 }
 
@@ -284,7 +285,7 @@ bool StartRpcServer(
 #endif
   // Start server
   if (!data.server->Start()) {
-    spdlog::error("Unable to start the replication server.");
+    memgraph::logging::Error("Unable to start the replication server.");
     return false;
   }
   return true;

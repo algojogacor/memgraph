@@ -19,6 +19,7 @@
 #include <mutex>
 #include <thread>
 #include <utility>
+#include "logging/log.hpp"
 
 #include <gflags/gflags.h>
 
@@ -109,7 +110,7 @@ class Listener final {
     MG_ASSERT(!alive_.load(std::memory_order_acquire), "The listener is already started!");
     alive_.store(true, std::memory_order_release);
 
-    spdlog::info("Starting {} {} workers", workers_count_, service_name_);
+    memgraph::logging::Info("Starting {} {} workers", workers_count_, service_name_);
 
     std::string service_name(service_name_);
     for (size_t i = 0; i < workers_count_; ++i) {
@@ -129,9 +130,9 @@ class Listener final {
             auto guard = std::lock_guard{lock_};
             for (auto &session : sessions_) {
               if (session->TimedOut()) {
-                spdlog::warn("{} session associated with {} timed out",
-                             service_name,
-                             session->socket().endpoint().SocketAddress());
+                memgraph::logging::Warn("{} session associated with {} timed out",
+                                        service_name,
+                                        session->socket().endpoint().SocketAddress());
                 // Here we shutdown the socket to terminate any leftover
                 // blocking `Write` calls and to signal an event that the
                 // session is closed. Session cleanup will be done in the event
@@ -203,19 +204,20 @@ class Listener final {
       while (ExecuteSession(session));
     } else if (event.events & EPOLLRDHUP) {
       // The client closed the connection.
-      spdlog::info("{} client {} closed the connection.", service_name_, session.socket().endpoint().SocketAddress());
+      memgraph::logging::Info(
+          "{} client {} closed the connection.", service_name_, session.socket().endpoint().SocketAddress());
       CloseSession(session);
     } else if (!(event.events & EPOLLIN) || event.events & (EPOLLHUP | EPOLLERR)) {
       // There was an error on the server side.
-      spdlog::error(
+      memgraph::logging::Error(
           "Error occured in {} session associated with {}", service_name_, session.socket().endpoint().SocketAddress());
       CloseSession(session);
     } else {
       // Unhandled epoll event.
-      spdlog::error("Unhandled event occured in {} session associated with {} events: {}",
-                    service_name_,
-                    session.socket().endpoint().SocketAddress(),
-                    event.events);
+      memgraph::logging::Error("Unhandled event occured in {} session associated with {} events: {}",
+                               service_name_,
+                               session.socket().endpoint().SocketAddress(),
+                               event.events);
       CloseSession(session);
     }
   }
@@ -229,17 +231,18 @@ class Listener final {
         return false;
       }
     } catch (const SessionClosedException &e) {
-      spdlog::info("{} client {} closed the connection.", service_name_, session.socket().endpoint().SocketAddress());
+      memgraph::logging::Info(
+          "{} client {} closed the connection.", service_name_, session.socket().endpoint().SocketAddress());
       CloseSession(session);
       return false;
     } catch (const std::exception &e) {
       // Catch all exceptions.
-      spdlog::error(
+      memgraph::logging::Error(
           "Exception was thrown while processing event in {} session "
           "associated with {}",
           service_name_,
           session.socket().endpoint().SocketAddress());
-      spdlog::debug("Exception message: {}", e.what());
+      memgraph::logging::Debug("Exception message: {}", e.what());
       CloseSession(session);
       return false;
     }

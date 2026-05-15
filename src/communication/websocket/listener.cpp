@@ -1,4 +1,4 @@
-// Copyright 2024 Memgraph Ltd.
+// Copyright 2026 Memgraph Ltd.
 //
 // Use of this software is governed by the Business Source License
 // included in the file licenses/BSL.txt; by using this file, you agree to be bound by the terms of the Business Source
@@ -11,11 +11,12 @@
 
 #include "communication/websocket/listener.hpp"
 #include "communication/fmt.hpp"
+#include "logging/log.hpp"
 
 namespace memgraph::communication::websocket {
 namespace {
 void LogError(boost::beast::error_code ec, const std::string_view what) {
-  spdlog::warn("Websocket listener failed on {}: {}", what, ec.message());
+  memgraph::logging::Warn("Websocket listener failed on {}: {}", what, ec.message());
 }
 }  // namespace
 
@@ -72,7 +73,7 @@ Listener::Listener(boost::asio::io_context &ioc, ServerContext *context, tcp::en
     return;
   }
 
-  spdlog::info("WebSocket server is listening on {}", endpoint);
+  memgraph::logging::Info("WebSocket server is listening on {}", endpoint);
 }
 
 void Listener::DoAccept() {

@@ -24,6 +24,7 @@
 #include <string_view>
 #include <utility>
 #include <variant>
+#include "logging/log.hpp"
 
 #include <spdlog/spdlog.h>
 #include <boost/asio/bind_executor.hpp>
@@ -156,7 +157,7 @@ class Session final : public std::enable_shared_from_this<Session<TSession, TSes
                               const auto sent = socket.send(
                                   boost::asio::buffer(data, len), MSG_NOSIGNAL | (have_more ? MSG_MORE : 0U), ec);
                               if (ec) {
-                                spdlog::trace("Failed to write to TCP socket: {}", ec.message());
+                                memgraph::logging::Trace("Failed to write to TCP socket: {}", ec.message());
                                 shared_this->OnError(ec);
                                 return false;
                               }
@@ -171,7 +172,7 @@ class Session final : public std::enable_shared_from_this<Session<TSession, TSes
                             while (len > 0) {
                               const auto sent = socket.write_some(boost::asio::buffer(data, len), ec);
                               if (ec) {
-                                spdlog::trace("Failed to write to SSL socket: {}", ec.message());
+                                memgraph::logging::Trace("Failed to write to SSL socket: {}", ec.message());
                                 shared_this->OnError(ec);
                                 return false;
                               }
@@ -185,7 +186,7 @@ class Session final : public std::enable_shared_from_this<Session<TSession, TSes
                             boost::system::error_code ec;
                             ws.write(boost::asio::buffer(data, len), ec);
                             if (ec) {
-                              spdlog::trace("Failed to write to Web socket: {}", ec.message());
+                              memgraph::logging::Trace("Failed to write to Web socket: {}", ec.message());
                               shared_this->OnError(ec);
                               return false;
                             }
@@ -220,7 +221,7 @@ class Session final : public std::enable_shared_from_this<Session<TSession, TSes
                                    socket.lowest_layer().non_blocking(false);
                                  }},
                socket_);
-    spdlog::info("Accepted a connection from {}: {}", service_name_, remote_endpoint_);
+    memgraph::logging::Info("Accepted a connection from {}: {}", service_name_, remote_endpoint_);
   }
 
   // Start the asynchronous accept operation
@@ -326,14 +327,14 @@ class Session final : public std::enable_shared_from_this<Session<TSession, TSes
     // expected from clients to upgrade from tcp to websocket
 
     if (auto req = IsWebsocketUpgrade(input_buffer_.read_end()->data(), bytes_transferred); req) {
-      spdlog::info("Switching {} to websocket connection", remote_endpoint_);
+      memgraph::logging::Info("Switching {} to websocket connection", remote_endpoint_);
       if (std::holds_alternative<TCPSocket>(socket_)) {
         WebSocket ws{std::get<TCPSocket>(std::move(socket_))};
         socket_.emplace<WebSocket>(std::move(ws));
         DoAccept(std::move(*req));
         return;
       }
-      spdlog::error("Error while upgrading connection to websocket");
+      memgraph::logging::Error("Error while upgrading connection to websocket");
       DoShutdown();
     }
 
@@ -354,20 +355,20 @@ class Session final : public std::enable_shared_from_this<Session<TSession, TSes
     try {
       std::rethrow_exception(eptr);
     } catch (const SessionClosedException &e) {
-      spdlog::info("{} client {} closed the connection.", service_name_, remote_endpoint_);
+      memgraph::logging::Info("{} client {} closed the connection.", service_name_, remote_endpoint_);
       DoShutdown();
     } catch (const std::exception &e) {
-      spdlog::error("Exception was thrown while processing event in {} session associated with {}",
-                    service_name_,
-                    remote_endpoint_);
-      spdlog::debug("Exception message: {}", e.what());
+      memgraph::logging::Error("Exception was thrown while processing event in {} session associated with {}",
+                               service_name_,
+                               remote_endpoint_);
+      memgraph::logging::Debug("Exception message: {}", e.what());
       DoShutdown();
     }
   }
 
   void OnRead(const boost::system::error_code &ec, const size_t bytes_transferred) {
     if (ec) {
-      spdlog::trace("OnRead error: {}", ec.message());
+      memgraph::logging::Trace("OnRead error: {}", ec.message());
       session_.HandleError();
       return OnError(ec);
     }
@@ -378,7 +379,7 @@ class Session final : public std::enable_shared_from_this<Session<TSession, TSes
 
   void OnReadAsio(const boost::system::error_code &ec, const size_t bytes_transferred) {
     if (ec) {
-      spdlog::trace("OnRead error: {}", ec.message());
+      memgraph::logging::Trace("OnRead error: {}", ec.message());
       session_.HandleError();
       return OnError(ec);
     }
@@ -432,9 +433,9 @@ class Session final : public std::enable_shared_from_this<Session<TSession, TSes
     }
 
     if (ec == boost::asio::error::eof) {
-      spdlog::info("Session closed by peer {}", remote_endpoint_);
+      memgraph::logging::Info("Session closed by peer {}", remote_endpoint_);
     } else {
-      spdlog::error("Session error: {}", ec.message());
+      memgraph::logging::Error("Session error: {}", ec.message());
     }
 
     DoShutdown();
@@ -462,11 +463,11 @@ class Session final : public std::enable_shared_from_this<Session<TSession, TSes
                             boost::system::error_code ec;
                             socket.lowest_layer().shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
                             if (ec) {
-                              spdlog::error("Session shutdown failed: {}", ec.what());
+                              memgraph::logging::Error("Session shutdown failed: {}", ec.what());
                             }
                             socket.lowest_layer().close(ec);
                             if (ec) {
-                              spdlog::error("Session close failed: {}", ec.what());
+                              memgraph::logging::Error("Session close failed: {}", ec.what());
                             }
                           }},
         socket_);

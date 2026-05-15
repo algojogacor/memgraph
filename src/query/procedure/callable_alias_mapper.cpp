@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "callable_alias_mapper.hpp"
+#include "logging/log.hpp"
 
 #include <spdlog/spdlog.h>
 #include <filesystem>
@@ -27,7 +28,7 @@ CallableAliasMapper gCallableAliasMapper;
 void CallableAliasMapper::LoadMapping(const std::filesystem::path &path) {
   using json = nlohmann::json;
   if (path.empty()) {
-    spdlog::info("Path to callable mappings was not set.");
+    memgraph::logging::Info("Path to callable mappings was not set.");
     return;
   }
 

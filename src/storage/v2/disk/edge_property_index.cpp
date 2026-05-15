@@ -10,28 +10,29 @@
 // licenses/APL.txt.
 
 #include "edge_property_index.hpp"
+#include "logging/log.hpp"
 
 #include "utils/exceptions.hpp"
 
 namespace memgraph::storage {
 
 bool DiskEdgePropertyIndex::DropIndex(PropertyId /*property*/, ActiveIndicesUpdater const & /*updater*/) {
-  spdlog::warn("Edge index related operations are not yet supported using on-disk storage mode.");
+  memgraph::logging::Warn("Edge index related operations are not yet supported using on-disk storage mode.");
   return true;
 }
 
 bool DiskEdgePropertyIndex::ActiveIndices::IndexExists(PropertyId /*property*/) const {
-  spdlog::warn("Edge index related operations are not yet supported using on-disk storage mode.");
+  memgraph::logging::Warn("Edge index related operations are not yet supported using on-disk storage mode.");
   return false;
 }
 
 bool DiskEdgePropertyIndex::ActiveIndices::IndexReady(PropertyId /*property*/) const {
-  spdlog::warn("Edge index related operations are not yet supported using on-disk storage mode.");
+  memgraph::logging::Warn("Edge index related operations are not yet supported using on-disk storage mode.");
   return false;
 }
 
 std::vector<PropertyId> DiskEdgePropertyIndex::ActiveIndices::ListIndices(uint64_t /*start_timestamp*/) const {
-  spdlog::warn("Edge index related operations are not yet supported using on-disk storage mode.");
+  memgraph::logging::Warn("Edge index related operations are not yet supported using on-disk storage mode.");
   return {};
 }
 
@@ -39,24 +40,24 @@ void DiskEdgePropertyIndex::ActiveIndices::UpdateOnSetProperty(Vertex * /*from_v
                                                                Edge * /*edge*/, EdgeTypeId /*edge_type*/,
                                                                PropertyId /*property*/, PropertyValue /*value*/,
                                                                uint64_t /*timestamp*/) {
-  spdlog::warn("Edge index related operations are not yet supported using on-disk storage mode.");
+  memgraph::logging::Warn("Edge index related operations are not yet supported using on-disk storage mode.");
 }
 
 uint64_t DiskEdgePropertyIndex::ActiveIndices::ApproximateEdgeCount(PropertyId /*property*/) const {
-  spdlog::warn("Edge index related operations are not yet supported using on-disk storage mode.");
+  memgraph::logging::Warn("Edge index related operations are not yet supported using on-disk storage mode.");
   return 0U;
 }
 
 uint64_t DiskEdgePropertyIndex::ActiveIndices::ApproximateEdgeCount(PropertyId /*property*/,
                                                                     const PropertyValue & /*value*/) const {
-  spdlog::warn("Edge index related operations are not yet supported using on-disk storage mode.");
+  memgraph::logging::Warn("Edge index related operations are not yet supported using on-disk storage mode.");
   return 0U;
 };
 
 uint64_t DiskEdgePropertyIndex::ActiveIndices::ApproximateEdgeCount(
     PropertyId /*property*/, const std::optional<utils::Bound<PropertyValue>> & /*lower*/,
     const std::optional<utils::Bound<PropertyValue>> & /*upper*/) const {
-  spdlog::warn("Edge index related operations are not yet supported using on-disk storage mode.");
+  memgraph::logging::Warn("Edge index related operations are not yet supported using on-disk storage mode.");
   return 0U;
 }
 
@@ -70,7 +71,7 @@ void DiskEdgePropertyIndex::ActiveIndices::AbortEntries(EdgePropertyIndex::Abort
 };
 
 void DiskEdgePropertyIndex::DropGraphClearIndices() {
-  spdlog::warn("Edge index related operations are not yet supported using on-disk storage mode.");
+  memgraph::logging::Warn("Edge index related operations are not yet supported using on-disk storage mode.");
 }
 
 std::shared_ptr<EdgePropertyIndex::ActiveIndices> DiskEdgePropertyIndex::GetActiveIndices() const {

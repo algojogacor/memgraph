@@ -12,6 +12,7 @@
 #ifdef MG_ENTERPRISE
 
 #include "coordination/replication_instance_client.hpp"
+#include "logging/log.hpp"
 
 #include "coordination/coordinator_instance.hpp"
 #include "coordination/coordinator_rpc.hpp"
@@ -86,7 +87,7 @@ auto ReplicationInstanceClient::SendStateCheckRpc() const -> std::optional<Insta
     metrics::IncrementCounter(metrics::StateCheckRpcSuccess);
     return res.arg_;
   } catch (rpc::RpcFailedException const &e) {
-    spdlog::error("Failed to receive response to StateCheckRpc. Error occurred: {}", e.what());
+    memgraph::logging::Error("Failed to receive response to StateCheckRpc. Error occurred: {}", e.what());
     metrics::IncrementCounter(metrics::StateCheckRpcFail);
     return {};
   }
@@ -102,7 +103,7 @@ auto ReplicationInstanceClient::SendGetDatabaseHistoriesRpc() const
     return res.arg_;
 
   } catch (const rpc::RpcFailedException &e) {
-    spdlog::error("Failed to receive response to GetDatabaseHistoriesReq. Error occurred: {}", e.what());
+    memgraph::logging::Error("Failed to receive response to GetDatabaseHistoriesReq. Error occurred: {}", e.what());
     metrics::IncrementCounter(metrics::GetDatabaseHistoriesRpcFail);
     return {};
   }
@@ -114,7 +115,7 @@ auto ReplicationInstanceClient::SendGetReplicationLagRpc() const -> std::optiona
     auto res = stream.SendAndWait();
     return res.arg_;
   } catch (const rpc::RpcFailedException &e) {
-    spdlog::error("Failed to receive response to ReplicationLagRpc. Error occurred: {}", e.what());
+    memgraph::logging::Error("Failed to receive response to ReplicationLagRpc. Error occurred: {}", e.what());
     return {};
   }
 }

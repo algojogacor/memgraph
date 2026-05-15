@@ -12,6 +12,7 @@
 module;
 
 #include "flags/run_time_configurable.hpp"
+#include "logging/log.hpp"
 #include "query/exceptions.hpp"
 #include "query/typed_value.hpp"
 #include "requests/requests.hpp"
@@ -82,7 +83,7 @@ class GlobalS3APIManager {
   ~GlobalS3APIManager() {
     if (arrow::fs::IsS3Initialized()) {
       if (auto const finalize_status = arrow::fs::FinalizeS3(); !finalize_status.ok()) {
-        spdlog::error("Failed to finalize S3 file system");
+        memgraph::logging::Error("Failed to finalize S3 file system");
       }
     }
   }

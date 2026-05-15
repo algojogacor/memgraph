@@ -12,6 +12,7 @@
 #ifdef MG_ENTERPRISE
 
 #include "coordination/coordinator_log_store.hpp"
+#include "logging/log.hpp"
 
 #include <fmt/format.h>
 #include <spdlog/spdlog.h>
@@ -182,7 +183,7 @@ uint64_t CoordinatorLogStore::append(std::shared_ptr<log_entry> &entry) {
   bool constexpr is_entry_with_biggest_id{true};
   StoreEntryToDisk(clone, next_slot, is_entry_with_biggest_id);
 
-  spdlog::trace("Appended log at index {} to the log storage.", next_slot);
+  memgraph::logging::Trace("Appended log at index {} to the log storage.", next_slot);
   logs_[next_slot] = clone;
 
   return next_slot;
@@ -215,7 +216,7 @@ std::shared_ptr<std::vector<std::shared_ptr<log_entry>>> CoordinatorLogStore::lo
       auto lock = std::lock_guard{logs_lock_};
       auto const entry = logs_.find(i);
       if (entry == logs_.end()) {
-        spdlog::trace("Could not find entry at index {}", i);
+        memgraph::logging::Trace("Could not find entry at index {}", i);
         return nullptr;
       }
       src = entry->second;
@@ -236,7 +237,7 @@ std::vector<std::pair<int64_t, std::shared_ptr<log_entry>>> CoordinatorLogStore:
       auto lock = std::lock_guard{logs_lock_};
       auto const entry = logs_.find(i);
       if (entry == logs_.end()) {
-        spdlog::trace("Could not find entry at index {}", i);
+        memgraph::logging::Trace("Could not find entry at index {}", i);
         continue;
       }
       src = entry->second;
@@ -358,7 +359,7 @@ bool CoordinatorLogStore::compact(uint64_t last_log_index) {
 // Configuration logs are flushed immediately. This is called from NuRaft.
 // Otherwise, the possibility of split brain occurs inside Raft cluster.
 bool CoordinatorLogStore::flush() {
-  spdlog::trace("Synced WAL to make Raft logs durable.");
+  memgraph::logging::Trace("Synced WAL to make Raft logs durable.");
   return durability_->SyncWal();
 }
 

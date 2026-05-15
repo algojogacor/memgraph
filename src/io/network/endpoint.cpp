@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "io/network/endpoint.hpp"
+#include "logging/log.hpp"
 
 #include <arpa/inet.h>
 #include <fmt/format.h>
@@ -86,7 +87,7 @@ std::optional<Endpoint::RetValue> Endpoint::TryResolveAddress(std::string_view a
     auto const *res = inet_ntop(socket_addr->ai_family, &(socket_address_ipv4->sin_addr), buffer.data(), buffer.size());
     if (res == NULL) {    // NOLINT
       int errsv = errno;  // don't reorder, otherwise errno could get reassigned.
-      spdlog::error("inet_ntop failed with errno {} when resolving {} to ipv4 address.", errsv, address);
+      memgraph::logging::Error("inet_ntop failed with errno {} when resolving {} to ipv4 address.", errsv, address);
       return std::nullopt;
     }
     return std::tuple{std::string{buffer.data()}, port, Endpoint::IpFamily::IP4};
@@ -99,7 +100,7 @@ std::optional<Endpoint::RetValue> Endpoint::TryResolveAddress(std::string_view a
         inet_ntop(socket_addr->ai_family, &(socket_address_ipv6->sin6_addr), buffer.data(), buffer.size());
     if (res == NULL) {    // NOLINT
       int errsv = errno;  // don't reorder, otherwise errno could get reassigned.
-      spdlog::error("inet_ntop failed with errno {} when resolving {} to ipv6 address.", errsv, address);
+      memgraph::logging::Error("inet_ntop failed with errno {} when resolving {} to ipv6 address.", errsv, address);
       return std::nullopt;
     }
     return std::tuple{std::string{buffer.data()}, port, Endpoint::IpFamily::IP6};
@@ -124,10 +125,10 @@ std::optional<Endpoint::RetValue> Endpoint::TryResolveAddress(std::string_view a
 
     auto status = getaddrinfo(std::string(address).c_str(), std::to_string(port).c_str(), &hints, &info);
     if (status != 0) {
-      spdlog::error("getaddrinfo finished unsuccessfully while resolving {}:{}. Error occurred: {}",
-                    address,
-                    port,
-                    gai_strerror(status));
+      memgraph::logging::Error("getaddrinfo finished unsuccessfully while resolving {}:{}. Error occurred: {}",
+                               address,
+                               port,
+                               gai_strerror(status));
       return std::nullopt;
     }
 
@@ -185,14 +186,14 @@ auto Endpoint::ValidatePort(std::optional<uint16_t> port) -> bool {
   }
 
   if (port < 0) {
-    spdlog::error(utils::MessageWithLink(
+    memgraph::logging::Error(utils::MessageWithLink(
         "Invalid port number {}. The port number must be a positive integer.", *port, "https://memgr.ph/ports"));
     return false;
   }
 
   if (port > std::numeric_limits<uint16_t>::max()) {
-    spdlog::error(utils::MessageWithLink("Invalid port number. The port number exceedes the maximum possible size.",
-                                         "https://memgr.ph/ports"));
+    memgraph::logging::Error(utils::MessageWithLink(
+        "Invalid port number. The port number exceedes the maximum possible size.", "https://memgr.ph/ports"));
     return false;
   }
 

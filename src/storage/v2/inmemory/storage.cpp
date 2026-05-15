@@ -11,6 +11,7 @@
 
 #include "storage/v2/inmemory/storage.hpp"
 #include <range/v3/all.hpp>
+#include "logging/log.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -388,7 +389,7 @@ InMemoryStorage::InMemoryStorage(Config config, std::optional<free_mem_fn> free_
       CommitTsInfo const new_info{.ldt_ = info->last_durable_timestamp,
                                   .num_committed_txns_ = info->num_committed_txns};
       repl_storage_state_.commit_ts_info_.store(new_info, std::memory_order_release);
-      spdlog::trace(
+      memgraph::logging::Trace(
           "Recovering last durable timestamp {}. Timestamp recovered to {}. Num committed txns recovered to {}.",
           info->last_durable_timestamp,
           timestamp_,
@@ -426,7 +427,7 @@ InMemoryStorage::InMemoryStorage(Config config, std::optional<free_mem_fn> free_
       MG_ASSERT(!error_code, "Couldn't backup {} files because of: {}", what, error_code.message());
     }
     if (files_moved) {
-      spdlog::warn(
+      memgraph::logging::Warn(
           "Since Memgraph was not supposed to recover on startup and "
           "durability is enabled, your current durability files will likely "
           "be overridden. To prevent important data loss, Memgraph has stored "
@@ -2821,14 +2822,14 @@ void InMemoryStorage::CollectGarbage(std::unique_lock<utils::ResourceLock> main_
 
   // Diagnostic trace
   const utils::Timer timer;
-  spdlog::trace("Storage GC on '{}' started [{}]", name(), periodic ? "periodic" : "forced");
+  memgraph::logging::Trace("Storage GC on '{}' started [{}]", name(), periodic ? "periodic" : "forced");
   auto trace_on_exit = utils::OnScopeExit{[&] {
     auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(timer.Elapsed());
     memgraph::metrics::Measure(memgraph::metrics::GCLatency_us, elapsed.count());
-    spdlog::trace("Storage GC on '{}' finished [{}]. Duration: {:.3f}s",
-                  name(),
-                  periodic ? "periodic" : "forced",
-                  std::chrono::duration<double>(elapsed).count());
+    memgraph::logging::Trace("Storage GC on '{}' finished [{}]. Duration: {:.3f}s",
+                             name(),
+                             periodic ? "periodic" : "forced",
+                             std::chrono::duration<double>(elapsed).count());
   }};
 
   // Garbage collection must be performed in two phases. In the first phase,
@@ -4079,7 +4080,7 @@ std::expected<void, InMemoryStorage::RecoverSnapshotError> InMemoryStorage::Reco
       return std::unexpected{InMemoryStorage::RecoverSnapshotError::DownloadFailure};
     }
 
-    spdlog::trace("Downloaded snapshot file from {} to {}", uri_str, local_path.string());
+    memgraph::logging::Trace("Downloaded snapshot file from {} to {}", uri_str, local_path.string());
 
   } else if (s3_matcher(uri_str)) {
     DMG_ASSERT(s3_config.has_value(), "S3Config doesn't have a value");
@@ -4101,7 +4102,7 @@ std::expected<void, InMemoryStorage::RecoverSnapshotError> InMemoryStorage::Reco
       }
     }
     if (auto const res = utils::GetS3Object(uri, *s3_config, local_path.string()); !res.has_value()) {
-      spdlog::error(res.error().message);
+      memgraph::logging::Error(res.error().message);
       return std::unexpected{InMemoryStorage::RecoverSnapshotError::S3GetFailure};
     }
 
@@ -4115,7 +4116,7 @@ std::expected<void, InMemoryStorage::RecoverSnapshotError> InMemoryStorage::Reco
     if (!file_in_local_dir) {
       std::filesystem::copy_file(uri, local_path, std::filesystem::copy_options::overwrite_existing, ec);
       if (ec) {
-        spdlog::warn("Failed to copy snapshot into local snapshots directory. Err: {}", ec.message());
+        memgraph::logging::Warn("Failed to copy snapshot into local snapshots directory. Err: {}", ec.message());
         return std::unexpected{InMemoryStorage::RecoverSnapshotError::CopyFailure};
       }
     }
@@ -4142,7 +4143,7 @@ std::expected<void, InMemoryStorage::RecoverSnapshotError> InMemoryStorage::Reco
   std::string loaded_snapshot_uuid;
 
   try {
-    spdlog::debug("Recovering from a snapshot {}", local_path);
+    memgraph::logging::Debug("Recovering from a snapshot {}", local_path);
     auto recovered_snapshot =
         storage::durability::LoadSnapshot(local_path,
                                           &vertices_,
@@ -4156,11 +4157,11 @@ std::expected<void, InMemoryStorage::RecoverSnapshotError> InMemoryStorage::Reco
                                           config_.salient.items.enable_schema_info ? &schema_info_.Get() : nullptr,
                                           &ttl_,
                                           &description_store_);
-    spdlog::debug("Snapshot recovered successfully");
+    memgraph::logging::Debug("Snapshot recovered successfully");
     // Instead of using the UUID from the snapshot, we will override the snapshot's UUID with our own
     // This snapshot creates a new state and cannot have any WALs associated with it at this point
     // If the storage's snapshot has been reused, the old version will be put in the .old directory
-    spdlog::trace("Set epoch to {} for db {}", recovered_snapshot.snapshot_info.epoch_id, name());
+    memgraph::logging::Trace("Set epoch to {} for db {}", recovered_snapshot.snapshot_info.epoch_id, name());
     repl_storage_state_.epoch_.SetEpoch(std::move(recovered_snapshot.snapshot_info.epoch_id));
     const auto &recovery_info = recovered_snapshot.recovery_info;
     vertex_id_.store(recovery_info.next_vertex_id, std::memory_order_release);
@@ -4177,7 +4178,7 @@ std::expected<void, InMemoryStorage::RecoverSnapshotError> InMemoryStorage::Reco
     // We are the only active transaction, so mark everything up to the next timestamp
     if (timestamp_ > 0) commit_log_->MarkFinishedInRange(0, timestamp_ - 1);
 
-    spdlog::trace("Recovering indices and constraints from snapshot.");
+    memgraph::logging::Trace("Recovering indices and constraints from snapshot.");
     storage::durability::RecoverIndicesStatsAndConstraints(&vertices_,
                                                            name_id_mapper_.get(),
                                                            &indices_,
@@ -4187,7 +4188,7 @@ std::expected<void, InMemoryStorage::RecoverSnapshotError> InMemoryStorage::Reco
                                                            db_arena_,
                                                            recovered_snapshot.indices_constraints,
                                                            config_.salient.items.properties_on_edges);
-    spdlog::trace("Successfully recovered from snapshot {}", local_path);
+    memgraph::logging::Trace("Successfully recovered from snapshot {}", local_path);
 
     // Destroying current wal file
     wal_file_.reset();
@@ -4197,7 +4198,7 @@ std::expected<void, InMemoryStorage::RecoverSnapshotError> InMemoryStorage::Reco
 
     // Move all previous snapshots and WAL files to .old dir
     if (use_old_dir) {
-      spdlog::trace("Moving old snapshots and WALs to {}", old_dir);
+      memgraph::logging::Trace("Moving old snapshots and WALs to {}", old_dir);
       std::error_code ec{};
       auto const snapshot_old_dir = recovery_.snapshot_directory_ / old_dir;
       // Clear old directory
@@ -4207,7 +4208,7 @@ std::expected<void, InMemoryStorage::RecoverSnapshotError> InMemoryStorage::Reco
       // Recreate clean old directory
       std::filesystem::create_directory(snapshot_old_dir, ec);
       if (ec) {
-        spdlog::warn(
+        memgraph::logging::Warn(
             "Failed to create backup snapshot directory; snapshots directory should be cleaned manually. Err: {}",
             ec.message());
         return std::unexpected{InMemoryStorage::RecoverSnapshotError::BackupFailure};
@@ -4220,8 +4221,8 @@ std::expected<void, InMemoryStorage::RecoverSnapshotError> InMemoryStorage::Reco
       // Recreate clean old directory
       std::filesystem::create_directory(wal_old_dir, ec);
       if (ec) {
-        spdlog::warn("Failed to create backup WAL directory; WAL directory should be cleaned manually. Err: {}",
-                     ec.message());
+        memgraph::logging::Warn(
+            "Failed to create backup WAL directory; WAL directory should be cleaned manually. Err: {}", ec.message());
         return std::unexpected{InMemoryStorage::RecoverSnapshotError::BackupFailure};
       }
     }
@@ -4237,15 +4238,15 @@ std::expected<void, InMemoryStorage::RecoverSnapshotError> InMemoryStorage::Reco
       // Move to .old if enable_backup_dir is true
       auto const new_path = recovery_.snapshot_directory_ / old_dir / snapshot_path.filename();
       if (local_path != snapshot_path) {
-        spdlog::trace("Moving snapshot file {} to {}", snapshot_path, new_path);
+        memgraph::logging::Trace("Moving snapshot file {} to {}", snapshot_path, new_path);
         file_retainer_.RenameFile(snapshot_path, new_path);
       } else if (file_in_local_dir) {
-        spdlog::trace("Copying snapshot file {} to {}", snapshot_path, new_path);
+        memgraph::logging::Trace("Copying snapshot file {} to {}", snapshot_path, new_path);
         // Used a snapshot for the local storage, back it up
         std::error_code ec;
         std::filesystem::copy_file(snapshot_path, new_path, ec);
         if (ec) {
-          spdlog::warn(
+          memgraph::logging::Warn(
               "Failed to copy snapshot file to backup directory; snapshots directory should be cleaned "
               "manually. Err: {}",
               ec.message());
@@ -4263,7 +4264,7 @@ std::expected<void, InMemoryStorage::RecoverSnapshotError> InMemoryStorage::Reco
         file_retainer_.DeleteFile(wal_path);
       } else {
         auto const new_path = recovery_.wal_directory_ / old_dir / wal_path.filename();
-        spdlog::trace("Moving WAL file {} to {}", wal_path, new_path);
+        memgraph::logging::Trace("Moving WAL file {} to {}", wal_path, new_path);
         file_retainer_.RenameFile(wal_path, new_path);
       }
     }
@@ -4325,12 +4326,12 @@ std::vector<SnapshotFileInfo> InMemoryStorage::ShowSnapshots() {
                                         std::filesystem::file_time_type::clock::now() +
                                         std::chrono::system_clock::now()};
     if (ec) {
-      spdlog::warn("Failed to read write time for {}", snapshot_path);
+      memgraph::logging::Warn("Failed to read write time for {}", snapshot_path);
       write_time_ldt = utils::LocalDateTime{0};
     }
     size_t size = std::filesystem::file_size(snapshot_path, ec);
     if (ec) {
-      spdlog::warn("Failed to read file size for {}", snapshot_path);
+      memgraph::logging::Warn("Failed to read file size for {}", snapshot_path);
       size = 0;
     }
     res.emplace_back(snapshot_path, durable_timestamp, write_time_ldt, size);
@@ -4416,15 +4417,15 @@ void InMemoryStorage::CreateSnapshotHandler(
     if (auto maybe_error = cb(); !maybe_error.has_value()) {
       switch (maybe_error.error()) {
         case CreateSnapshotError::ReachedMaxNumTries:
-          spdlog::warn("Failed to create snapshot. {}. Please contact support.",
-                       CreateSnapshotErrorToString(maybe_error.error()));
+          memgraph::logging::Warn("Failed to create snapshot. {}. Please contact support.",
+                                  CreateSnapshotErrorToString(maybe_error.error()));
           break;
         case CreateSnapshotError::AbortSnapshot:
-          spdlog::warn("Failed to create snapshot. {}.", CreateSnapshotErrorToString(maybe_error.error()));
+          memgraph::logging::Warn("Failed to create snapshot. {}.", CreateSnapshotErrorToString(maybe_error.error()));
           break;
         case CreateSnapshotError::AlreadyRunning:
         case CreateSnapshotError::NothingNewToWrite:
-          spdlog::info("Skipping snapshot creation. {}.", CreateSnapshotErrorToString(maybe_error.error()));
+          memgraph::logging::Info("Skipping snapshot creation. {}.", CreateSnapshotErrorToString(maybe_error.error()));
           break;
       }
     }

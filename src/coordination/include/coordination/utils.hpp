@@ -24,6 +24,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include "logging/log.hpp"
 
 #include "coordination/coordinator_instance_context.hpp"
 #include "coordination/data_instance_context.hpp"
@@ -60,9 +61,9 @@ auto CreateRoutingTable(std::vector<DataInstanceContext> const &raft_log_data_in
                  ranges::views::transform(repl_instance_to_bolt) | ranges::to_vector;
   MG_ASSERT(writers.size() <= 1, "There can be at most one main instance active!");
 
-  spdlog::trace("WRITERS");
+  memgraph::logging::Trace("WRITERS");
   for (auto const &writer : writers) {
-    spdlog::trace("  {}", writer);
+    memgraph::logging::Trace("  {}", writer);
   }
 
   auto const lag_filter =
@@ -91,9 +92,9 @@ auto CreateRoutingTable(std::vector<DataInstanceContext> const &raft_log_data_in
     readers.emplace_back(writers[0]);
   }
 
-  spdlog::trace("READERS:");
+  memgraph::logging::Trace("READERS:");
   for (auto const &reader : readers) {
-    spdlog::trace("  {}", reader);
+    memgraph::logging::Trace("  {}", reader);
   }
 
   if (!std::ranges::empty(writers)) {
@@ -107,9 +108,9 @@ auto CreateRoutingTable(std::vector<DataInstanceContext> const &raft_log_data_in
   auto const get_bolt_server = [](CoordinatorInstanceContext const &context) { return context.bolt_server; };
 
   auto routers = coord_servers | ranges::views::transform(get_bolt_server) | ranges::to_vector;
-  spdlog::trace("ROUTERS:");
+  memgraph::logging::Trace("ROUTERS:");
   for (auto const &server : routers) {
-    spdlog::trace("  {}", server);
+    memgraph::logging::Trace("  {}", server);
   }
 
   res.emplace_back(std::move(routers), "ROUTE");

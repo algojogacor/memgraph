@@ -15,6 +15,7 @@
 #include <fmt/format.h>
 #include <optional>
 #include <set>
+#include "logging/log.hpp"
 
 #include "communication/bolt/v1/codes.hpp"
 #include "communication/bolt/v1/state.hpp"
@@ -34,7 +35,7 @@ template <typename TSession>
 void HandleAuthFailure(TSession &session) {
   if (!session.encoder_.MessageFailure(
           {{"code", "Memgraph.ClientError.Security.Unauthenticated"}, {"message", "Authentication failure"}})) {
-    spdlog::trace("Couldn't send failure message to the client!");
+    memgraph::logging::Trace("Couldn't send failure message to the client!");
   }
   // Throw an exception to indicate to the network stack that the session
   // should be closed and cleaned up.
@@ -45,7 +46,7 @@ template <typename TSession>
 void HandleResourceFailure(TSession &session) {
   if (!session.encoder_.MessageFailure({{"code", "Memgraph.ClientError.Statement.SessionLimitReached"},
                                         {"message", "User reached the limit of concurent sessions"}})) {
-    spdlog::trace("Couldn't send failure message to the client!");
+    memgraph::logging::Trace("Couldn't send failure message to the client!");
   }
   // Throw an exception to indicate to the network stack that the session
   // should be closed and cleaned up.
@@ -56,12 +57,12 @@ template <typename TSession>
 std::optional<State> BasicAuthentication(TSession &session, memgraph::communication::bolt::map_t &data) {
   auto principal_it = data.find("principal");
   if (principal_it == data.end() || !principal_it->second.IsString()) {  // Special case principal = ""
-    spdlog::warn("The client didn't supply the principal field! Trying with \"\"...");
+    memgraph::logging::Warn("The client didn't supply the principal field! Trying with \"\"...");
     data["principal"] = "";
   }
   auto credentials_it = data.find("credentials");
   if (credentials_it == data.end() || !credentials_it->second.IsString()) {  // Special case credentials = ""
-    spdlog::warn("The client didn't supply the credentials field! Trying with \"\"...");
+    memgraph::logging::Warn("The client didn't supply the credentials field! Trying with \"\"...");
     data["credentials"] = "";
   }
   auto username = data["principal"].ValueString();
@@ -86,12 +87,12 @@ template <typename TSession>
 std::optional<State> SSOAuthentication(TSession &session, memgraph::communication::bolt::map_t &data) {
   auto cred_it = data.find("credentials");
   if (cred_it == data.end() || !cred_it->second.IsString()) {
-    spdlog::warn("The client didn’t supply the SSO token!");
+    memgraph::logging::Warn("The client didn’t supply the SSO token!");
     return State::Close;
   }
   auto scheme_it = data.find("scheme");
   if (scheme_it == data.end() || !scheme_it->second.IsString()) {
-    spdlog::warn("The client didn't supply a valid SSO scheme!");
+    memgraph::logging::Warn("The client didn't supply a valid SSO scheme!");
     return State::Close;
   }
 
@@ -118,7 +119,7 @@ std::optional<State> AuthenticateUser(TSession &session, Value &metadata) {
   // In order to have back-compatibility, the missing fields will be added.
 #ifdef MG_ENTERPRISE
   if (auto const &coordination_setup = flags::CoordinationSetupInstance(); coordination_setup.IsCoordinator()) {
-    spdlog::info("Ignoring auth on coordinators");
+    memgraph::logging::Info("Ignoring auth on coordinators");
     return std::nullopt;
   }
 #endif
@@ -126,7 +127,7 @@ std::optional<State> AuthenticateUser(TSession &session, Value &metadata) {
   auto &data = metadata.ValueMap();
   auto scheme_it = data.find("scheme");
   if (scheme_it == data.end() || !scheme_it->second.IsString()) {  // Special case auth=None
-    spdlog::warn("The client didn't supply the authentication scheme! Trying with \"none\"...");
+    memgraph::logging::Warn("The client didn't supply the authentication scheme! Trying with \"none\"...");
     data["scheme"] = "none";
   }
 
@@ -150,7 +151,7 @@ std::optional<State> AuthenticateUser(TSession &session, Value &metadata) {
     return SSOAuthentication(session, data);
   }
 
-  spdlog::warn(
+  memgraph::logging::Warn(
       "The \"{}\" authentication scheme doesn’t have an associated single sign-on module in the auth-module-mappings "
       "flag or isn’t otherwise supported",
       schema);
@@ -162,8 +163,8 @@ std::optional<State> AuthenticateUser(TSession &session, Value &metadata) {
 template <typename TSession>
 std::optional<Value> GetMetadataV1(TSession &session, const Marker marker) {
   if (marker != Marker::TinyStruct2) [[unlikely]] {
-    spdlog::trace("Expected TinyStruct2 marker, but received 0x{:02X}!", std::to_underlying(marker));
-    spdlog::trace(
+    memgraph::logging::Trace("Expected TinyStruct2 marker, but received 0x{:02X}!", std::to_underlying(marker));
+    memgraph::logging::Trace(
         "The client sent malformed data, but we are continuing "
         "because the official Neo4j Java driver sends malformed "
         "data. D'oh!");
@@ -173,17 +174,17 @@ std::optional<Value> GetMetadataV1(TSession &session, const Marker marker) {
 
   Value client_name;
   if (!session.decoder_.ReadValue(&client_name, Value::Type::String)) {
-    spdlog::trace("Couldn't read client name!");
+    memgraph::logging::Trace("Couldn't read client name!");
     return std::nullopt;
   }
 
   Value metadata;
   if (!session.decoder_.ReadValue(&metadata, Value::Type::Map)) {
-    spdlog::trace("Couldn't read metadata!");
+    memgraph::logging::Trace("Couldn't read metadata!");
     return std::nullopt;
   }
 
-  spdlog::info("Client connected '{}'", client_name.ValueString());
+  memgraph::logging::Info("Client connected '{}'", client_name.ValueString());
 
   return metadata;
 }
@@ -191,8 +192,8 @@ std::optional<Value> GetMetadataV1(TSession &session, const Marker marker) {
 template <typename TSession>
 std::optional<Value> GetMetadataV4(TSession &session, const Marker marker) {
   if (marker != Marker::TinyStruct1) [[unlikely]] {
-    spdlog::trace("Expected TinyStruct1 marker, but received 0x{:02X}!", std::to_underlying(marker));
-    spdlog::trace(
+    memgraph::logging::Trace("Expected TinyStruct1 marker, but received 0x{:02X}!", std::to_underlying(marker));
+    memgraph::logging::Trace(
         "The client sent malformed data, but we are continuing "
         "because the official Neo4j Java driver sends malformed "
         "data. D'oh!");
@@ -202,18 +203,18 @@ std::optional<Value> GetMetadataV4(TSession &session, const Marker marker) {
 
   Value metadata;
   if (!session.decoder_.ReadValue(&metadata, Value::Type::Map)) {
-    spdlog::trace("Couldn't read metadata!");
+    memgraph::logging::Trace("Couldn't read metadata!");
     return std::nullopt;
   }
 
   auto &data = metadata.ValueMap();
   auto user_agent_it = data.find("user_agent");
   if (user_agent_it == data.end() || !user_agent_it->second.IsString()) {
-    spdlog::warn("The client didn't supply the user agent!");
+    memgraph::logging::Warn("The client didn't supply the user agent!");
     return std::nullopt;
   }
 
-  spdlog::info("Client connected '{}'", user_agent_it->second.ValueString());
+  memgraph::logging::Info("Client connected '{}'", user_agent_it->second.ValueString());
 
   return metadata;
 }
@@ -221,24 +222,24 @@ std::optional<Value> GetMetadataV4(TSession &session, const Marker marker) {
 template <typename TSession>
 std::optional<Value> GetInitDataV5(TSession &session, const Marker marker) {
   if (marker != Marker::TinyStruct1) [[unlikely]] {
-    spdlog::trace("Expected TinyStruct1 marker, but received 0x{:02X}!", std::to_underlying(marker));
+    memgraph::logging::Trace("Expected TinyStruct1 marker, but received 0x{:02X}!", std::to_underlying(marker));
     return std::nullopt;
   }
 
   Value metadata;
   if (!session.decoder_.ReadValue(&metadata, Value::Type::Map)) {
-    spdlog::trace("Couldn't read metadata!");
+    memgraph::logging::Trace("Couldn't read metadata!");
     return std::nullopt;
   }
 
   const auto &data = metadata.ValueMap();
   auto user_agent_it = data.find("user_agent");
   if (user_agent_it == data.end() || !user_agent_it->second.IsString()) {
-    spdlog::warn("The client didn't supply the user agent!");
+    memgraph::logging::Warn("The client didn't supply the user agent!");
     return std::nullopt;
   }
 
-  spdlog::info("Client connected '{}'", user_agent_it->second.ValueString());
+  memgraph::logging::Info("Client connected '{}'", user_agent_it->second.ValueString());
 
   return metadata;
 }
@@ -246,13 +247,13 @@ std::optional<Value> GetInitDataV5(TSession &session, const Marker marker) {
 template <typename TSession>
 std::optional<Value> GetAuthDataV5(TSession &session, const Marker marker) {
   if (marker != Marker::TinyStruct1) [[unlikely]] {
-    spdlog::trace("Expected TinyStruct1 marker, but received 0x{:02X}!", std::to_underlying(marker));
+    memgraph::logging::Trace("Expected TinyStruct1 marker, but received 0x{:02X}!", std::to_underlying(marker));
     return std::nullopt;
   }
 
   Value metadata;
   if (!session.decoder_.ReadValue(&metadata, Value::Type::Map)) {
-    spdlog::trace("Couldn't read metadata!");
+    memgraph::logging::Trace("Couldn't read metadata!");
     return std::nullopt;
   }
 
@@ -271,7 +272,7 @@ State SendSuccessMessage(TSession &session) {
   }
   bool success_sent = session.encoder_.MessageSuccess(metadata);
   if (!success_sent) {
-    spdlog::trace("Couldn't send success message to the client!");
+    memgraph::logging::Trace("Couldn't send success message to the client!");
     return State::Close;
   }
 
@@ -281,7 +282,7 @@ State SendSuccessMessage(TSession &session) {
 template <typename TSession>
 State StateInitRunV1(TSession &session, const Marker marker, const Signature signature) {
   if (signature != Signature::Init) [[unlikely]] {
-    spdlog::trace("Expected Init signature, but received 0x{:02X}!", std::to_underlying(signature));
+    memgraph::logging::Trace("Expected Init signature, but received 0x{:02X}!", std::to_underlying(signature));
     return State::Close;
   }
 
@@ -310,7 +311,7 @@ State StateInitRunV4(TSession &session, Marker marker, Signature signature) {
   }
 
   if (signature != Signature::Init) [[unlikely]] {
-    spdlog::trace("Expected Init signature, but received 0x{:02X}!", std::to_underlying(signature));
+    memgraph::logging::Trace("Expected Init signature, but received 0x{:02X}!", std::to_underlying(signature));
     return State::Close;
   }
 
@@ -356,8 +357,8 @@ State StateInitRunV5(TSession &session, Marker marker, Signature signature) {
 
   if (signature == Signature::LogOn) {
     if (marker != Marker::TinyStruct1) [[unlikely]] {
-      spdlog::trace("Expected TinyStruct1 marker, but received 0x{:02X}!", std::to_underlying(marker));
-      spdlog::trace(
+      memgraph::logging::Trace("Expected TinyStruct1 marker, but received 0x{:02X}!", std::to_underlying(marker));
+      memgraph::logging::Trace(
           "The client sent malformed data, but we are continuing "
           "because the official Neo4j Java driver sends malformed "
           "data. D'oh!");
@@ -370,7 +371,7 @@ State StateInitRunV5(TSession &session, Marker marker, Signature signature) {
     }
     auto result = AuthenticateUser(session, *maybeMetadata);
     if (result) {
-      spdlog::trace("Failed to authenticate, closing connection...");
+      memgraph::logging::Trace("Failed to authenticate, closing connection...");
       return State::Close;
     }
 
@@ -384,7 +385,7 @@ State StateInitRunV5(TSession &session, Marker marker, Signature signature) {
     return State::Idle;
   }
 
-  spdlog::trace("Expected Init signature, but received 0x{:02X}!", std::to_underlying(signature));
+  memgraph::logging::Trace("Expected Init signature, but received 0x{:02X}!", std::to_underlying(signature));
   return State::Close;
 }
 }  // namespace details
@@ -401,7 +402,7 @@ State StateInitRun(TSession &session) {
   Marker marker;
   Signature signature;
   if (!session.decoder_.ReadMessageHeader(&signature, &marker)) {
-    spdlog::trace("Missing header data!");
+    memgraph::logging::Trace("Missing header data!");
     return State::Close;
   }
 
@@ -419,7 +420,7 @@ State StateInitRun(TSession &session) {
       return details::StateInitRunV5<TSession>(session, marker, signature);
     }
   }
-  spdlog::trace("Unsupported bolt version:{}.{})!", session.version_.major, session.version_.minor);
+  memgraph::logging::Trace("Unsupported bolt version:{}.{})!", session.version_.major, session.version_.minor);
   return State::Close;
 }
 }  // namespace memgraph::communication::bolt

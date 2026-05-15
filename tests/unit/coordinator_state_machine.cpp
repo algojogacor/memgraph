@@ -13,6 +13,7 @@
 #include "coordination/constants.hpp"
 #include "coordination/coordinator_state_manager.hpp"
 #include "kvstore/kvstore.hpp"
+#include "logging/nuraft_logger.hpp"
 #include "utils/file.hpp"
 
 #include <gflags/gflags.h>

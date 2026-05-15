@@ -11,6 +11,7 @@
 #pragma once
 
 #include <utility>
+#include "logging/log.hpp"
 
 #include "auth/auth.hpp"
 #include "auth/profiles/user_profiles.hpp"
@@ -201,14 +202,14 @@ struct ReplicationHandler : public query::ReplicationQueryHandler {
 
  private:
   void ClientsShutdown(auto &locked_repl_state) const {
-    spdlog::trace("Shutting down instance level clients.");
+    memgraph::logging::Trace("Shutting down instance level clients.");
 
     auto &repl_clients = std::get<RoleMainData>(locked_repl_state->ReplicationData()).registered_replicas_;
     for (auto &client : repl_clients) {
       client.Shutdown();
     }
 
-    spdlog::trace("Instance-level clients stopped, trying to destroy replication storage clients.");
+    memgraph::logging::Trace("Instance-level clients stopped, trying to destroy replication storage clients.");
 
     // TODO StorageState needs to be synced. Could have a dangling reference if someone adds a database as we are
     //      deleting the replica.
@@ -218,7 +219,7 @@ struct ReplicationHandler : public query::ReplicationQueryHandler {
       storage->repl_storage_state_.replication_storage_clients_.WithLock([](auto &clients) { clients.clear(); });
     });
 
-    spdlog::trace("Replication storage clients destroyed.");
+    memgraph::logging::Trace("Replication storage clients destroyed.");
   }
 
   template <bool SendSwapUUID>
@@ -291,15 +292,16 @@ struct ReplicationHandler : public query::ReplicationQueryHandler {
     });
 
     if (!all_clients_good) {
-      spdlog::error("Failed to register all databases for the replica {}. Started unregistering replica.", config.name);
+      memgraph::logging::Error("Failed to register all databases for the replica {}. Started unregistering replica.",
+                               config.name);
       switch (UnregisterReplica(config.name)) {
         using query::UnregisterReplicaResult;
         case UnregisterReplicaResult::NO_ACCESS:
-          spdlog::trace("Failed to unregister replica {} since we couldn't get unique access to ReplicationState.",
-                        config.name);
+          memgraph::logging::Trace(
+              "Failed to unregister replica {} since we couldn't get unique access to ReplicationState.", config.name);
           break;
         case UnregisterReplicaResult::NOT_MAIN:
-          spdlog::trace(
+          memgraph::logging::Trace(
               "Failed to unregister replica {} after failed registration process since the instance isn't main "
               "anymore. The instance left in inconsistent state, the administrator should manually delete the "
               "data and restart process.",
@@ -313,14 +315,15 @@ struct ReplicationHandler : public query::ReplicationQueryHandler {
               "and restart process.",
               config.name);
         case UnregisterReplicaResult::CANNOT_UNREGISTER:
-          spdlog::trace(
+          memgraph::logging::Trace(
               "Failed to unregister replica {} after failed registration process since unregistration unsuccessful for "
               "all database clients. The instance left in inconsistent state, the administrator should manually delete "
               "the data and restart process.",
               config.name);
           break;
         case UnregisterReplicaResult::SUCCESS:
-          spdlog::trace("Replica {} successfully unregistered after failed registration process.", config.name);
+          memgraph::logging::Trace("Replica {} successfully unregistered after failed registration process.",
+                                   config.name);
           break;
       }
       return std::unexpected{RegisterReplicaError::CONNECTION_FAILED};
@@ -362,7 +365,7 @@ struct ReplicationHandler : public query::ReplicationQueryHandler {
     if (!locked_repl_state->SetReplicationRoleReplica(config, maybe_main_uuid)) {
       return false;
     }
-    spdlog::trace("Role set to replica, instance-level clients destroyed.");
+    memgraph::logging::Trace("Role set to replica, instance-level clients destroyed.");
 
     // Start
     const auto success = std::visit(

@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "utils/thread.hpp"
+#include "logging/log.hpp"
 
 #include <spdlog/spdlog.h>
 #include <sys/prctl.h>
@@ -23,7 +24,7 @@ void ThreadSetName(const std::string &name) {
   MG_ASSERT(name.size() <= max_name_length, "Thread name '{}' is too long", max_name_length);
 
   if (prctl(PR_SET_NAME, name.c_str()) != 0) {
-    spdlog::warn("Couldn't set thread name: {}!", name);
+    memgraph::logging::Warn("Couldn't set thread name: {}!", name);
   }
 }
 

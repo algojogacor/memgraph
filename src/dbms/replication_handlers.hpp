@@ -12,6 +12,7 @@
 #pragma once
 
 #include "dbms/dbms_handler.hpp"
+#include "logging/log.hpp"
 #include "replication/state.hpp"
 #include "system/state.hpp"
 
@@ -21,10 +22,10 @@ namespace memgraph::dbms {
 
 inline void LogWrongMain(const std::optional<utils::UUID> &current_main_uuid, const utils::UUID &main_req_id,
                          std::string_view rpc_req) {
-  spdlog::error("Received {} with main_id: {} != current_main_uuid: {}",
-                rpc_req,
-                std::string(main_req_id),
-                current_main_uuid.has_value() ? std::string(current_main_uuid.value()) : "");
+  memgraph::logging::Error("Received {} with main_id: {} != current_main_uuid: {}",
+                           rpc_req,
+                           std::string(main_req_id),
+                           current_main_uuid.has_value() ? std::string(current_main_uuid.value()) : "");
 }
 
 // RPC handlers

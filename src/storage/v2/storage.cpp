@@ -12,6 +12,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <tuple>
+#include "logging/log.hpp"
 
 #include "flags/general.hpp"
 #include "spdlog/spdlog.h"
@@ -115,7 +116,7 @@ Storage::Storage(Config config, StorageMode storage_mode, PlanInvalidatorPtr inv
         };
         return std::make_unique<DefaultDatabaseProtector>();
       }} {
-  spdlog::info("Created database with {} storage mode.", StorageModeToString(storage_mode));
+  memgraph::logging::Info("Created database with {} storage mode.", StorageModeToString(storage_mode));
 }
 
 std::unique_ptr<Accessor> Storage::Access(StorageAccessType rw_type) {

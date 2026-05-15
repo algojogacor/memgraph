@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "utils/memory_tracker.hpp"
+#include "logging/log.hpp"
 
 #include <fmt/format.h>
 #include <spdlog/spdlog.h>
@@ -39,13 +40,15 @@ constinit MemoryTracker vector_index_memory_tracker{&total_memory_tracker};
 // TODO (antonio2368): Define how should the peak memory be logged.
 // Logging every time the peak changes is too much so some kind of distribution
 // should be used.
-void MemoryTracker::LogPeakMemoryUsage() const { spdlog::info("Peak memory usage: {}", GetReadableSize(peak_)); }
+void MemoryTracker::LogPeakMemoryUsage() const {
+  memgraph::logging::Info("Peak memory usage: {}", GetReadableSize(peak_));
+}
 
 // TODO (antonio2368): Define how should the memory be logged.
 // Logging on each allocation is too much so some kind of distribution
 // should be used.
 void MemoryTracker::LogMemoryUsage(const int64_t current) {
-  spdlog::info("Current memory usage: {}", GetReadableSize(current));
+  memgraph::logging::Info("Current memory usage: {}", GetReadableSize(current));
 }
 
 void MemoryTracker::UpdatePeak(const int64_t will_be) {
@@ -64,17 +67,17 @@ void MemoryTracker::SetHardLimit(const int64_t limit) {
   });
 
   if (next_limit < 0) {
-    spdlog::warn("Invalid memory limit (negative value).");
+    memgraph::logging::Warn("Invalid memory limit (negative value).");
     return;
   }
 
   const auto previous_limit = hard_limit_.exchange(next_limit, std::memory_order_relaxed);
   if (previous_limit != next_limit) {
     if (next_limit == 0) {
-      spdlog::info("Memory limit cleared");
+      memgraph::logging::Info("Memory limit cleared");
     } else {
       // NOLINTNEXTLINE(bugprone-narrowing-conversions,cppcoreguidelines-narrowing-conversions)
-      spdlog::info("Memory limit set to {}", utils::GetReadableSize(next_limit));
+      memgraph::logging::Info("Memory limit set to {}", utils::GetReadableSize(next_limit));
     }
   }
 }
@@ -97,7 +100,7 @@ void MemoryTracker::ResetLimit() {
 
 void MemoryTracker::SetMaximumHardLimit(const int64_t limit) {
   if (maximum_hard_limit_ < 0) {
-    spdlog::warn("Invalid maximum hard limit.");
+    memgraph::logging::Warn("Invalid maximum hard limit.");
     return;
   }
   maximum_hard_limit_ = limit;

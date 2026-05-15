@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <variant>
+#include "logging/log.hpp"
 
 #include <spdlog/spdlog.h>
 #include <boost/asio/bind_executor.hpp>
@@ -39,7 +40,7 @@ namespace memgraph::communication::http {
 inline constexpr uint16_t kSSLExpirySeconds = 30;
 
 inline void LogError(boost::beast::error_code ec, const std::string_view what) {
-  spdlog::warn("HTTP session failed on {}: {}", what, ec.message());
+  memgraph::logging::Warn("HTTP session failed on {}: {}", what, ec.message());
 }
 
 template <class TRequestHandler, typename TSessionContext>
@@ -59,7 +60,7 @@ class Session : public std::enable_shared_from_this<Session<TRequestHandler, TSe
         boost::beast::get_lowest_layer(*ssl).expires_after(std::chrono::seconds(kSSLExpirySeconds));
         ssl->handshake(boost::asio::ssl::stream_base::server);
       } catch (const boost::system::system_error &e) {
-        spdlog::warn("Failed on SSL handshake: {}", e.what());
+        memgraph::logging::Warn("Failed on SSL handshake: {}", e.what());
         return;
       }
     }

@@ -16,6 +16,7 @@
 #include <optional>
 #include <string_view>
 #include <unordered_map>
+#include "logging/log.hpp"
 
 #include "global.hpp"
 #include "utils/exceptions.hpp"
@@ -78,7 +79,7 @@ class Handler {
       if (db_acc) return std::move(*db_acc);
       return std::unexpected{NewError::DEFUNCT};
     }
-    spdlog::info("Item with name \"{}\" already exists.", name);
+    memgraph::logging::Info("Item with name \"{}\" already exists.", name);
     return std::unexpected{NewError::EXISTS};
   }
 

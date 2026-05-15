@@ -12,6 +12,7 @@
 #ifdef MG_ENTERPRISE
 
 #include "coordination/coordinator_state.hpp"
+#include "logging/log.hpp"
 
 #include "coordination/coordinator_communication_config.hpp"
 #include "coordination/coordinator_instance.hpp"
@@ -37,9 +38,9 @@ CoordinatorState::CoordinatorState(ReplicationInstanceInitConfig const &config) 
   };
   data_ = CoordinatorMainReplicaData{.data_instance_management_server_ =
                                          std::make_unique<DataInstanceManagementServer>(mgmt_config)};
-  spdlog::trace("Created data instance management server on address {}:{}.",
-                mgmt_config.endpoint.GetAddress(),
-                mgmt_config.endpoint.GetPort());
+  memgraph::logging::Trace("Created data instance management server on address {}:{}.",
+                           mgmt_config.endpoint.GetAddress(),
+                           mgmt_config.endpoint.GetPort());
 }
 
 auto CoordinatorState::RegisterReplicationInstance(DataInstanceConfig const &config)
@@ -92,7 +93,7 @@ auto CoordinatorState::ReconcileClusterState() -> ReconcileClusterStateStatus {
 
   return std::visit(
       memgraph::utils::Overloaded{[](const CoordinatorMainReplicaData & /*coordinator_main_replica_data*/) {
-                                    spdlog::error(
+                                    memgraph::logging::Error(
                                         "Coordinator cannot force reset cluster state since it is not a "
                                         "coordinator instance.");
                                     return ReconcileClusterStateStatus::FAIL;

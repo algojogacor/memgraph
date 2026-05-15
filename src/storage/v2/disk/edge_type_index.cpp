@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "edge_type_index.hpp"
+#include "logging/log.hpp"
 
 #include <memory>
 #include <span>
@@ -22,39 +23,39 @@
 namespace memgraph::storage {
 
 bool DiskEdgeTypeIndex::DropIndex(EdgeTypeId /*edge_type*/, ActiveIndicesUpdater const & /*updater*/) {
-  spdlog::warn("Edge-type index related operations are not yet supported using on-disk storage mode.");
+  memgraph::logging::Warn("Edge-type index related operations are not yet supported using on-disk storage mode.");
   return true;
 }
 
 bool DiskEdgeTypeIndex::ActiveIndices::IndexReady(EdgeTypeId /*edge_type*/) const {
-  spdlog::warn("Edge-type index related operations are not yet supported using on-disk storage mode.");
+  memgraph::logging::Warn("Edge-type index related operations are not yet supported using on-disk storage mode.");
   return false;
 }
 
 bool DiskEdgeTypeIndex::ActiveIndices::IndexRegistered(EdgeTypeId /*edge_type*/) const {
-  spdlog::warn("Edge-type index related operations are not yet supported using on-disk storage mode.");
+  memgraph::logging::Warn("Edge-type index related operations are not yet supported using on-disk storage mode.");
   return false;
 }
 
 std::vector<EdgeTypeId> DiskEdgeTypeIndex::ActiveIndices::ListIndices(uint64_t start_timestamp) const {
-  spdlog::warn("Edge-type index related operations are not yet supported using on-disk storage mode.");
+  memgraph::logging::Warn("Edge-type index related operations are not yet supported using on-disk storage mode.");
   return {};
 }
 
 uint64_t DiskEdgeTypeIndex::ActiveIndices::ApproximateEdgeCount(EdgeTypeId /*edge_type*/) const {
-  spdlog::warn("Edge-type index related operations are not yet supported using on-disk storage mode.");
+  memgraph::logging::Warn("Edge-type index related operations are not yet supported using on-disk storage mode.");
   return 0U;
 }
 
 void DiskEdgeTypeIndex::ActiveIndices::UpdateOnEdgeCreation(Vertex * /*from*/, Vertex * /*to*/, EdgeRef /*edge_ref*/,
                                                             EdgeTypeId /*edge_type*/, const Transaction & /*tx*/) {
-  spdlog::warn("Edge-type index related operations are not yet supported using on-disk storage mode.");
+  memgraph::logging::Warn("Edge-type index related operations are not yet supported using on-disk storage mode.");
 }
 
 EdgeTypeIndex::AbortProcessor DiskEdgeTypeIndex::ActiveIndices::GetAbortProcessor() const { return AbortProcessor({}); }
 
 void DiskEdgeTypeIndex::DropGraphClearIndices() {
-  spdlog::warn("Edge-type index related operations are not yet supported using on-disk storage mode.");
+  memgraph::logging::Warn("Edge-type index related operations are not yet supported using on-disk storage mode.");
 }
 
 auto DiskEdgeTypeIndex::GetActiveIndices() const -> std::shared_ptr<EdgeTypeIndex::ActiveIndices> {

@@ -25,6 +25,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include "logging/log.hpp"
 
 #include "coordination/coordination_observer.hpp"
 #include "coordination/coordinator_cluster_state.hpp"
@@ -149,7 +150,7 @@ CoordinatorInstance::~CoordinatorInstance() {
 
 auto CoordinatorInstance::GetBecomeLeaderCallback() -> std::function<void()> {
   return [this]() {
-    spdlog::trace("Executing become leader callback in thread {}.", std::this_thread::get_id());
+    memgraph::logging::Trace("Executing become leader callback in thread {}.", std::this_thread::get_id());
     if (is_shutting_down_.load(std::memory_order_acquire)) {
       return;
     }
@@ -177,18 +178,18 @@ auto CoordinatorInstance::GetBecomeFollowerCallback() -> std::function<void()> {
       if (is_shutting_down_.load(std::memory_order_acquire)) {
         return;
       }
-      spdlog::info("Executing become follower callback in thread {}.", std::this_thread::get_id());
+      memgraph::logging::Info("Executing become follower callback in thread {}.", std::this_thread::get_id());
       // We need to stop checks before taking a lock because deadlock can happen if instances wait
       // to take a lock in state check, and this thread already has a lock and waits for instance to
       // be done with state check
       std::ranges::for_each(repl_instances_, [](auto &&repl_instance) {
-        spdlog::trace("Stopping state check for instance {} in thread {}.",
-                      repl_instance.InstanceName(),
-                      std::this_thread::get_id());
+        memgraph::logging::Trace("Stopping state check for instance {} in thread {}.",
+                                 repl_instance.InstanceName(),
+                                 std::this_thread::get_id());
         repl_instance.StopStateCheck();
-        spdlog::trace("Stopped state check for instance {} in thread {}.",
-                      repl_instance.InstanceName(),
-                      std::this_thread::get_id());
+        memgraph::logging::Trace("Stopped state check for instance {} in thread {}.",
+                                 repl_instance.InstanceName(),
+                                 std::this_thread::get_id());
       });
       auto lock = std::unique_lock{coord_instance_lock_};
       repl_instances_.clear();
@@ -228,9 +229,9 @@ void CoordinatorInstance::UpdateClientConnectors(std::vector<CoordinatorInstance
       continue;
     }
 
-    spdlog::trace("Creating new connector to coordinator with id {}, on endpoint:{}.",
-                  coordinator.id,
-                  coordinator.management_server);
+    memgraph::logging::Trace("Creating new connector to coordinator with id {}, on endpoint:{}.",
+                             coordinator.id,
+                             coordinator.management_server);
     auto mgmt_endpoint = io::network::Endpoint::ParseAndCreateSocketOrAddress(coordinator.management_server);
     MG_ASSERT(mgmt_endpoint.has_value(), "Failed to create management server when creating new coordinator connector.");
     connectors->emplace(connectors->end(), coordinator.id, ManagementServerConfig{std::move(*mgmt_endpoint)});
@@ -275,7 +276,7 @@ auto CoordinatorInstance::GetCoordinatorsInstanceStatus() const -> std::vector<I
 }
 
 auto CoordinatorInstance::ShowInstancesStatusAsFollower() const -> std::vector<InstanceStatus> {
-  spdlog::trace("Processing show instances request as follower.");
+  memgraph::logging::Trace("Processing show instances request as follower.");
   auto instances_status = GetCoordinatorsInstanceStatus();
   auto const stringify_inst_status = [raft_state_ptr = raft_state_.get()](auto &&instance) -> std::string {
     if (raft_state_ptr->IsCurrentMain(instance.config.instance_name)) {
@@ -297,7 +298,7 @@ auto CoordinatorInstance::ShowInstancesStatusAsFollower() const -> std::vector<I
 
   std::ranges::transform(
       raft_state_->GetDataInstancesContext(), std::back_inserter(instances_status), process_repl_instance_as_follower);
-  spdlog::trace("Returning set of instances as follower.");
+  memgraph::logging::Trace("Returning set of instances as follower.");
   return instances_status;
 }
 
@@ -330,10 +331,10 @@ auto CoordinatorInstance::ShowInstancesAsLeader() const -> std::optional<std::ve
   // TODO: (andi) Do I even need lock here?
   auto lock = std::shared_lock{coord_instance_lock_};
 
-  spdlog::trace("Processing show instances request as leader.");
+  memgraph::logging::Trace("Processing show instances request as leader.");
 
   if (status.load(std::memory_order_acquire) != CoordinatorStatus::LEADER_READY) {
-    spdlog::trace("Leader is not ready, returning empty response.");
+    memgraph::logging::Trace("Leader is not ready, returning empty response.");
     return std::nullopt;
   }
 
@@ -341,7 +342,7 @@ auto CoordinatorInstance::ShowInstancesAsLeader() const -> std::optional<std::ve
   std::ranges::transform(
       raft_state_->GetDataInstancesContext(), std::back_inserter(instances_status), get_instance_status);
 
-  spdlog::trace("Returning set of instances as leader.");
+  memgraph::logging::Trace("Returning set of instances as leader.");
   return instances_status;
 }
 
@@ -368,32 +369,32 @@ auto CoordinatorInstance::ShowInstances() const -> std::vector<InstanceStatus> {
 
   auto const leader_id = raft_state_->GetLeaderId();
   if (leader_id == raft_state_->GetMyCoordinatorId()) {
-    spdlog::trace("Coordinator itself not yet leader, returning report as follower.");
+    memgraph::logging::Trace("Coordinator itself not yet leader, returning report as follower.");
     return ShowInstancesStatusAsFollower();  // We don't want to ask ourselves for instances, as coordinator is
     // not ready still as leader
   }
 
   if (leader_id == -1) {
-    spdlog::trace("No leader found, returning report as follower");
+    memgraph::logging::Trace("No leader found, returning report as follower");
     return ShowInstancesStatusAsFollower();
   }
 
   CoordinatorInstanceConnector *leader = FindClientConnector(leader_id);
 
   if (leader == nullptr) {
-    spdlog::trace("Connection to leader not found, returning SHOW INSTANCES output as follower.");
+    memgraph::logging::Trace("Connection to leader not found, returning SHOW INSTANCES output as follower.");
     return ShowInstancesStatusAsFollower();
   }
 
-  spdlog::trace("Sending show instances RPC to leader with id {}", leader_id);
+  memgraph::logging::Trace("Sending show instances RPC to leader with id {}", leader_id);
   auto maybe_res = leader->SendRpc<ShowInstancesRpc>();
 
   if (!maybe_res) {
-    spdlog::trace("Couldn't get instances from leader {}. Returning result as a follower.", leader_id);
+    memgraph::logging::Trace("Couldn't get instances from leader {}. Returning result as a follower.", leader_id);
     return ShowInstancesStatusAsFollower();
   }
 
-  spdlog::trace("Got instances from leader {}.", leader_id);
+  memgraph::logging::Trace("Got instances from leader {}.", leader_id);
   return std::move(maybe_res.value());
 }
 
@@ -402,8 +403,9 @@ auto CoordinatorInstance::ReconcileClusterState() -> ReconcileClusterStateStatus
 
   auto attempt_cnt{1};
   while (raft_state_->IsLeader()) {
-    spdlog::trace("Trying to ensure cluster's healthy state. The coordinator is considered a leader. Attempt: {}.",
-                  attempt_cnt++);
+    memgraph::logging::Trace(
+        "Trying to ensure cluster's healthy state. The coordinator is considered a leader. Attempt: {}.",
+        attempt_cnt++);
     switch (auto const result = ReconcileClusterState_()) {
       using enum ReconcileClusterStateStatus;
       case SUCCESS: {
@@ -411,25 +413,26 @@ auto CoordinatorInstance::ReconcileClusterState() -> ReconcileClusterStateStatus
         if (!status.compare_exchange_strong(
                 expected, CoordinatorStatus::LEADER_READY, std::memory_order_acq_rel, std::memory_order_acquire)) {
           if (expected == CoordinatorStatus::FOLLOWER) {
-            spdlog::trace(
+            memgraph::logging::Trace(
                 "Reconcile cluster state finished successfully but coordinator in the meantime became follower.");
             metrics::IncrementCounter(metrics::FailedToBecomeLeader);
             return ReconcileClusterStateStatus::NOT_LEADER_ANYMORE;
           }
           // We should never get into such state, but we log it for observability.
-          spdlog::trace("Reconcile cluster state finished successfully but coordinator is already in state ready.");
+          memgraph::logging::Trace(
+              "Reconcile cluster state finished successfully but coordinator is already in state ready.");
           return result;
         }
-        spdlog::trace("Reconcile cluster state finished successfully. Leader is ready now.");
+        memgraph::logging::Trace("Reconcile cluster state finished successfully. Leader is ready now.");
         metrics::IncrementCounter(metrics::BecomeLeaderSuccess);
         return result;
       }
       case FAIL:
-        spdlog::trace("ReconcileClusterState_ failed!");
+        memgraph::logging::Trace("ReconcileClusterState_ failed!");
         metrics::IncrementCounter(metrics::FailedToBecomeLeader);
         break;
       case SHUTTING_DOWN:
-        spdlog::trace("Stopping reconciliation as coordinator is shutting down.");
+        memgraph::logging::Trace("Stopping reconciliation as coordinator is shutting down.");
         metrics::IncrementCounter(metrics::FailedToBecomeLeader);
         return result;
       case NOT_LEADER_ANYMORE:
@@ -449,7 +452,7 @@ auto CoordinatorInstance::ReconcileClusterState() -> ReconcileClusterStateStatus
 }
 
 auto CoordinatorInstance::ReconcileClusterState_() -> ReconcileClusterStateStatus {
-  spdlog::trace("Doing ReconcileClusterState_.");
+  memgraph::logging::Trace("Doing ReconcileClusterState_.");
 
   if (is_shutting_down_.load(std::memory_order_acquire)) {
     return ReconcileClusterStateStatus::SHUTTING_DOWN;
@@ -459,9 +462,9 @@ auto CoordinatorInstance::ReconcileClusterState_() -> ReconcileClusterStateStatu
   // taking lock to avoid deadlock between us stopping thread and thread wanting to take lock but can't because
   // we have it
   std::ranges::for_each(repl_instances_, [](auto &&repl_instance) {
-    spdlog::trace("Stopping state checks for instance {}.", repl_instance.InstanceName());
+    memgraph::logging::Trace("Stopping state checks for instance {}.", repl_instance.InstanceName());
     repl_instance.StopStateCheck();
-    spdlog::trace("Stopped state check for instance {}.", repl_instance.InstanceName());
+    memgraph::logging::Trace("Stopped state check for instance {}.", repl_instance.InstanceName());
   });
   auto lock = std::unique_lock{coord_instance_lock_};
   repl_instances_.clear();
@@ -497,7 +500,7 @@ auto CoordinatorInstance::ReconcileClusterState_() -> ReconcileClusterStateStatu
     // If we have alive MAIN instance we expect that the cluster was in the correct state already. We can start
     // frequent checks.
     auto main_instance = std::ranges::begin(current_mains);
-    spdlog::trace("Found main instance {}.", main_instance->config.instance_name);
+    memgraph::logging::Trace("Found main instance {}.", main_instance->config.instance_name);
     for (auto &instance : repl_instances_) {
       instance.StartStateCheck();
     }
@@ -505,22 +508,22 @@ auto CoordinatorInstance::ReconcileClusterState_() -> ReconcileClusterStateStatu
   }
 
   if (num_mains == 0) {
-    spdlog::trace(
+    memgraph::logging::Trace(
         "No main can be determined from the current state in logs. Trying to find the most up to date instance.");
     switch (TryFailover()) {
       case FailoverStatus::SUCCESS: {
         for (auto &instance : repl_instances_) {
           instance.StartStateCheck();
         }
-        spdlog::trace("Exiting ReconcileClusterState_. Cluster is in healthy state.");
+        memgraph::logging::Trace("Exiting ReconcileClusterState_. Cluster is in healthy state.");
         return ReconcileClusterStateStatus::SUCCESS;
       };
       case FailoverStatus::NO_INSTANCE_ALIVE: {
-        spdlog::trace("Failover failed because no instance is alive.");
+        memgraph::logging::Trace("Failover failed because no instance is alive.");
         return ReconcileClusterStateStatus::FAIL;
       };
       case FailoverStatus::RAFT_FAILURE: {
-        spdlog::trace("Writing to Raft log failed, reconciliation task will be scheduled.");
+        memgraph::logging::Trace("Writing to Raft log failed, reconciliation task will be scheduled.");
         return ReconcileClusterStateStatus::FAIL;
       };
     };
@@ -554,13 +557,13 @@ auto CoordinatorInstance::TryFailover() const -> FailoverStatus {
   utils::MetricsTimer const timer{metrics::DataFailover_us};
   auto const maybe_most_up_to_date_instance = GetInstanceForFailover();
   if (!maybe_most_up_to_date_instance) {
-    spdlog::error("Couldn't choose instance for failover, check logs for more details.");
+    memgraph::logging::Error("Couldn't choose instance for failover, check logs for more details.");
     metrics::IncrementCounter(metrics::NoAliveInstanceFailedFailovers);
     return FailoverStatus::NO_INSTANCE_ALIVE;
   }
 
   auto const &new_main_name = *maybe_most_up_to_date_instance;
-  spdlog::trace("Found new main instance {} while doing failover.", new_main_name);
+  memgraph::logging::Trace("Found new main instance {} while doing failover.", new_main_name);
 
   auto data_instances = raft_state_->GetDataInstancesContext();
 
@@ -585,7 +588,7 @@ auto CoordinatorInstance::TryFailover() const -> FailoverStatus {
                                                  .current_main_uuid_ = new_main_uuid};
 
   if (!raft_state_->AppendLogAndWaitForCommit(delta_state)) {
-    spdlog::error("Aborting failover. Writing to Raft failed.");
+    memgraph::logging::Error("Aborting failover. Writing to Raft failed.");
     metrics::IncrementCounter(metrics::RaftFailedFailovers);
     return FailoverStatus::RAFT_FAILURE;
   }
@@ -621,7 +624,8 @@ auto CoordinatorInstance::SetReplicationInstanceToMain(std::string_view new_main
   });
 
   if (main_data_instance == std::ranges::end(data_instances)) {
-    spdlog::error("Instance {} not registered. Please register it using REGISTER INSTANCE query.", new_main_name);
+    memgraph::logging::Error("Instance {} not registered. Please register it using REGISTER INSTANCE query.",
+                             new_main_name);
     return SetInstanceToMainCoordinatorStatus::NO_INSTANCE_WITH_NAME;
   }
 
@@ -633,7 +637,7 @@ auto CoordinatorInstance::SetReplicationInstanceToMain(std::string_view new_main
 
   // Small probability that it can occur during coordinator's startup
   if (new_main_connector == std::ranges::end(repl_instances_)) {
-    spdlog::error(
+    memgraph::logging::Error(
         "Instance {} found in Raft but no connector exists "
         "(coordinator not ready yet). Retry the operation.",
         new_main_name);
@@ -655,7 +659,7 @@ auto CoordinatorInstance::SetReplicationInstanceToMain(std::string_view new_main
                                                  .current_main_uuid_ = new_main_uuid};
 
   if (!raft_state_->AppendLogAndWaitForCommit(delta_state)) {
-    spdlog::error("Aborting setting instance to main. Writing to Raft failed.");
+    memgraph::logging::Error("Aborting setting instance to main. Writing to Raft failed.");
     return SetInstanceToMainCoordinatorStatus::RAFT_LOG_ERROR;
   }
 
@@ -675,12 +679,12 @@ auto CoordinatorInstance::SetReplicationInstanceToMain(std::string_view new_main
       ranges::to<ReplicationClientsInfo>();
 
   if (!new_main_connector->SendRpc<PromoteToMainRpc>(new_main_uuid, std::move(repl_clients_info))) {
-    spdlog::warn(
+    memgraph::logging::Warn(
         "Failed to promote instance {} to main. The change is however peristed in Raft so promotion will be tried "
         "again in the reconciliation loop. No need for you to retry the operation.",
         new_main_name);
   } else {
-    spdlog::info("Successfully promoted instance {} to main", new_main_name);
+    memgraph::logging::Info("Successfully promoted instance {} to main", new_main_name);
   }
 
   return SetInstanceToMainCoordinatorStatus::SUCCESS;
@@ -722,17 +726,17 @@ auto CoordinatorInstance::DemoteInstanceToReplica(std::string_view instance_name
   CoordinatorClusterStateDelta const delta_state{.data_instances_ = std::move(data_instances_cache)};
 
   if (!raft_state_->AppendLogAndWaitForCommit(delta_state)) {
-    spdlog::error("Aborting demoting instance. Writing to Raft failed.");
+    memgraph::logging::Error("Aborting demoting instance. Writing to Raft failed.");
     return DemoteInstanceCoordinatorStatus::RAFT_LOG_ERROR;
   }
 
   if (!repl_instance->SendRpc<DemoteMainToReplicaRpc>(data_instance->config.replication_client_info)) {
-    spdlog::warn(
+    memgraph::logging::Warn(
         "Failed to demote instance {} to replica. Operation still persisted in Raft, demotion will be tried in the "
         "reconciliation loop again",
         instance_name);
   } else {
-    spdlog::info("Successfully demoted instance {} to replica.", instance_name);
+    memgraph::logging::Info("Successfully demoted instance {} to replica.", instance_name);
   }
 
   return DemoteInstanceCoordinatorStatus::SUCCESS;
@@ -797,7 +801,7 @@ auto CoordinatorInstance::RegisterReplicationInstance(DataInstanceConfig const &
   CoordinatorClusterStateDelta const delta_state{.data_instances_ = std::move(data_instances)};
 
   if (!raft_state_->AppendLogAndWaitForCommit(delta_state)) {
-    spdlog::error("Aborting instance registration. Writing to Raft failed.");
+    memgraph::logging::Error("Aborting instance registration. Writing to Raft failed.");
     return RegisterInstanceCoordinatorStatus::RAFT_LOG_ERROR;
   }
 
@@ -808,12 +812,12 @@ auto CoordinatorInstance::RegisterReplicationInstance(DataInstanceConfig const &
   // From the user's perspective, as soon as the log is committed to Raft logs, the in-memory state will eventually
   // become correct. Best effort here.
   if (!new_instance->SendRpc<DemoteMainToReplicaRpc>(config.replication_client_info, curr_main_uuid)) {
-    spdlog::warn(
+    memgraph::logging::Warn(
         "Failed to demote instance {} to replica. The operation is still persisted in Raft logs. Sending RPC will be "
         "retried in the next iteration of the reconciliation loop.",
         config.instance_name);
   } else {
-    spdlog::trace("Successfully demoted instance {} to replica.", config.instance_name);
+    memgraph::logging::Trace("Successfully demoted instance {} to replica.", config.instance_name);
   }
 
   if (auto const main_name = raft_state_->TryGetCurrentMainName(); main_name.has_value()) {
@@ -823,7 +827,7 @@ auto CoordinatorInstance::RegisterReplicationInstance(DataInstanceConfig const &
 
     if (auto const &current_main = maybe_current_main->get();
         !current_main.SendRpc<RegisterReplicaOnMainRpc>(curr_main_uuid, config.replication_client_info)) {
-      spdlog::warn(
+      memgraph::logging::Warn(
           "Failed to register instance {} on the current main instance {}. The operation is still persisted in Raft "
           "logs and will be retried in the next iteration of the reconciliation loop.",
           config.instance_name,
@@ -833,7 +837,7 @@ auto CoordinatorInstance::RegisterReplicationInstance(DataInstanceConfig const &
 
   new_instance->StartStateCheck();
 
-  spdlog::info("Instance {} registered", config.instance_name);
+  memgraph::logging::Info("Instance {} registered", config.instance_name);
   return RegisterInstanceCoordinatorStatus::SUCCESS;
 }
 
@@ -890,12 +894,12 @@ auto CoordinatorInstance::UnregisterReplicationInstance(std::string_view instanc
     // Even if RPC fails, this is still a success from user's perspective because we will retry this operation in the
     // reconciliation loop. Best effort RPC handling
     if (!curr_main->SendRpc<UnregisterReplicaRpc>(instance_name)) {
-      spdlog::warn(
+      memgraph::logging::Warn(
           "Failed to unregister replica {} from the current main. The operation is still persisted in Raft log and RPC "
           "will be sent again automatically in the next iteration of the reconciliation loop",
           instance_name);
     } else {
-      spdlog::info("Replica {} successfully unregistered from the current main.", instance_name);
+      memgraph::logging::Info("Replica {} successfully unregistered from the current main.", instance_name);
     }
   }
 
@@ -936,7 +940,7 @@ auto CoordinatorInstance::RemoveCoordinatorInstance(int coordinator_id) const ->
   });
 
   if (num_removed == 1) {
-    spdlog::trace("Removed coordinator {} from local coordinator instance.", coordinator_id);
+    memgraph::logging::Trace("Removed coordinator {} from local coordinator instance.", coordinator_id);
   } else {
     LOG_FATAL(
         "Couldn't find coordinator {} in local application logs, there was a mistake when starting cluster. Please "
@@ -972,7 +976,7 @@ auto CoordinatorInstance::AddCoordinatorInstance(CoordinatorInstanceConfig const
         [&bolt_server_to_add](auto const &coord) { return coord.bolt_server == bolt_server_to_add; });
 
     if (existing_coord != coordinator_instances_context.end()) {
-      spdlog::warn(
+      memgraph::logging::Warn(
           "You are trying to set-up a coordinator with the same bolt server as on coordinator {}. That is a valid "
           "option but please double-check that's what you really want. The coordinator will be added so if you want "
           "to undo this action, use 'REMOVE "
@@ -1056,11 +1060,12 @@ auto CoordinatorInstance::AddSelfCoordinator(
   // I am adding myself
   auto const my_aux = raft_state_->GetMyCoordinatorInstanceAux();
   if (config.coordinator_server.SocketAddress() != my_aux.coordinator_server) {
-    spdlog::error("Failed to add server since NuRaft server has been started with different network configuration!");
+    memgraph::logging::Error(
+        "Failed to add server since NuRaft server has been started with different network configuration!");
     return AddCoordinatorInstanceStatus::DIFF_NETWORK_CONFIG;
   }
   if (config.management_server.SocketAddress() != my_aux.management_server) {
-    spdlog::error(
+    memgraph::logging::Error(
         "Failed to add server since management server has been started with different network configuration!");
     return AddCoordinatorInstanceStatus::DIFF_NETWORK_CONFIG;
   }
@@ -1070,7 +1075,7 @@ auto CoordinatorInstance::AddSelfCoordinator(
 
   // Not a fatal failure when adding myself
   if (!raft_state_->AppendLogAndWaitForCommit(delta_state)) {
-    spdlog::error(
+    memgraph::logging::Error(
         "Couldn't append application log when adding coordinator {} to the cluster. Please retry the operation.",
         config.coordinator_id);
     return AddCoordinatorInstanceStatus::RAFT_LOG_ERROR;
@@ -1111,12 +1116,13 @@ auto CoordinatorInstance::SetCoordinatorSetting(std::string_view const setting_n
       delta_state.instance_health_check_frequency_sec_ = utils::ParseStringToUint32(setting_value);
     }
   } catch (std::exception const &e) {
-    spdlog::error("Error occurred while trying to update {} to {}. Error: {}", setting_name, setting_value, e.what());
+    memgraph::logging::Error(
+        "Error occurred while trying to update {} to {}. Error: {}", setting_name, setting_value, e.what());
     return SetCoordinatorSettingStatus::INVALID_ARGUMENT;
   }
 
   if (!raft_state_->AppendLogAndWaitForCommit(delta_state)) {
-    spdlog::error("Aborting the update of coordinator setting {}. Writing to Raft failed.", setting_name);
+    memgraph::logging::Error("Aborting the update of coordinator setting {}. Writing to Raft failed.", setting_name);
     return SetCoordinatorSettingStatus::RAFT_LOG_ERROR;
   }
 
@@ -1142,20 +1148,21 @@ void CoordinatorInstance::InstanceSuccessCallback(std::string_view instance_name
   utils::MetricsTimer const timer{metrics::InstanceSuccCallback_us};
 
   if (status.load(std::memory_order_acquire) != CoordinatorStatus::LEADER_READY) {
-    spdlog::trace("Leader is not ready, not executing instance success callback.");
+    memgraph::logging::Trace("Leader is not ready, not executing instance success callback.");
     return;
   }
 
   auto lock = std::unique_lock{coord_instance_lock_, std::defer_lock};
   if (!lock.try_lock_for(500ms)) {
-    spdlog::trace("Failed to acquire lock in InstanceSuccessCallback in 500ms");
+    memgraph::logging::Trace("Failed to acquire lock in InstanceSuccessCallback in 500ms");
     return;
   }
   auto maybe_instance = FindReplicationInstance(instance_name, repl_instances_);
   MG_ASSERT(maybe_instance.has_value(), "Couldn't find instance {} in local storage.", instance_name);
   auto const &instance = maybe_instance->get();
 
-  spdlog::trace("Instance {} performing success callback in thread {}.", instance_name, std::this_thread::get_id());
+  memgraph::logging::Trace(
+      "Instance {} performing success callback in thread {}.", instance_name, std::this_thread::get_id());
 
   instance.OnSuccessPing();
 
@@ -1184,11 +1191,11 @@ void CoordinatorInstance::InstanceSuccessCallback(std::string_view instance_name
 
           if (instance.SendRpc<RegisterReplicaOnMainRpc>(curr_main_uuid,
                                                          replica_inmem_instance->get().GetReplicationClientInfo())) {
-            spdlog::trace("Replica {} successfully registered on the current main {}",
-                          replica_inmem_instance->get().InstanceName(),
-                          instance_name);
+            memgraph::logging::Trace("Replica {} successfully registered on the current main {}",
+                                     replica_inmem_instance->get().InstanceName(),
+                                     instance_name);
           } else {
-            spdlog::warn(
+            memgraph::logging::Warn(
                 "Failed to register replica {} on the current main {}. The operation will be retried in the next "
                 "iteration of the reconciliation loop.",
                 replica_inmem_instance->get().InstanceName(),
@@ -1225,19 +1232,19 @@ void CoordinatorInstance::InstanceSuccessCallback(std::string_view instance_name
           ranges::to<ReplicationClientsInfo>();
 
       if (!instance.SendRpc<PromoteToMainRpc>(curr_main_uuid, std::move(repl_clients_info))) {
-        spdlog::error("Failed to promote instance to main with new uuid {}. Trying to do failover again.",
-                      std::string{curr_main_uuid});
+        memgraph::logging::Error("Failed to promote instance to main with new uuid {}. Trying to do failover again.",
+                                 std::string{curr_main_uuid});
         switch (TryFailover()) {
           case FailoverStatus::SUCCESS: {
-            spdlog::trace("Failover successful after failing to promote main instance.");
+            memgraph::logging::Trace("Failover successful after failing to promote main instance.");
             break;
           };
           case FailoverStatus::NO_INSTANCE_ALIVE: {
-            spdlog::trace("Failover failed because no instance is alive.");
+            memgraph::logging::Trace("Failover failed because no instance is alive.");
             break;
           };
           case FailoverStatus::RAFT_FAILURE: {
-            spdlog::trace("Writing to Raft failed during failover.");
+            memgraph::logging::Trace("Writing to Raft failed during failover.");
             break;
           };
         };
@@ -1259,7 +1266,7 @@ void CoordinatorInstance::InstanceSuccessCallback(std::string_view instance_name
 
       if (!instance.SendRpc<DemoteMainToReplicaRpc>(instance_raft_cache->config.replication_client_info,
                                                     curr_main_uuid)) {
-        spdlog::warn(
+        memgraph::logging::Warn(
             "Couldn't demote instance {} to replica. The operation will be retried in the next iteration of the "
             "reconciliation loop.",
             instance_name);
@@ -1269,13 +1276,13 @@ void CoordinatorInstance::InstanceSuccessCallback(std::string_view instance_name
 
     if (!instance_state.inner_state.uuid || *instance_state.inner_state.uuid != curr_main_uuid) {
       if (!instance.SendSwapAndUpdateUUID(curr_main_uuid)) {
-        spdlog::warn(
+        memgraph::logging::Warn(
             "Failed to set new uuid for replica instance {} to {}. The operation will be retried in the next iteration "
             "of the reconciliation loop.",
             instance_name,
             std::string{curr_main_uuid});
       } else {
-        spdlog::trace("Set UUID on instance {} to {}", instance_name, std::string{curr_main_uuid});
+        memgraph::logging::Trace("Set UUID on instance {} to {}", instance_name, std::string{curr_main_uuid});
       }
     }
   }
@@ -1283,7 +1290,7 @@ void CoordinatorInstance::InstanceSuccessCallback(std::string_view instance_name
   if (auto const deltas_batch_progress_size = raft_state_->GetDeltasBatchProgressSize();
       deltas_batch_progress_size != instance_state.deltas_batch_progress_size) {
     if (!instance.SendRpc<UpdateDataInstanceConfigRpc>(deltas_batch_progress_size)) {
-      spdlog::warn(
+      memgraph::logging::Warn(
           "Couldn't update deltas_batch_progress_size on data instance {}. The operation will be retried in the next "
           "iteration of the reconciliation loop.",
           instance_name);
@@ -1296,41 +1303,42 @@ void CoordinatorInstance::InstanceFailCallback(std::string_view instance_name) {
   utils::MetricsTimer const timer{metrics::InstanceFailCallback_us};
 
   if (status.load(std::memory_order_acquire) != CoordinatorStatus::LEADER_READY) {
-    spdlog::trace("Leader is not ready, not executing instance fail callback.");
+    memgraph::logging::Trace("Leader is not ready, not executing instance fail callback.");
     return;
   }
 
   auto lock = std::unique_lock{coord_instance_lock_, std::defer_lock};
   if (!lock.try_lock_for(500ms)) {
-    spdlog::trace("Failed to acquire lock in InstanceFailCallback in 500ms");
+    memgraph::logging::Trace("Failed to acquire lock in InstanceFailCallback in 500ms");
     return;
   }
   auto const maybe_instance = FindReplicationInstance(instance_name, repl_instances_);
   MG_ASSERT(maybe_instance.has_value(), "Couldn't find instance {} in local storage.", instance_name);
   auto const &instance = maybe_instance->get();
 
-  spdlog::trace("Instance {} performing fail callback in thread {}.", instance_name, std::this_thread::get_id());
+  memgraph::logging::Trace(
+      "Instance {} performing fail callback in thread {}.", instance_name, std::this_thread::get_id());
   instance.OnFailPing();
 
   if (raft_state_->IsCurrentMain(instance_name) && !instance.IsAlive()) {
-    spdlog::trace("Cluster without main instance, trying failover.");
+    memgraph::logging::Trace("Cluster without main instance, trying failover.");
     switch (TryFailover()) {
       case FailoverStatus::SUCCESS: {
-        spdlog::trace("Failover successful in the InstanceFailCallback");
+        memgraph::logging::Trace("Failover successful in the InstanceFailCallback");
         break;
       };
       case FailoverStatus::NO_INSTANCE_ALIVE: {
-        spdlog::trace("Failover failed because no instance is alive.");
+        memgraph::logging::Trace("Failover failed because no instance is alive.");
         break;
       };
       case FailoverStatus::RAFT_FAILURE: {
-        spdlog::trace("Writing to Raft failed during failover.");
+        memgraph::logging::Trace("Writing to Raft failed during failover.");
         break;
       };
     };
   }
 
-  spdlog::trace("Instance {} finished fail callback.", instance_name);
+  memgraph::logging::Trace("Instance {} finished fail callback.", instance_name);
 }
 
 auto CoordinatorInstance::ChooseMostUpToDateInstance(
@@ -1344,11 +1352,12 @@ auto CoordinatorInstance::ChooseMostUpToDateInstance(
   });
 
   if (largest_sys_ts_instance == instances_info.end()) [[unlikely]] {
-    spdlog::error("Couldn't retrieve history for any instance. Failover won't be performed.");
+    memgraph::logging::Error("Couldn't retrieve history for any instance. Failover won't be performed.");
     return std::nullopt;
   }
 
-  spdlog::trace("The instance with the newest system committed timestamp is {}", largest_sys_ts_instance->first);
+  memgraph::logging::Trace("The instance with the newest system committed timestamp is {}",
+                           largest_sys_ts_instance->first);
 
   // db_uuid -> vector<std::pair<instance_name, num_committed_txn>>
   std::map<std::string, std::vector<std::pair<std::string, uint64_t>>> dbs_info;
@@ -1411,15 +1420,16 @@ auto CoordinatorInstance::ChooseMostUpToDateInstance(
 
   // Process each DB
   for (auto const &[db_uuid, db_info] : dbs_info) {
-    spdlog::trace("Trying to find newest instance for db with uuid {}", db_uuid);
+    memgraph::logging::Trace("Trying to find newest instance for db with uuid {}", db_uuid);
     if (auto const [newest_db_instances, curr_num_committed_txns] = find_newest_instances_for_db(db_info);
         newest_db_instances.empty()) {
-      spdlog::error("Couldn't find newest instance for db with uuid {}", db_uuid);
+      memgraph::logging::Error("Couldn't find newest instance for db with uuid {}", db_uuid);
     } else {
-      spdlog::info("The latest durable timestamp is {} for db with uuid {}. The following instances have it {}",
-                   curr_num_committed_txns,
-                   db_uuid,
-                   utils::JoinVector(newest_db_instances, ", "));
+      memgraph::logging::Info(
+          "The latest durable timestamp is {} for db with uuid {}. The following instances have it {}",
+          curr_num_committed_txns,
+          db_uuid,
+          utils::JoinVector(newest_db_instances, ", "));
       update_instances_counter(newest_db_instances);
     }
   }
@@ -1431,20 +1441,21 @@ auto CoordinatorInstance::ChooseMostUpToDateInstance(
       newest_instance.emplace(instance_name, cnt_newest_dbs);
     } else if (newest_instance->second == cnt_newest_dbs) {
       // Instances are the best over the same number of instances, let the sum of timestamps decide
-      spdlog::info("Instances {} and {} are most up to date on the same number of instances.",
-                   instance_name,
-                   newest_instance->first);
+      memgraph::logging::Info("Instances {} and {} are most up to date on the same number of instances.",
+                              instance_name,
+                              newest_instance->first);
       if (total_instances_sum[instance_name] > total_instances_sum[newest_instance->first]) {
-        spdlog::info("Instance {} has the total sum of num_committed_txns larger than {}. It will be considered newer.",
-                     instance_name,
-                     newest_instance->first);
+        memgraph::logging::Info(
+            "Instance {} has the total sum of num_committed_txns larger than {}. It will be considered newer.",
+            instance_name,
+            newest_instance->first);
         newest_instance.emplace(instance_name, cnt_newest_dbs);
       }
     }
   }
 
   if (newest_instance) {
-    spdlog::info("The newest instance is {}", newest_instance->first);
+    memgraph::logging::Info("The newest instance is {}", newest_instance->first);
     return newest_instance->first;
   }
   return std::nullopt;
@@ -1477,14 +1488,14 @@ auto CoordinatorInstance::GetRoutingTableAsFollower(auto const leader_id, std::s
   }
 
   if (leader == nullptr) {
-    spdlog::trace(
+    memgraph::logging::Trace(
         "Connection to leader was not found when routing table was requested. Returning empty routing table.");
     return RoutingTable{};
   }
 
   auto res = leader->SendRpc<GetRoutingTableRpc>(std::string{db_name});
   if (res.empty()) {
-    spdlog::trace("Couldn't get routing table from leader {}. Returning empty routing table.", leader_id);
+    memgraph::logging::Trace("Couldn't get routing table from leader {}. Returning empty routing table.", leader_id);
   }
   return res;
 }
@@ -1527,8 +1538,8 @@ auto CoordinatorInstance::GetInstanceForFailover() const -> std::optional<std::s
     }();
 
     if (skip_instance) {
-      spdlog::info("Skipping instance {} for a failover since was registered as async replica",
-                   instance.InstanceName());
+      memgraph::logging::Info("Skipping instance {} for a failover since was registered as async replica",
+                              instance.InstanceName());
       continue;
     }
 
@@ -1541,12 +1552,12 @@ auto CoordinatorInstance::GetInstanceForFailover() const -> std::optional<std::s
         // If database got deleted on main but that change still isn't replicated, we cannot conclude that replica is
         // too far behind using such a condition
         if (main_db_info == main_num_txns_cache_.end()) {
-          spdlog::trace("No entry for db: {}", db_uuid);
+          memgraph::logging::Trace("No entry for db: {}", db_uuid);
           continue;
         }
 
         if (main_db_info->second > num_committed_txns && main_db_info->second - num_committed_txns > max_allowed_lag) {
-          spdlog::info(
+          memgraph::logging::Info(
               "Instance {} won't be used in a failover because it's too much behind the current main. Main has "
               "committed "
               "{} txns, while instance {} has committed {} txns for the database {}",
@@ -1561,7 +1572,7 @@ auto CoordinatorInstance::GetInstanceForFailover() const -> std::optional<std::s
       }
 
       if (replica_behind) {
-        spdlog::info(
+        memgraph::logging::Info(
             "Skipping instance {} for a failover because one of its databases is too much behind the main's "
             "database. "
             "The current max replica lag is set to {}",
@@ -1572,7 +1583,7 @@ auto CoordinatorInstance::GetInstanceForFailover() const -> std::optional<std::s
 
       instances_info.emplace(instance_name, std::move(instance_info));
     } else {
-      spdlog::error("Couldn't retrieve failover info for the instance {}", instance_name);
+      memgraph::logging::Error("Couldn't retrieve failover info for the instance {}", instance_name);
     }
   }
 
@@ -1626,7 +1637,7 @@ auto CoordinatorInstance::ShowReplicationLagAsLeader() const
     replicas_res.emplace(instance_name, std::move(main_data));
     return replicas_res;
   }
-  spdlog::error("No instance is annotated as main in Raft logs");
+  memgraph::logging::Error("No instance is annotated as main in Raft logs");
   return {};
 }
 
@@ -1666,7 +1677,7 @@ auto CoordinatorInstance::UpdateConfig(UpdateInstanceConfig const &config) -> Up
                                [&new_bolt_server](auto const &coord) { return coord.bolt_server == new_bolt_server; });
 
       if (existing_coord != coordinator_instances_context.end()) {
-        spdlog::warn(
+        memgraph::logging::Warn(
             "You are trying to set-up a coordinator with the same bolt server as on coordinator {}. That is a valid "
             "option but please double-check that's what you really want.",
             existing_coord->id);
@@ -1686,7 +1697,8 @@ auto CoordinatorInstance::UpdateConfig(UpdateInstanceConfig const &config) -> Up
 
     // If we managed to add it to the NuRaft configuration but not to our app logs.
     if (!raft_state_->AppendLogAndWaitForCommit(delta_state)) {
-      spdlog::error("Couldn't append application log when updating the config for the coordinator {}.", coord_id);
+      memgraph::logging::Error("Couldn't append application log when updating the config for the coordinator {}.",
+                               coord_id);
       return UpdateConfigStatus::RAFT_FAILURE;
     }
 
@@ -1700,7 +1712,7 @@ auto CoordinatorInstance::UpdateConfig(UpdateInstanceConfig const &config) -> Up
           [&config](auto const &repl_instance) { return repl_instance.config.bolt_server == config.bolt_endpoint; });
 
       if (existing_repl_instance != data_instances_context.end()) {
-        spdlog::warn(
+        memgraph::logging::Warn(
             "You are trying to set-up a repl instance with the same bolt server as on repl instance {}. That is a "
             "valid "
             "option but please double-check that's what you really want.",
@@ -1722,8 +1734,8 @@ auto CoordinatorInstance::UpdateConfig(UpdateInstanceConfig const &config) -> Up
 
     // If we managed to add it to the NuRaft configuration but not to our app logs.
     if (!raft_state_->AppendLogAndWaitForCommit(delta_state)) {
-      spdlog::error("Couldn't append application log when updating the config for the repl instance {}.",
-                    instance_name);
+      memgraph::logging::Error("Couldn't append application log when updating the config for the repl instance {}.",
+                               instance_name);
       return UpdateConfigStatus::RAFT_FAILURE;
     }
   }

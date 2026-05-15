@@ -15,6 +15,7 @@
 #include "coordination/coordinator_state_manager.hpp"
 #include "io/network/endpoint.hpp"
 #include "kvstore/kvstore.hpp"
+#include "logging/nuraft_logger.hpp"
 #include "utils/uuid.hpp"
 
 #include <gflags/gflags.h>

@@ -11,6 +11,7 @@
 
 #include <optional>
 #include <variant>
+#include "logging/log.hpp"
 
 #include "flags/coord_flag_env_handler.hpp"
 #include "replication/replication_client.hpp"
@@ -42,14 +43,15 @@ ReplicationState::ReplicationState(std::optional<std::filesystem::path> durabili
   repl_dir /= kReplicationDirectory;
   utils::EnsureDirOrDie(repl_dir);
   durability_ = std::make_unique<kvstore::KVStore>(std::move(repl_dir));
-  spdlog::info("Replication configuration will be stored and will be automatically restored in case of a crash.");
+  memgraph::logging::Info(
+      "Replication configuration will be stored and will be automatically restored in case of a crash.");
 
   auto fetched_replication_data = FetchReplicationData();
   if (!fetched_replication_data) {
     switch (fetched_replication_data.error()) {
       using enum ReplicationState::FetchReplicationError;
       case NOTHING_FETCHED: {
-        spdlog::warn("Cannot find data needed for restore replication role in persisted metadata.");
+        memgraph::logging::Warn("Cannot find data needed for restore replication role in persisted metadata.");
         replication_data_.data_ = RoleMainData{};
         return;
       }
@@ -59,7 +61,7 @@ ReplicationState::ReplicationState(std::optional<std::filesystem::path> durabili
       }
       case REPL_SERVER_FAILURE: {
         if (part_of_ha_cluster) {
-          spdlog::warn(
+          memgraph::logging::Warn(
               "Couldn't initialize replication server on replica. Defaulting role to non-writeable main. Coordinators "
               "will automatically demote the instance to become replica.");
           replication_data_.data_ = RoleMainData{};
@@ -78,15 +80,16 @@ ReplicationState::ReplicationState(std::optional<std::filesystem::path> durabili
   if (flags::CoordinationSetupInstance().IsDataInstanceManagedByCoordinator() &&
       std::holds_alternative<RoleReplicaData>(replication_data.data_)) {
     std::get<RoleReplicaData>(replication_data.data_).uuid_ = utils::UUID{};
-    spdlog::trace("Replica's replication uuid for replica has been reset");
+    memgraph::logging::Trace("Replica's replication uuid for replica has been reset");
   }
 #endif
   if (std::holds_alternative<RoleReplicaData>(replication_data.data_)) {
     auto const &replica_uuid = std::get<RoleReplicaData>(replication_data.data_).uuid_;
     auto const uuid = std::string(replica_uuid);
-    spdlog::trace("Recovered main's uuid for replica {}", uuid);
+    memgraph::logging::Trace("Recovered main's uuid for replica {}", uuid);
   } else {
-    spdlog::trace("Recovered uuid for main {}", std::string(std::get<RoleMainData>(replication_data.data_).uuid_));
+    memgraph::logging::Trace("Recovered uuid for main {}",
+                             std::string(std::get<RoleMainData>(replication_data.data_).uuid_));
   }
 
   replication_data_ = std::move(replication_data);
@@ -100,7 +103,7 @@ bool ReplicationState::TryPersistRoleReplica(const ReplicationServerConfig &conf
                                        .deltas_batch_progress_size = replication_data_.deltas_batch_progress_size_};
 
   if (!durability_->Put(durability::kReplicationRoleName, nlohmann::json(data).dump())) {
-    spdlog::error("Error when saving REPLICA replication role in settings.");
+    memgraph::logging::Error("Error when saving REPLICA replication role in settings.");
     return false;
   }
   role_persisted_.store(RolePersisted::YES, std::memory_order_release);
@@ -127,7 +130,7 @@ bool ReplicationState::TryPersistRoleMain(utils::UUID main_uuid) {
     role_persisted_.store(RolePersisted::YES, std::memory_order_release);
     return true;
   }
-  spdlog::error("Error when saving MAIN replication role in settings.");
+  memgraph::logging::Error("Error when saving MAIN replication role in settings.");
   return false;
 }
 
@@ -137,7 +140,7 @@ bool ReplicationState::TryPersistUnregisterReplica(std::string_view name) {
   auto key = BuildReplicaKey(name);
 
   if (durability_->Delete(key)) return true;
-  spdlog::error("Error when removing replica {} from settings.", name);
+  memgraph::logging::Error("Error when removing replica {} from settings.", name);
   return false;
 }
 
@@ -198,7 +201,7 @@ auto ReplicationState::FetchReplicationData() -> FetchReplicationResult_t {
                 // Creating Epoll object could throw an exception
                 server = std::make_unique<ReplicationServer>(r.config);
               } catch (utils::BasicException const &e) {
-                spdlog::warn(e.what());
+                memgraph::logging::Warn(e.what());
                 return std::unexpected{FetchReplicationError::REPL_SERVER_FAILURE};
               }
               return {RoleReplicaData{.config = r.config, .server = std::move(server), .uuid_ = r.main_uuid}};
@@ -310,7 +313,7 @@ bool ReplicationState::TryPersistRegisteredReplica(const ReplicationClientConfig
 
   auto key = BuildReplicaKey(config.name);
   if (durability_->Put(key, nlohmann::json(data).dump())) return true;
-  spdlog::error("Error when saving replica {} in settings.", config.name);
+  memgraph::logging::Error("Error when saving replica {} in settings.", config.name);
   return false;
 }
 
@@ -342,7 +345,7 @@ bool ReplicationState::SetReplicationRoleReplica(const ReplicationServerConfig &
   try {
     new_repl_server = std::make_unique<ReplicationServer>(config);
   } catch (utils::BasicException const &e) {
-    spdlog::warn(e.what());
+    memgraph::logging::Warn(e.what());
     return false;
   }
 

@@ -11,6 +11,7 @@
 
 module;
 
+#include "logging/log.hpp"
 #include "requests/requests.hpp"
 #include "utils/memory.hpp"
 #include "utils/on_scope_exit.hpp"
@@ -354,7 +355,7 @@ std::optional<Reader::Row> Reader::impl::GetNextRow(utils::MemoryResource *mem) 
     }
     // try to parse as many times as necessary to reach a valid row
     do {
-      spdlog::debug("CSV Reader: Bad row at line {:d}: {}", line_count_ - 1, row.error().message);
+      memgraph::logging::Debug("CSV Reader: Bad row at line {:d}: {}", line_count_ - 1, row.error().message);
       if (!csv_stream_.good()) {
         return std::nullopt;
       }

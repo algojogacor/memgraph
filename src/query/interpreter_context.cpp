@@ -11,6 +11,7 @@
 
 #include <memory>
 #include <utility>
+#include "logging/log.hpp"
 
 #include "query/interpreter_context.hpp"
 
@@ -101,9 +102,9 @@ std::vector<std::vector<TypedValue>> InterpreterContext::TerminateTransactions(
       if (same_user(interpreter->user_or_role_, user_or_role) ||
           privilege_checker(user_or_role, get_interpreter_db_name())) {
         killed = true;  // Note: this is used by the above `clean_status` (OnScopeExit)
-        spdlog::warn("Transaction {} successfully killed", transaction_id);
+        memgraph::logging::Warn("Transaction {} successfully killed", transaction_id);
       } else {
-        spdlog::warn("Not enough rights to kill the transaction");
+        memgraph::logging::Warn("Not enough rights to kill the transaction");
       }
     }
   }
@@ -111,7 +112,7 @@ std::vector<std::vector<TypedValue>> InterpreterContext::TerminateTransactions(
   std::vector<std::vector<TypedValue>> results;
   for (auto it = maybe_kill_transaction_ids.begin(); it != not_found_midpoint; ++it) {
     results.push_back({TypedValue(std::to_string(*it)), TypedValue(false)});
-    spdlog::warn("Transaction {} not found", *it);
+    memgraph::logging::Warn("Transaction {} not found", *it);
   }
   for (auto it = not_found_midpoint; it != maybe_kill_transaction_ids.end(); ++it) {
     results.push_back({TypedValue(std::to_string(*it)), TypedValue(true)});

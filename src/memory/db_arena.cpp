@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "db_arena.hpp"
+#include "logging/log.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -149,7 +150,7 @@ namespace {
 template <typename... Args>
 void SafeLog(fmt::format_string<Args...> fmt, Args &&...args) noexcept {
   try {
-    spdlog::error(fmt, std::forward<Args>(args)...);
+    memgraph::logging::Error(fmt, std::forward<Args>(args)...);
   } catch (...) {
     (void)0;  // clang-tidy
   }
@@ -168,7 +169,7 @@ bool InstallDbArenaHooks(unsigned arena_idx, DbArenaHooks &hooks, std::string_vi
   size_t hooks_sz = sizeof(extent_hooks_t *);
   int err = je_mallctl(hooks_key.c_str(), static_cast<void *>(&base_hooks), &hooks_sz, nullptr, 0);
   if (err != 0 || base_hooks == nullptr) {
-    spdlog::error("Failed to read default hooks for {} arena {} (err={})", error_context, arena_idx, err);
+    memgraph::logging::Error("Failed to read default hooks for {} arena {} (err={})", error_context, arena_idx, err);
     return false;
   }
 
@@ -182,7 +183,7 @@ bool InstallDbArenaHooks(unsigned arena_idx, DbArenaHooks &hooks, std::string_vi
                    static_cast<void *>(const_cast<extent_hooks_t **>(&new_hooks)),
                    sizeof(extent_hooks_t *));
   if (err != 0) {
-    spdlog::error("Failed to install custom hooks on {} arena {} (err={})", error_context, arena_idx, err);
+    memgraph::logging::Error("Failed to install custom hooks on {} arena {} (err={})", error_context, arena_idx, err);
     return false;
   }
 
@@ -289,7 +290,7 @@ ArenaPool::~ArenaPool() noexcept {
       // Purge all dirty/muzzy pages back to the OS FIRST, while our custom hooks are
       // still installed.
       if (int perr = je_mallctl((arena_key + ".purge").c_str(), nullptr, nullptr, nullptr, 0); perr != 0) {
-        spdlog::error(
+        memgraph::logging::Error(
             "ArenaPool {}: purge failed (err={}); MemoryTracker may drift before hook restore", arena_idx, perr);
       }
 
@@ -301,9 +302,10 @@ ArenaPool::~ArenaPool() noexcept {
                            static_cast<void *>(const_cast<extent_hooks_t **>(&base)),
                            sizeof(extent_hooks_t *));
       if (err != 0) {
-        spdlog::error(
+        memgraph::logging::Error(
             "ArenaPool {}: failed to restore default hooks (err={}); hooks_ may outlive arena", arena_idx, err);
-        spdlog::error("ArenaPool {}: leaking arena from GlobalArenaPool reuse after failed hook restore", arena_idx);
+        memgraph::logging::Error("ArenaPool {}: leaking arena from GlobalArenaPool reuse after failed hook restore",
+                                 arena_idx);
         continue;
       }
 
@@ -347,7 +349,7 @@ unsigned ArenaPool::Acquire() {
     }
     new_idx = GlobalArenaPool::Instance().Acquire();
   } catch (...) {
-    spdlog::trace("Failed to acquire arena from the global pool. Fallback to first arena...");
+    memgraph::logging::Trace("Failed to acquire arena from the global pool. Fallback to first arena...");
     ++first_arena_use_count_;
     return first_arena_idx_;
   }
@@ -355,7 +357,7 @@ unsigned ArenaPool::Acquire() {
   // 4. Install hooks with RAII protection
   PendingArena pending(new_idx);
   if (!InstallDbArenaHooks(new_idx, hooks_, "per-thread")) {
-    spdlog::trace("Failed to install hooks on arena. Fallback to first arena...");
+    memgraph::logging::Trace("Failed to install hooks on arena. Fallback to first arena...");
     ++first_arena_use_count_;
     return first_arena_idx_;  // pending dtor releases new_idx
   }

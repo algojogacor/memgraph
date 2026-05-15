@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "coordination/coordinator_instance_management_server.hpp"
+#include "logging/log.hpp"
 
 #ifdef MG_ENTERPRISE
 namespace memgraph::coordination {
@@ -28,7 +29,7 @@ CoordinatorInstanceManagementServer::CoordinatorInstanceManagementServer(const M
 CoordinatorInstanceManagementServer::~CoordinatorInstanceManagementServer() {
   if (rpc_server_.Shutdown()) {
     try {
-      spdlog::trace("Closing CoordinatorInstanceManagementServer");
+      memgraph::logging::Trace("Closing CoordinatorInstanceManagementServer");
       // NOLINTNEXTLINE(bugprone-empty-catch)
     } catch (std::exception const &e) {
     }

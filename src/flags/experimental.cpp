@@ -32,6 +32,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include "logging/log.hpp"
 
 #include "flags/experimental.hpp"
 #include "utils/flag_validation.hpp"
@@ -89,7 +90,7 @@ auto ReadExperimental(std::string const &flags_experimental) -> Experiments {
 
   for (auto &&experiment : flags_experimental | rv::split(',') | rv::transform(canonicalize_string)) {
     if (auto it = mapping.find(experiment); it != mapping_end) {
-      spdlog::info(fmt::format("Experimental feature {} is enabled.", it->first));
+      memgraph::logging::Info(fmt::format("Experimental feature {} is enabled.", it->first));
       to_set |= std::to_underlying(it->second);
     }
   }

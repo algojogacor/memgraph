@@ -1,4 +1,4 @@
-// Copyright 2025 Memgraph Ltd.
+// Copyright 2026 Memgraph Ltd.
 //
 // Use of this software is governed by the Business Source License
 // included in the file licenses/BSL.txt; by using this file, you agree to be bound by the terms of the Business Source
@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 #pragma once
 
+#include "logging/log.hpp"
 #include "rpc/client.hpp"
 #include "utils/event_counter.hpp"
 #include "utils/uuid.hpp"
@@ -28,14 +29,14 @@ namespace memgraph::replication_coordination_glue {
 inline bool SendSwapMainUUIDRpc(rpc::Client &rpc_client_, const utils::UUID &uuid) {
   try {
     if (auto stream{rpc_client_.Stream<SwapMainUUIDRpc>(uuid)}; !stream.SendAndWait().success) {
-      spdlog::error("Received unsuccessful response to SwapMainUUIDReq");
+      memgraph::logging::Error("Received unsuccessful response to SwapMainUUIDReq");
       metrics::IncrementCounter(metrics::SwapMainUUIDRpcFail);
       return false;
     }
     metrics::IncrementCounter(metrics::SwapMainUUIDRpcSuccess);
     return true;
   } catch (const rpc::RpcFailedException &e) {
-    spdlog::error("Failed to receive response to SwapMainUUIDReq. Error occurred: {}", e.what());
+    memgraph::logging::Error("Failed to receive response to SwapMainUUIDReq. Error occurred: {}", e.what());
     metrics::IncrementCounter(metrics::SwapMainUUIDRpcFail);
   }
   return false;

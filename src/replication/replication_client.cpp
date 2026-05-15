@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "replication/replication_client.hpp"
+#include "logging/log.hpp"
 
 namespace {
 auto CreateClientContext(const memgraph::replication::ReplicationClientConfig &config)
@@ -41,7 +42,7 @@ void ReplicationClient::Shutdown() const {
 ReplicationClient::~ReplicationClient() {
   auto const &endpoint = rpc_client_.Endpoint();
   try {
-    spdlog::trace("Closing replication client on {}:{}.", endpoint.GetAddress(), endpoint.GetPort());
+    memgraph::logging::Trace("Closing replication client on {}:{}.", endpoint.GetAddress(), endpoint.GetPort());
   } catch (...) {
     // Logging can throw. Not a big deal, just ignore.
   }

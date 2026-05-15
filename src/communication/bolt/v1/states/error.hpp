@@ -1,4 +1,4 @@
-// Copyright 2025 Memgraph Ltd.
+// Copyright 2026 Memgraph Ltd.
 //
 // Use of this software is governed by the Business Source License
 // included in the file licenses/BSL.txt; by using this file, you agree to be bound by the terms of the Business Source
@@ -12,6 +12,7 @@
 #pragma once
 
 #include <fmt/format.h>
+#include "logging/log.hpp"
 
 #include "communication/bolt/v1/codes.hpp"
 #include "communication/bolt/v1/state.hpp"
@@ -33,12 +34,12 @@ State StateErrorRun(TSession &session, State state) {
   Marker marker{};
   Signature signature{};
   if (!session.decoder_.ReadMessageHeader(&signature, &marker)) {
-    spdlog::trace("Missing header data!");
+    memgraph::logging::Trace("Missing header data!");
     return State::Close;
   }
 
   if (UNLIKELY(signature == Signature::Noop && session.version_.major == 4 && session.version_.minor == 1)) {
-    spdlog::trace("Received NOOP message");
+    memgraph::logging::Trace("Received NOOP message");
     return state;
   }
 
@@ -46,10 +47,10 @@ State StateErrorRun(TSession &session, State state) {
   session.encoder_buffer_.Clear();
 
   if (session.version_.major == 1 && signature == Signature::AckFailure) {
-    spdlog::trace("AckFailure received");
+    memgraph::logging::Trace("AckFailure received");
 
     if (!session.encoder_.MessageSuccess()) {
-      spdlog::trace("Couldn't send success message!");
+      memgraph::logging::Trace("Couldn't send success message!");
       return State::Close;
     }
 
@@ -58,7 +59,7 @@ State StateErrorRun(TSession &session, State state) {
     return State::Idle;
   }
   if (signature == Signature::Reset) {
-    spdlog::trace("Reset received");
+    memgraph::logging::Trace("Reset received");
     return HandleReset(session, marker);
   }
 
@@ -67,7 +68,7 @@ State StateErrorRun(TSession &session, State state) {
   // All bolt client messages have less than 15 parameters so if we receive
   // anything than a TinyStruct it's an error.
   if ((value & 0xF0U) != std::to_underlying(Marker::TinyStruct)) {
-    spdlog::trace("Expected TinyStruct marker, but received 0x{:02X}!", value);
+    memgraph::logging::Trace("Expected TinyStruct marker, but received 0x{:02X}!", value);
     return State::Close;
   }
 
@@ -76,14 +77,14 @@ State StateErrorRun(TSession &session, State state) {
   Value dv;
   for (int i = 0; i < value; ++i) {
     if (!session.decoder_.ReadValue(&dv)) {
-      spdlog::trace("Couldn't clean up parameter {} / {}!", i, value);
+      memgraph::logging::Trace("Couldn't clean up parameter {} / {}!", i, value);
       return State::Close;
     }
   }
 
   // Ignore this message.
   if (!session.encoder_.MessageIgnored()) {
-    spdlog::trace("Couldn't send ignored message!");
+    memgraph::logging::Trace("Couldn't send ignored message!");
     return State::Close;
   }
 

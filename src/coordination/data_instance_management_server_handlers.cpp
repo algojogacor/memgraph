@@ -11,6 +11,7 @@
 
 #ifdef MG_ENTERPRISE
 #include "coordination/data_instance_management_server_handlers.hpp"
+#include "logging/log.hpp"
 
 #include "coordination/coordinator_rpc.hpp"
 #include "coordination/include/coordination/data_instance_management_server.hpp"
@@ -176,7 +177,7 @@ void DataInstanceManagementServerHandlers::GetReplicationLagHandler(
     slk::Reader * /*req_reader*/, slk::Builder *res_builder) {
   auto locked_repl_state = replication_handler.GetReplState();
   if (locked_repl_state->IsReplica()) {
-    spdlog::error("Replication lag can only be retrieved from the main instance");
+    memgraph::logging::Error("Replication lag can only be retrieved from the main instance");
     coordination::ReplicationLagRes const res{std::nullopt};
     rpc::SendFinalResponse(res, request_version, res_builder);
     return;
@@ -200,36 +201,41 @@ auto DataInstanceManagementServerHandlers::DoRegisterReplica(replication::Replic
     using query::RegisterReplicaError;
     switch (instance_client.error()) {
       case RegisterReplicaError::NO_ACCESS: {
-        spdlog::error("Error when registering instance {} as replica. Couldn't get unique access to ReplicationState.");
+        memgraph::logging::Error(
+            "Error when registering instance {} as replica. Couldn't get unique access to ReplicationState.");
         return false;
       }
       case RegisterReplicaError::NOT_MAIN: {
-        spdlog::error("Error when registering instance {} as replica. Instance not main anymore.",
-                      config.instance_name);
+        memgraph::logging::Error("Error when registering instance {} as replica. Instance not main anymore.",
+                                 config.instance_name);
         return false;
       }
       case RegisterReplicaError::NAME_EXISTS: {
-        spdlog::error("Error when registering instance {} as replica. Instance with the same name already registered.",
-                      config.instance_name);
+        memgraph::logging::Error(
+            "Error when registering instance {} as replica. Instance with the same name already registered.",
+            config.instance_name);
         return false;
       }
       case RegisterReplicaError::ENDPOINT_EXISTS: {
-        spdlog::error("Error when registering instance {} as replica. Instance with the same endpoint already exists.",
-                      config.instance_name);
+        memgraph::logging::Error(
+            "Error when registering instance {} as replica. Instance with the same endpoint already exists.",
+            config.instance_name);
         return false;
       }
       case RegisterReplicaError::COULD_NOT_BE_PERSISTED: {
-        spdlog::error("Error when registering instance {} as replica. Registering instance could not be persisted.",
-                      config.instance_name);
+        memgraph::logging::Error(
+            "Error when registering instance {} as replica. Registering instance could not be persisted.",
+            config.instance_name);
         return false;
       }
       case RegisterReplicaError::ERROR_ACCEPTING_MAIN: {
-        spdlog::error("Error when registering instance {} as replica. Instance couldn't accept change of main.",
-                      config.instance_name);
+        memgraph::logging::Error(
+            "Error when registering instance {} as replica. Instance couldn't accept change of main.",
+            config.instance_name);
         return false;
       }
       case RegisterReplicaError::CONNECTION_FAILED: {
-        spdlog::error(
+        memgraph::logging::Error(
             "Error when registering instance {} as replica. Instance couldn't register all databases successfully.",
             config.instance_name);
         return false;
@@ -239,7 +245,7 @@ auto DataInstanceManagementServerHandlers::DoRegisterReplica(replication::Replic
       }
     }
   }
-  spdlog::trace("Instance {} successfully registered as replica.", config.instance_name);
+  memgraph::logging::Trace("Instance {} successfully registered as replica.", config.instance_name);
   return true;
 }
 
@@ -252,20 +258,20 @@ void DataInstanceManagementServerHandlers::SwapMainUUIDHandler(replication::Repl
   auto locked_repl_state = replication_handler.GetReplState();
 
   if (!locked_repl_state->IsReplica()) {
-    spdlog::error("Setting uuid must be performed on replica.");
+    memgraph::logging::Error("Setting uuid must be performed on replica.");
     replication_coordination_glue::SwapMainUUIDRes const rpc_res{false};
     rpc::SendFinalResponse(rpc_res, request_version, res_builder);
     return;
   }
 
   auto &repl_data = std::get<replication::RoleReplicaData>(locked_repl_state->ReplicationData());
-  spdlog::info("Set replica data UUID to main uuid {}", std::string(req.uuid));
+  memgraph::logging::Info("Set replica data UUID to main uuid {}", std::string(req.uuid));
   locked_repl_state->TryPersistRoleReplica(repl_data.config, req.uuid);
   repl_data.uuid_ = req.uuid;
 
   replication_coordination_glue::SwapMainUUIDRes const rpc_res{true};
   rpc::SendFinalResponse(rpc_res, request_version, res_builder);
-  spdlog::info("UUID successfully set to {}.", std::string(req.uuid));
+  memgraph::logging::Info("UUID successfully set to {}.", std::string(req.uuid));
 }
 
 void DataInstanceManagementServerHandlers::DemoteMainToReplicaHandler(
@@ -279,7 +285,7 @@ void DataInstanceManagementServerHandlers::DemoteMainToReplicaHandler(
       .repl_server = io::network::Endpoint("0.0.0.0", req.replication_client_info_.replication_server.GetPort())};
 
   if (!replication_handler.SetReplicationRoleReplica(clients_config, req.main_uuid_)) {
-    spdlog::error("Demoting main to replica failed.");
+    memgraph::logging::Error("Demoting main to replica failed.");
     coordination::DemoteMainToReplicaRes const rpc_res{false};
     rpc::SendFinalResponse(rpc_res, request_version, res_builder);
     return;
@@ -287,7 +293,7 @@ void DataInstanceManagementServerHandlers::DemoteMainToReplicaHandler(
 
   coordination::DemoteMainToReplicaRes const rpc_res{true};
   rpc::SendFinalResponse(rpc_res, request_version, res_builder);
-  spdlog::info("MAIN successfully demoted to REPLICA.");
+  memgraph::logging::Info("MAIN successfully demoted to REPLICA.");
 }
 
 void DataInstanceManagementServerHandlers::PromoteToMainHandler(replication::ReplicationHandler &replication_handler,
@@ -305,7 +311,7 @@ void DataInstanceManagementServerHandlers::PromoteToMainHandler(replication::Rep
   // We don't handle disk issues. If I receive request to promote myself to main when I am already main
   // I will do it again, the action is idempotent.
   if (const bool success = replication_handler.DoToMainPromotion(req.main_uuid); !success) {
-    spdlog::error("Promoting replica to main failed.");
+    memgraph::logging::Error("Promoting replica to main failed.");
     coordination::PromoteToMainRes const res{false};
     rpc::SendFinalResponse(res, request_version, res_builder);
     return;
@@ -325,7 +331,8 @@ void DataInstanceManagementServerHandlers::PromoteToMainHandler(replication::Rep
 
   coordination::PromoteToMainRes const res{true};
   rpc::SendFinalResponse(res, request_version, res_builder);
-  spdlog::info("Promoting replica to main finished successfully. New MAIN's uuid: {}", std::string(req.main_uuid));
+  memgraph::logging::Info("Promoting replica to main finished successfully. New MAIN's uuid: {}",
+                          std::string(req.main_uuid));
 }
 
 void DataInstanceManagementServerHandlers::RegisterReplicaOnMainHandler(
@@ -334,7 +341,7 @@ void DataInstanceManagementServerHandlers::RegisterReplicaOnMainHandler(
   // TODO: Fix potential datarace. Main check, uuid check and replica registration should all be performed under the
   // same lock. Since this can happen only if coordinator is present AND RPC is single threaded, this is fine for now.
   if (!replication_handler.IsMain()) {
-    spdlog::error("Registering replica on main must be performed on main!");
+    memgraph::logging::Error("Registering replica on main must be performed on main!");
     coordination::RegisterReplicaOnMainRes const res{false};
     rpc::SendFinalResponse(res, request_version, res_builder);
     return;
@@ -347,16 +354,16 @@ void DataInstanceManagementServerHandlers::RegisterReplicaOnMainHandler(
   // We don't handle disk issues.
   auto const &main_uuid = replication_handler.GetReplState()->GetMainRole().uuid_;
   if (req.main_uuid != main_uuid) {
-    spdlog::error("Registering replica to main failed because MAIN's uuid {} != from coordinator's uuid {}!",
-                  std::string(req.main_uuid),
-                  std::string(main_uuid));
+    memgraph::logging::Error("Registering replica to main failed because MAIN's uuid {} != from coordinator's uuid {}!",
+                             std::string(req.main_uuid),
+                             std::string(main_uuid));
     coordination::RegisterReplicaOnMainRes const res{false};
     rpc::SendFinalResponse(res, request_version, res_builder);
     return;
   }
 
   if (!DoRegisterReplica(replication_handler, req.replication_client_info)) {
-    spdlog::error("Replica {} couldn't be registered.", req.replication_client_info.instance_name);
+    memgraph::logging::Error("Replica {} couldn't be registered.", req.replication_client_info.instance_name);
     coordination::RegisterReplicaOnMainRes const res{false};
     rpc::SendFinalResponse(res, request_version, res_builder);
     return;
@@ -364,7 +371,8 @@ void DataInstanceManagementServerHandlers::RegisterReplicaOnMainHandler(
 
   coordination::RegisterReplicaOnMainRes const res{true};
   rpc::SendFinalResponse(res, request_version, res_builder);
-  spdlog::info("Registering replica {} to main finished successfully.", req.replication_client_info.instance_name);
+  memgraph::logging::Info("Registering replica {} to main finished successfully.",
+                          req.replication_client_info.instance_name);
 }
 
 void DataInstanceManagementServerHandlers::UnregisterReplicaHandler(
@@ -381,31 +389,31 @@ void DataInstanceManagementServerHandlers::UnregisterReplicaHandler(
       break;
     }
     case NOT_MAIN: {
-      spdlog::error("Unregistering replica must be performed on main.");
+      memgraph::logging::Error("Unregistering replica must be performed on main.");
       coordination::UnregisterReplicaRes const rpc_res{false};
       rpc::SendFinalResponse(rpc_res, request_version, res_builder);
       break;
     }
     case CANNOT_UNREGISTER: {
-      spdlog::error("Could not unregister replica.");
+      memgraph::logging::Error("Could not unregister replica.");
       coordination::UnregisterReplicaRes const rpc_res{false};
       rpc::SendFinalResponse(rpc_res, request_version, res_builder);
       break;
     }
     case COULD_NOT_BE_PERSISTED: {
-      spdlog::error("Could not persist replica unregistration.");
+      memgraph::logging::Error("Could not persist replica unregistration.");
       coordination::UnregisterReplicaRes const rpc_res{false};
       rpc::SendFinalResponse(rpc_res, request_version, res_builder);
       break;
     }
     case NO_ACCESS: {
-      spdlog::error("Couldn't get unique access to ReplicationState when unregistering replica.");
+      memgraph::logging::Error("Couldn't get unique access to ReplicationState when unregistering replica.");
       coordination::UnregisterReplicaRes const rpc_res{false};
       rpc::SendFinalResponse(rpc_res, request_version, res_builder);
       break;
     }
   }
-  spdlog::info("Replica {} successfully unregistered.", req.arg_);
+  memgraph::logging::Info("Replica {} successfully unregistered.", req.arg_);
 }
 
 void DataInstanceManagementServerHandlers::EnableWritingOnMainHandler(
@@ -414,14 +422,14 @@ void DataInstanceManagementServerHandlers::EnableWritingOnMainHandler(
   auto locked_repl_state = replication_handler.GetReplState();
 
   if (!locked_repl_state->IsMain()) {
-    spdlog::error("Enable writing on main must be performed on main!");
+    memgraph::logging::Error("Enable writing on main must be performed on main!");
     coordination::EnableWritingOnMainRes const rpc_res{false};
     rpc::SendFinalResponse(rpc_res, request_version, res_builder);
     return;
   }
 
   if (!locked_repl_state->EnableWritingOnMain()) {
-    spdlog::error("Enabling writing on main failed!");
+    memgraph::logging::Error("Enabling writing on main failed!");
     coordination::EnableWritingOnMainRes const rpc_res{false};
     rpc::SendFinalResponse(rpc_res, request_version, res_builder);
     return;
@@ -429,7 +437,7 @@ void DataInstanceManagementServerHandlers::EnableWritingOnMainHandler(
 
   coordination::EnableWritingOnMainRes const rpc_res{true};
   rpc::SendFinalResponse(rpc_res, request_version, res_builder);
-  spdlog::info("Enabled writing on main.");
+  memgraph::logging::Info("Enabled writing on main.");
 }
 
 void DataInstanceManagementServerHandlers::UpdateDeltasBatchProgressSizeHandler(

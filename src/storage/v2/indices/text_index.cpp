@@ -12,6 +12,7 @@
 #include "storage/v2/indices/text_index.hpp"
 #include <spdlog/spdlog.h>
 #include <range/v3/all.hpp>
+#include "logging/log.hpp"
 #include "mgcxx_text_search.hpp"
 #include "storage/v2/id_types.hpp"
 #include "storage/v2/indices/active_indices_updater.hpp"
@@ -29,7 +30,7 @@ TextIndexData::~TextIndexData() {
     try {
       mgcxx::text_search::drop_index(std::move(context));
     } catch (...) {
-      spdlog::error("Failed to drop text index during deferred cleanup");
+      memgraph::logging::Error("Failed to drop text index during deferred cleanup");
     }
   }
 }
@@ -59,7 +60,8 @@ void TextIndex::CreateTantivyIndex(const std::string &index_path, const TextInde
     new_map->emplace(index_info.index_name, std::move(data));
     index_ = std::move(new_map);
   } catch (const std::exception &e) {
-    spdlog::error("Failed to create text index {} at path: {}. Error: {}", index_info.index_name, index_path, e.what());
+    memgraph::logging::Error(
+        "Failed to create text index {} at path: {}. Error: {}", index_info.index_name, index_path, e.what());
     throw query::TextSearchException("Tantivy error: {}", e.what());
   }
 }
@@ -125,7 +127,7 @@ void TextIndex::RecoverIndex(const TextIndexSpec &index_info, utils::SkipListDb<
     if (needs_rebuild) throw;
     // It's possible that index on disk has incompatible schema if, for example, new required properties were added to
     // the index spec in new versions
-    spdlog::warn("Text index {} has incompatible schema on disk, rebuilding.", index_info.index_name);
+    memgraph::logging::Warn("Text index {} has incompatible schema on disk, rebuilding.", index_info.index_name);
     std::error_code ec;
     std::filesystem::remove_all(index_path, ec);
     if (ec)

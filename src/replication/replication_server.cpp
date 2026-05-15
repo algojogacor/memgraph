@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "replication/replication_server.hpp"
+#include "logging/log.hpp"
 #include "replication_coordination_glue/handler.hpp"
 
 #include <spdlog/spdlog.h>
@@ -56,7 +57,7 @@ bool ReplicationServer::Shutdown() const {
   // if I am the thread which did the shutdown
   if (rpc_server_.Shutdown()) {
     try {
-      spdlog::trace("Closing replication server");
+      memgraph::logging::Trace("Closing replication server");
       // NOLINTNEXTLINE(bugprone-empty-catch)
     } catch (std::exception const &) {
     }

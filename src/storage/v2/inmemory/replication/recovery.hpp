@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 #pragma once
 
+#include "logging/log.hpp"
 #include "rpc/messages.hpp"
 #include "storage/v2/durability/durability.hpp"
 #include "storage/v2/replication/recovery.hpp"
@@ -51,7 +52,7 @@ template <typename T>
   requires(std::is_same_v<T, std::filesystem::path>)
 bool WriteFiles(const T &path, std::filesystem::path const &root_data_dir, replication::Encoder &encoder) {
   if (!encoder.WriteFile(path, GetFilePathWithoutDataDir(path, root_data_dir))) {
-    spdlog::error("File {} couldn't be loaded so it won't be transferred to the replica.", path);
+    memgraph::logging::Error("File {} couldn't be loaded so it won't be transferred to the replica.", path);
     return false;
   }
   return true;
@@ -63,10 +64,10 @@ bool WriteFiles(const T &paths, std::filesystem::path const &root_data_dir, repl
   for (const auto &path : paths) {
     // Flush the segment so the file data could start at the beginning of the next segment
     if (!encoder.WriteFile(path, GetFilePathWithoutDataDir(path, root_data_dir))) {
-      spdlog::error("File {} couldn't be loaded so it won't be transferred to the replica.", path);
+      memgraph::logging::Error("File {} couldn't be loaded so it won't be transferred to the replica.", path);
       return false;
     }
-    spdlog::debug("Loaded file: {}", path);
+    memgraph::logging::Debug("Loaded file: {}", path);
   }
   return true;
 }

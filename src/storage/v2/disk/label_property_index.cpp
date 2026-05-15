@@ -13,6 +13,7 @@
 
 #include "storage/v2/disk/label_property_index.hpp"
 #include <range/v3/all.hpp>
+#include "logging/log.hpp"
 #include "storage/v2/disk/delta_utils.hpp"
 #include "storage/v2/indices/active_indices_updater.hpp"
 #include "utils/file.hpp"
@@ -45,7 +46,7 @@ bool CommitWithTimestamp(rocksdb::Transaction *disk_transaction, uint64_t commit
   disk_transaction->SetCommitTimestamp(commit_ts);
   const auto status = disk_transaction->Commit();
   if (!status.ok()) {
-    spdlog::error("rocksdb: {}", status.getState());
+    memgraph::logging::Error("rocksdb: {}", status.getState());
   }
   return status.ok();
 }

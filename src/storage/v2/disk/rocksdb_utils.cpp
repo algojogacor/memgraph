@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "storage/v2/disk/rocksdb_utils.hpp"
+#include "logging/log.hpp"
 
 #include <rocksdb/env.h>
 #include <rocksdb/options.h>
@@ -28,7 +29,7 @@ rocksdb::InfoLogLevel ParseRocksDBInfoLogLevel(std::string_view level) {
   if (level == "ERROR_LEVEL") return rocksdb::InfoLogLevel::ERROR_LEVEL;
   if (level == "FATAL_LEVEL") return rocksdb::InfoLogLevel::FATAL_LEVEL;
   if (level == "HEADER_LEVEL") return rocksdb::InfoLogLevel::HEADER_LEVEL;
-  spdlog::warn("Unknown RocksDB info log level '{}', using INFO_LEVEL", level);
+  memgraph::logging::Warn("Unknown RocksDB info log level '{}', using INFO_LEVEL", level);
   return rocksdb::InfoLogLevel::INFO_LEVEL;
 }
 

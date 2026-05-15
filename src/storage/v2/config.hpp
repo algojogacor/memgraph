@@ -18,6 +18,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include "logging/log.hpp"
 
 #include "flags/coord_flag_env_handler.hpp"
 #include "nlohmann/json_fwd.hpp"
@@ -136,7 +137,7 @@ inline auto ReplicationStateRootPath(memgraph::storage::Config const &config) ->
       && !memgraph::flags::CoordinationSetupInstance().IsDataInstanceManagedByCoordinator()
 #endif
   ) {
-    spdlog::warn(
+    memgraph::logging::Warn(
         "Replication configuration will NOT be stored. When the server restarts, replication state will be "
         "forgotten.");
 

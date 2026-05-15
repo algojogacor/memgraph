@@ -12,6 +12,7 @@
 #pragma once
 
 #include "license/license.hpp"
+#include "logging/log.hpp"
 #ifdef MG_ENTERPRISE
 
 #include <algorithm>
@@ -260,7 +261,7 @@ class ParallelRewriter final : public HierarchicalLogicalOperatorVisitor {
   bool TryParallelizeOperator(TOperator &op, const std::set<Symbol::Position_t> &required_symbols,
                               std::string_view op_name, TParallelFactory &&create_parallel_op) {
     auto failure = [&](std::string_view error_message = "") {
-      spdlog::trace("Parallel {} rewrite failed: {}", op_name, error_message);
+      memgraph::logging::Trace("Parallel {} rewrite failed: {}", op_name, error_message);
       // Failed to rewrite, continue searching for other opportunities to parallelize
       prev_ops_.push_back(&op);
       return true;
@@ -562,7 +563,7 @@ class ParallelRewriter final : public HierarchicalLogicalOperatorVisitor {
     }
 
     // Unsupported scan type
-    spdlog::error(
+    memgraph::logging::Error(
         "Unsupported scan type in parallel chain: {}. Please contact Memgraph support as this scenario should not "
         "happen!",
         scan_type.name);
@@ -722,7 +723,7 @@ class ParallelRewriter final : public HierarchicalLogicalOperatorVisitor {
         // Terminal operators with no inputs - cannot have input symbols
         return false;
       } else {
-        spdlog::error(
+        memgraph::logging::Error(
             "Unsupported operator in operator chain: {}. Please contact Memgraph support as this scenario should not "
             "happen!",
             current->ToString());
@@ -865,7 +866,7 @@ class ParallelRewriter final : public HierarchicalLogicalOperatorVisitor {
           // Terminal operators with no inputs - cannot have input symbols
           // Continue with empty input_symbol_positions
         } else {
-          spdlog::error(
+          memgraph::logging::Error(
               "Unsupported operator in operator chain: {}. Please contact Memgraph support as this scenario should not "
               "happen!",
               current->ToString());
@@ -1028,7 +1029,7 @@ std::unique_ptr<LogicalOperator> RewriteParallelExecution(
         }
         const auto threads = static_cast<size_t>(value.ValueInt());
         if (threads > FLAGS_bolt_num_workers) {
-          spdlog::trace(
+          memgraph::logging::Trace(
               "Requesting {} threads, more than available. Forcing {} threads.", threads, FLAGS_bolt_num_workers);
           return FLAGS_bolt_num_workers;
         }

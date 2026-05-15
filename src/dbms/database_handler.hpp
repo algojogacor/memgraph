@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <string_view>
+#include "logging/log.hpp"
 
 #include "dbms/database.hpp"
 #include "dbms/database_protector.hpp"
@@ -50,9 +51,9 @@ class DatabaseHandler : public Handler<Database> {
           (*db_acc)->StopAllBackgroundTasks();
         }
       } catch (std::exception const &e) {
-        spdlog::error("Exception in DatabaseHandler destructor: {}", e.what());
+        memgraph::logging::Error("Exception in DatabaseHandler destructor: {}", e.what());
       } catch (...) {
-        spdlog::error("Unknown exception in DatabaseHandler destructor");
+        memgraph::logging::Error("Unknown exception in DatabaseHandler destructor");
       }
     }
   }
@@ -71,7 +72,7 @@ class DatabaseHandler : public Handler<Database> {
           MG_ASSERT(db_acc.has_value(), "Gatekeeper in invalid state");
           return db_acc->get()->config().durability.storage_directory == config.durability.storage_directory;
         })) {
-      spdlog::info("Tried to generate new storage using a claimed directory.");
+      memgraph::logging::Info("Tried to generate new storage using a claimed directory.");
       return std::unexpected{NewError::EXISTS};
     }
 

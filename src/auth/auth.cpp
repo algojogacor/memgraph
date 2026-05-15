@@ -7,6 +7,7 @@
 //
 
 #include "auth/auth.hpp"
+#include "logging/log.hpp"
 
 #include <optional>
 #include <utility>
@@ -247,7 +248,7 @@ void MigrateVersions(kvstore::KVStore &store) {
 
     if (it != e) {
       const auto hash_algo = CurrentHashAlgorithm();
-      spdlog::info("Updating auth durability, assuming previously stored as {}", AsString(hash_algo));
+      memgraph::logging::Info("Updating auth durability, assuming previously stored as {}", AsString(hash_algo));
 
       for (; it != e; ++it) {
         auto const &[key, value] = *it;
@@ -278,7 +279,7 @@ void MigrateVersions(kvstore::KVStore &store) {
 
   // Migrate from V1 to V2: convert single role links to JSON arrays
   if (version_str == kVersionV1) {
-    spdlog::info("Migrating auth storage from V1 to V2: converting single role links to JSON arrays");
+    memgraph::logging::Info("Migrating auth storage from V1 to V2: converting single role links to JSON arrays");
 
     auto puts = std::map<std::string, std::string>{{kVersion, kVersionV2}};
     auto deletes = std::vector<std::string>{};
@@ -307,12 +308,12 @@ void MigrateVersions(kvstore::KVStore &store) {
     }
     version_str = kVersionV2;
 
-    spdlog::info("Auth storage migration to V2 completed successfully");
+    memgraph::logging::Info("Auth storage migration to V2 completed successfully");
   }
 
   if (version_str == kVersionV2) {
-    spdlog::info("Migrating auth storage from V2 to V3");
-    spdlog::warn(
+    memgraph::logging::Info("Migrating auth storage from V2 to V3");
+    memgraph::logging::Warn(
         "IMPORTANT: Review your security policy and explicitly configure finely grained access rules where needed.");
 
     auto puts = std::map<std::string, std::string>{{kVersion, kVersionV3}};
@@ -392,11 +393,11 @@ void MigrateVersions(kvstore::KVStore &store) {
     }
 
     version_str = kVersionV3;
-    spdlog::info("Auth storage migration to V3 completed successfully");
+    memgraph::logging::Info("Auth storage migration to V3 completed successfully");
   }
 
   if (version_str == kVersionV3) {
-    spdlog::info("Migrating auth storage from V3 to V4");
+    memgraph::logging::Info("Migrating auth storage from V3 to V4");
 
     auto puts = std::map<std::string, std::string>{{kVersion, kVersionV4}};
 
@@ -508,7 +509,7 @@ void MigrateVersions(kvstore::KVStore &store) {
     }
 
     version_str = kVersionV4;
-    spdlog::info("Auth storage migration to V4 completed successfully");
+    memgraph::logging::Info("Auth storage migration to V4 completed successfully");
   }
 }
 
@@ -570,7 +571,7 @@ Auth::Auth(std::string storage_directory, Config config
 
 std::optional<UserOrRole> Auth::CallExternalModule(const std::string &scheme, nlohmann::json module_params,
                                                    std::optional<std::string> provided_username) {
-  spdlog::trace("Calling external auth module for scheme '{}'.", scheme);
+  memgraph::logging::Trace("Calling external auth module for scheme '{}'.", scheme);
   auto ret = modules_.at(scheme).Call(std::move(module_params), FLAGS_auth_module_timeout_ms);
 
   auto get_errors = [&ret]() -> std::string {
@@ -588,7 +589,7 @@ std::optional<UserOrRole> Auth::CallExternalModule(const std::string &scheme, nl
 
   auto get_string_field = [&ret](const auto &name) -> std::optional<std::string> {
     if (!ret.contains(name)) {
-      spdlog::warn(utils::MessageWithLink(
+      memgraph::logging::Warn(utils::MessageWithLink(
           "Couldn't authenticate user: the field \"{}\" was not returned by the external auth module.",
           name,
           "https://memgr.ph/sso"));
@@ -597,7 +598,7 @@ std::optional<UserOrRole> Auth::CallExternalModule(const std::string &scheme, nl
 
     const auto &ret_field = ret.at(name);
     if (!ret_field.is_string()) {
-      spdlog::warn(
+      memgraph::logging::Warn(
           utils::MessageWithLink("Couldn't authenticate user: the field \"{}\" returned by the external auth module "
                                  "needs to have a string value.",
                                  name,
@@ -609,7 +610,7 @@ std::optional<UserOrRole> Auth::CallExternalModule(const std::string &scheme, nl
   };
 
   if (!ret.is_object() || !ret.contains("authenticated")) {
-    spdlog::warn(
+    memgraph::logging::Warn(
         utils::MessageWithLink("Couldn't authenticate user: the message returned by the external auth module needs to "
                                "be an object with the success status in the \"authenticated\" field.",
                                "https://memgr.ph/sso"));
@@ -617,7 +618,7 @@ std::optional<UserOrRole> Auth::CallExternalModule(const std::string &scheme, nl
   }
   const auto &ret_authenticated = ret.at("authenticated");
   if (!ret_authenticated.is_boolean()) {
-    spdlog::warn(utils::MessageWithLink(
+    memgraph::logging::Warn(utils::MessageWithLink(
         "Couldn't authenticate user: the authentication status returned by the external auth module "
         "needs to be a boolean value.",
         "https://memgr.ph/sso"));
@@ -627,7 +628,7 @@ std::optional<UserOrRole> Auth::CallExternalModule(const std::string &scheme, nl
 
   if (!is_authenticated) {
     const auto error = get_errors();
-    spdlog::warn(utils::MessageWithLink("Couldn't authenticate user:", error, "https://memgr.ph/sso"));
+    memgraph::logging::Warn(utils::MessageWithLink("Couldn't authenticate user:", error, "https://memgr.ph/sso"));
     return std::nullopt;
   }
 
@@ -652,7 +653,7 @@ std::optional<UserOrRole> Auth::CallExternalModule(const std::string &scheme, nl
   if (role_names.empty()) {
     const auto rolename = get_string_field("role");
     if (!rolename) {
-      spdlog::warn(utils::MessageWithLink(
+      memgraph::logging::Warn(utils::MessageWithLink(
           "Couldn't authenticate external user because the role was not returned by the auth module.",
           "https://memgr.ph/auth"));
       return std::nullopt;
@@ -661,7 +662,7 @@ std::optional<UserOrRole> Auth::CallExternalModule(const std::string &scheme, nl
   }
 
   if (role_names.empty()) {
-    spdlog::warn(utils::MessageWithLink(
+    memgraph::logging::Warn(utils::MessageWithLink(
         "Couldn't authenticate user: no valid role(s) returned by the external auth module.", "https://memgr.ph/sso"));
     return std::nullopt;
   }
@@ -671,9 +672,10 @@ std::optional<UserOrRole> Auth::CallExternalModule(const std::string &scheme, nl
   for (const auto &role_name : role_names) {
     auto role = GetRole(role_name);
     if (!role) {
-      spdlog::warn(utils::MessageWithLink("Couldn't authenticate external user because the role {} doesn't exist.",
-                                          role_name,
-                                          "https://memgr.ph/auth"));
+      memgraph::logging::Warn(
+          utils::MessageWithLink("Couldn't authenticate external user because the role {} doesn't exist.",
+                                 role_name,
+                                 "https://memgr.ph/auth"));
       return std::nullopt;
     }
     roles.AddRole(*role);
@@ -681,7 +683,7 @@ std::optional<UserOrRole> Auth::CallExternalModule(const std::string &scheme, nl
 
   auto username = provided_username.has_value() ? provided_username : get_string_field("username");
   if (!username) {
-    spdlog::warn(utils::MessageWithLink(
+    memgraph::logging::Warn(utils::MessageWithLink(
         "Couldn't authenticate external user because the username was not returned by the auth module.",
         "https://memgr.ph/auth"));
     return std::nullopt;
@@ -689,14 +691,14 @@ std::optional<UserOrRole> Auth::CallExternalModule(const std::string &scheme, nl
 
   auto already_existing_user = GetUser(*username);
   if (already_existing_user) {
-    spdlog::warn(utils::MessageWithLink(
+    memgraph::logging::Warn(utils::MessageWithLink(
         "Couldn't authenticate external user because a local user {} with the same name already exists.",
         *username,
         "https://memgr.ph/auth"));
     return std::nullopt;
   }
 
-  spdlog::trace(
+  memgraph::logging::Trace(
       "Authenticated user '{}' with roles: {}.", *username, memgraph::utils::JoinVector(roles.rolenames(), ", "));
   return UserOrRole(auth::RoleWUsername{*username, roles});
 }
@@ -708,12 +710,12 @@ std::optional<UserOrRole> Auth::Authenticate(const std::string &username, const 
      */
     auto user = GetUser(username);
     if (!user) {
-      spdlog::warn(utils::MessageWithLink(
+      memgraph::logging::Warn(utils::MessageWithLink(
           "Couldn't authenticate user '{}' because the user doesn't exist.", username, "https://memgr.ph/auth"));
       return std::nullopt;
     }
     if (!user->CheckPassword(password)) {
-      spdlog::warn(utils::MessageWithLink(
+      memgraph::logging::Warn(utils::MessageWithLink(
           "Couldn't authenticate user '{}' because the password is not correct.", username, "https://memgr.ph/auth"));
       return std::nullopt;
     }
@@ -758,42 +760,42 @@ void Auth::LinkUser(User &user) const {
     try {
       auto json_data = ParseJson(*mt_link);
       if (!json_data.is_object()) {
-        spdlog::warn("Found invalid JSON in mtlink format for user '{}'", user.username());
+        memgraph::logging::Warn("Found invalid JSON in mtlink format for user '{}'", user.username());
         return;
       }
       for (const auto &[db, roles_array] : json_data.items()) {
         if (!roles_array.is_array()) {
-          spdlog::warn(
+          memgraph::logging::Warn(
               "Invalid mtlink entry for user '{}': expected array of rolenames for db '{}'", user.username(), db);
           continue;
         }
         for (const auto &rolename_json : roles_array) {
           if (!rolename_json.is_string()) {
-            spdlog::warn(
+            memgraph::logging::Warn(
                 "Invalid mtlink entry for user '{}': expected string rolename for db '{}'", user.username(), db);
             continue;
           }
           const auto &rolename = rolename_json.get<std::string>();
           auto role = GetRole(rolename);
           if (!role) {
-            spdlog::warn("Role '{}' doesn't exist for user '{}'", rolename, user.username());
+            memgraph::logging::Warn("Role '{}' doesn't exist for user '{}'", rolename, user.username());
             continue;
           }
           try {
             user.AddMultiTenantRole(*role, db);
           } catch (const AuthException &e) {
-            spdlog::warn("Couldn't add multi-tenant role '{}' to user '{}' on database '{}': {}",
-                         rolename,
-                         user.username(),
-                         db,
-                         e.what());
+            memgraph::logging::Warn("Couldn't add multi-tenant role '{}' to user '{}' on database '{}': {}",
+                                    rolename,
+                                    user.username(),
+                                    db,
+                                    e.what());
             failed_mt_roles.insert(rolename);
           }
         }
       }
     } catch (const nlohmann::detail::exception &) {
       // This shouldn't happen after V2 migration, but handle gracefully
-      spdlog::warn("Found invalid JSON in mtlink format for user '{}'", user.username());
+      memgraph::logging::Warn("Found invalid JSON in mtlink format for user '{}'", user.username());
       return;
     }
   }
@@ -806,7 +808,7 @@ void Auth::LinkUser(User &user) const {
       // Parse as JSON array (V2 format)
       auto json_data = ParseJson(*link);
       if (!json_data.is_array()) {
-        spdlog::warn("Found invalid JSON in link format for user '{}'", user.username());
+        memgraph::logging::Warn("Found invalid JSON in link format for user '{}'", user.username());
         return;
       }
       // V2 format: array of role names
@@ -826,7 +828,7 @@ void Auth::LinkUser(User &user) const {
 
     } catch (const nlohmann::detail::exception &) {
       // This shouldn't happen after V2 migration, but handle gracefully
-      spdlog::warn("Found invalid JSON in link format for user '{}'", user.username());
+      memgraph::logging::Warn("Found invalid JSON in link format for user '{}'", user.username());
       return;
     }
   }
@@ -950,7 +952,7 @@ std::optional<User> Auth::AddUser(const std::string &username, const std::option
 }
 
 void Auth::InitialiseFirstUser(User &user, system::Transaction *system_tx) {
-  spdlog::info(
+  memgraph::logging::Info(
       "{} is the first created user. Granting all privileges. The official advice and intention is to use this "
       "first user as the superuser with full privileges and capabilities on the Memgraph database.",
       user.username());
@@ -1092,7 +1094,7 @@ bool Auth::CreateOrUpdateProfile(const std::string &profile_name, UserProfiles::
         try {
           RevokeProfile(user, system_tx);
         } catch (const AuthException &e) {
-          spdlog::warn("Failed to revoke profile for user '{}': {}", user, e.what());
+          memgraph::logging::Warn("Failed to revoke profile for user '{}': {}", user, e.what());
         }
       }
     }
@@ -1101,12 +1103,12 @@ bool Auth::CreateOrUpdateProfile(const std::string &profile_name, UserProfiles::
         try {
           SetProfile(profile_name, user, system_tx);
         } catch (const AuthException &e) {
-          spdlog::warn("Failed to set profile for user '{}': {}", user, e.what());
+          memgraph::logging::Warn("Failed to set profile for user '{}': {}", user, e.what());
         }
       }
     }
     if (!UpdateProfile(profile_name, defined_limits, system_tx)) {
-      spdlog::debug("SystemRecoveryHandler: Failed to save profile");
+      memgraph::logging::Debug("SystemRecoveryHandler: Failed to save profile");
       return false;
     }
   }
@@ -1244,7 +1246,7 @@ std::optional<Role> Auth::AddRole(const std::string &rolename, system::Transacti
 bool Auth::CreateBuiltinRoles(system::Transaction *system_tx) {
   if (!license::global_license_checker.IsEnterpriseValidFast()) return false;
   if (!AllRolenames().empty()) {
-    spdlog::debug("Skipping built-in role creation: roles already exist");
+    memgraph::logging::Debug("Skipping built-in role creation: roles already exist");
     return false;
   }
 
@@ -1396,7 +1398,7 @@ std::vector<auth::User> Auth::AllUsersForRole(const std::string &rolename_orig) 
       // Parse as JSON array (V2 format)
       auto json_data = ParseJson(it->second);
       if (!json_data.is_array()) {
-        spdlog::warn("Found non-array link format for user '{}'", username);
+        memgraph::logging::Warn("Found non-array link format for user '{}'", username);
         continue;
       }
       // V2 format: check if role is in the array
@@ -1408,7 +1410,7 @@ std::vector<auth::User> Auth::AllUsersForRole(const std::string &rolename_orig) 
       }
     } catch (const nlohmann::detail::exception &) {
       // This shouldn't happen after V2 migration, but handle gracefully
-      spdlog::warn("Found invalid JSON in link format for user '{}', treating as single role", username);
+      memgraph::logging::Warn("Found invalid JSON in link format for user '{}', treating as single role", username);
       continue;
     }
 
@@ -1434,7 +1436,7 @@ std::vector<std::string> Auth::AllUsernamesForRole(const std::string &rolename_o
       // Parse as JSON array (V2 format)
       auto json_data = ParseJson(it->second);
       if (!json_data.is_array()) {
-        spdlog::warn("Found non-array link format for user '{}'", username);
+        memgraph::logging::Warn("Found non-array link format for user '{}'", username);
         continue;
       }
       // V2 format: check if role is in the array
@@ -1446,7 +1448,7 @@ std::vector<std::string> Auth::AllUsernamesForRole(const std::string &rolename_o
       }
     } catch (const nlohmann::detail::exception &) {
       // This shouldn't happen after V2 migration, but handle gracefully
-      spdlog::warn("Found invalid JSON in link format for user '{}', treating as single role", username);
+      memgraph::logging::Warn("Found invalid JSON in link format for user '{}', treating as single role", username);
       continue;
     }
     if (has_role) ret.push_back(std::move(username));

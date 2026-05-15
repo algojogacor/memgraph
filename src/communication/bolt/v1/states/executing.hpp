@@ -1,4 +1,4 @@
-// Copyright 2025 Memgraph Ltd.
+// Copyright 2026 Memgraph Ltd.
 //
 // Use of this software is governed by the Business Source License
 // included in the file licenses/BSL.txt; by using this file, you agree to be bound by the terms of the Business Source
@@ -15,6 +15,7 @@
 #include <memory>
 #include <new>
 #include <string>
+#include "logging/log.hpp"
 
 #include "communication/bolt/v1/codes.hpp"
 #include "communication/bolt/v1/constants.hpp"
@@ -45,7 +46,7 @@ State RunHandlerV1(Signature signature, TSession &session, State state, Marker m
     case Signature::Reset:
       return HandleReset<TSession>(session, marker);
     default:
-      spdlog::trace("Unrecognized signature received (0x{:02X})!", std::to_underlying(signature));
+      memgraph::logging::Trace("Unrecognized signature received (0x{:02X})!", std::to_underlying(signature));
       return State::Close;
   }
 }
@@ -73,7 +74,7 @@ State RunHandlerV4(Signature signature, TSession &session, State state, Marker m
       if constexpr (bolt_minor >= 1) {
         return HandleNoop<TSession>(state);
       } else {
-        spdlog::trace("Supported only in bolt v4.1");
+        memgraph::logging::Trace("Supported only in bolt v4.1");
         return State::Close;
       }
     }
@@ -81,12 +82,12 @@ State RunHandlerV4(Signature signature, TSession &session, State state, Marker m
       if constexpr (bolt_minor >= 3) {
         return HandleRoute<TSession, 4, bolt_minor>(session, marker);
       } else {
-        spdlog::trace("Route message supported only in bolt versions >= 4.3");
+        memgraph::logging::Trace("Route message supported only in bolt versions >= 4.3");
         return State::Close;
       }
     }
     default:
-      spdlog::trace("Unrecognized signature received (0x{:02X})!", std::to_underlying(signature));
+      memgraph::logging::Trace("Unrecognized signature received (0x{:02X})!", std::to_underlying(signature));
       return State::Close;
   }
 }
@@ -117,7 +118,7 @@ State RunHandlerV5(Signature signature, TSession &session, State state, Marker m
     case Signature::LogOff:
       return HandleLogOff<TSession>(session);
     default:
-      spdlog::trace("Unrecognized signature received (0x{:02X})!", std::to_underlying(signature));
+      memgraph::logging::Trace("Unrecognized signature received (0x{:02X})!", std::to_underlying(signature));
       return State::Close;
   }
 }
@@ -133,7 +134,7 @@ State StateExecutingRun(TSession &session, State state) {
   Marker marker;
   Signature signature;
   if (!session.decoder_.ReadMessageHeader(&signature, &marker)) {
-    spdlog::trace("Missing header data!");
+    memgraph::logging::Trace("Missing header data!");
     return State::Close;
   }
 
@@ -155,7 +156,7 @@ State StateExecutingRun(TSession &session, State state) {
       memgraph::metrics::IncrementCounter(memgraph::metrics::BoltMessages);
       return RunHandlerV5<TSession>(signature, session, state, marker);
     default:
-      spdlog::trace("Unsupported bolt version:{}.{})!", session.version_.major, session.version_.minor);
+      memgraph::logging::Trace("Unsupported bolt version:{}.{})!", session.version_.major, session.version_.minor);
       return State::Close;
   }
 }

@@ -12,6 +12,7 @@
 #ifdef MG_ENTERPRISE
 
 #include "coordination/data_instance_management_server.hpp"
+#include "logging/log.hpp"
 
 namespace memgraph::coordination {
 
@@ -34,7 +35,7 @@ bool DataInstanceManagementServer::Shutdown() {
   if (rpc_server_.Shutdown()) {
     try {
       // trace can throw
-      spdlog::trace("Closing data instance management server");
+      memgraph::logging::Trace("Closing data instance management server");
       // NOLINTNEXTLINE(bugprone-empty-catch)
     } catch (std::exception const &) {
     }

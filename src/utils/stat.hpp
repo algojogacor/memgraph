@@ -1,4 +1,4 @@
-// Copyright 2024 Memgraph Ltd.
+// Copyright 2026 Memgraph Ltd.
 //
 // Use of this software is governed by the Business Source License
 // included in the file licenses/BSL.txt; by using this file, you agree to be bound by the terms of the Business Source
@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <optional>
+#include "logging/log.hpp"
 
 #include <unistd.h>
 
@@ -33,7 +34,7 @@ inline uint64_t GetDirDiskUsage(const std::filesystem::path &path) {
   if (!std::filesystem::is_directory(path)) return 0;
 
   if (!utils::HasReadAccess(path)) {
-    spdlog::warn(
+    memgraph::logging::Warn(
         "Skipping directory path on collecting directory disk usage '{}' because it is not readable, check file "
         "ownership and read permissions!",
         path);
@@ -46,7 +47,7 @@ inline uint64_t GetDirDiskUsage(const std::filesystem::path &path) {
       size += GetDirDiskUsage(dir_entry);
     } else if (std::filesystem::is_regular_file(dir_entry)) {
       if (!utils::HasReadAccess(dir_entry)) {
-        spdlog::warn(
+        memgraph::logging::Warn(
             "Skipping file path on collecting directory disk usage '{}' because it is not readable, check file "
             "ownership and read permissions!",
             dir_entry.path());

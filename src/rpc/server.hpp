@@ -13,6 +13,7 @@
 
 #include <map>
 #include <mutex>
+#include "logging/log.hpp"
 
 #include "communication/server.hpp"
 #include "io/network/endpoint.hpp"
@@ -55,7 +56,7 @@ class Server {
     // Here I could retrieve the type of the response needed
     auto got = callbacks_.insert({TRequestResponse::Request::kType.id, std::move(rpc)});
     MG_ASSERT(got.second, "Callback for that message type already registered");
-    spdlog::trace(
+    memgraph::logging::Trace(
         "[RpcServer] register {} -> {}", TRequestResponse::Request::kType.name, TRequestResponse::Response::kType.name);
   }
 

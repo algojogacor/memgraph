@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include <functional>
+#include "logging/log.hpp"
 
 #include "storage/v2/async_indexer.hpp"
 #include "storage/v2/indices/property_path.hpp"
@@ -121,7 +122,8 @@ void AsyncIndexer::Start(std::stop_token stop_token, Storage *storage) {
                     [[maybe_unused]] auto result = storage_acc->CreateIndex(edge_type, cancel_check);
                   },
                   [&](LabelProperties &lp) {
-                    [[maybe_unused]] auto result = storage_acc->CreateIndex(lp.label, lp.properties, IndexOrder::ASC, cancel_check);
+                    [[maybe_unused]] auto result =
+                        storage_acc->CreateIndex(lp.label, lp.properties, IndexOrder::ASC, cancel_check);
                   },
                   [&](PropertyId property) {
                     [[maybe_unused]] auto result = storage_acc->CreateGlobalEdgeIndex(property, cancel_check);
@@ -140,8 +142,8 @@ void AsyncIndexer::Start(std::stop_token stop_token, Storage *storage) {
               it = next_it;
               backoff = std::chrono::milliseconds(100);
             } catch (ReadOnlyAccessTimeout &) {
-              spdlog::info("Async index creation, was blocked by other transactions. Retrying in {} ms.",
-                           backoff.count());
+              memgraph::logging::Info("Async index creation, was blocked by other transactions. Retrying in {} ms.",
+                                      backoff.count());
               std::this_thread::sleep_for(backoff);
               backoff = std::min(backoff * 3 / 2, std::chrono::milliseconds(10'000));  // 1.5x multiplier, max 10s
             }

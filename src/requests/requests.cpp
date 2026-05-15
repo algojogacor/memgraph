@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "requests/requests.hpp"
+#include "logging/log.hpp"
 
 #include <curl/curl.h>
 #include <curl/system.h>
@@ -65,7 +66,7 @@ auto DownloadProgressCb(void *clientp, curl_off_t dltotal, curl_off_t dlnow, cur
   // Don't log too often but log when the file download is complete
   if (counter() || dlnow == dltotal) {
     auto const progress = (100.0F * static_cast<float>(dlnow)) / static_cast<float>(dltotal);
-    spdlog::trace("Downloaded {:.2f}% of the file", progress);
+    memgraph::logging::Trace("Downloaded {:.2f}% of the file", progress);
   }
 
   auto const now = std::chrono::steady_clock::now();
@@ -147,7 +148,7 @@ bool CreateAndDownloadFile(const std::string &url, utils::FileUniquePtr file, ui
 
   curl = curl_easy_init();
   if (!curl) {
-    spdlog::error("requests: Couldn't init curl");
+    memgraph::logging::Error("requests: Couldn't init curl");
     return false;
   }
 
@@ -173,7 +174,7 @@ bool CreateAndDownloadFile(const std::string &url, utils::FileUniquePtr file, ui
   res = curl_easy_perform(curl);
 
   if (res != CURLE_OK) {
-    spdlog::error("Error happened while downloading file {}: {}", url, curl_easy_strerror(res));
+    memgraph::logging::Error("Error happened while downloading file {}: {}", url, curl_easy_strerror(res));
     return false;
   }
 

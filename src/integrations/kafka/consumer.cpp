@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "integrations/kafka/consumer.hpp"
+#include "logging/log.hpp"
 
 #include <fmt/format.h>
 #include <librdkafka/rdkafka.h>
@@ -64,14 +65,14 @@ std::expected<std::vector<Message>, std::string> GetBatch(RdKafka::KafkaConsumer
         break;
       case RdKafka::ERR__MAX_POLL_EXCEEDED:
         // max.poll.interval.ms reached between two calls of poll, just continue
-        spdlog::info("Consumer {} reached the max.poll.interval.ms.", info.consumer_name);
+        memgraph::logging::Info("Consumer {} reached the max.poll.interval.ms.", info.consumer_name);
         break;
       default:
         auto error = msg->errstr();
-        spdlog::warn("Unexpected error while consuming message in consumer {}, error: {} (code {})!",
-                     info.consumer_name,
-                     msg->errstr(),
-                     msg->err());
+        memgraph::logging::Warn("Unexpected error while consuming message in consumer {}, error: {} (code {})!",
+                                info.consumer_name,
+                                msg->errstr(),
+                                msg->err());
         return std::unexpected{std::move(error)};
     }
 
@@ -335,13 +336,14 @@ void Consumer::Check(std::optional<std::chrono::milliseconds> timeout, std::opti
                                          fmt::format("Couldn't save commited offsets: '{}'", RdKafka::err2str(err)));
     };
     if (const auto err = consumer_->assignment(last_assignment_); err != RdKafka::ERR_NO_ERROR) {
-      spdlog::warn("Saving the assignment of consumer {} failed: {}", info_.consumer_name, RdKafka::err2str(err));
+      memgraph::logging::Warn(
+          "Saving the assignment of consumer {} failed: {}", info_.consumer_name, RdKafka::err2str(err));
       throw_consumer_check_failed(err);
     }
     if (const auto err = consumer_->position(last_assignment_); err != RdKafka::ERR_NO_ERROR) {
-      spdlog::warn("Saving the position offset assignment of consumer {} failed: {}",
-                   info_.consumer_name,
-                   RdKafka::err2str(err));
+      memgraph::logging::Warn("Saving the position offset assignment of consumer {} failed: {}",
+                              info_.consumer_name,
+                              RdKafka::err2str(err));
       throw_consumer_check_failed(err);
     }
   } else {
@@ -376,7 +378,7 @@ void Consumer::Check(std::optional<std::chrono::milliseconds> timeout, std::opti
     try {
       check_consumer_function(batch);
     } catch (const std::exception &e) {
-      spdlog::warn("Kafka consumer {} check failed with error {}", info_.consumer_name, e.what());
+      memgraph::logging::Warn("Kafka consumer {} check failed with error {}", info_.consumer_name, e.what());
       throw ConsumerCheckFailedException(info_.consumer_name, e.what());
     }
   }
@@ -393,7 +395,8 @@ void Consumer::SetThreadFactory(ConsumerThreadFactory thread_factory) {
 void Consumer::event_cb(RdKafka::Event &event) {
   switch (event.type()) {
     case RdKafka::Event::Type::EVENT_ERROR:
-      spdlog::warn("Kafka consumer {} received an error: {}", info_.consumer_name, RdKafka::err2str(event.err()));
+      memgraph::logging::Warn(
+          "Kafka consumer {} received an error: {}", info_.consumer_name, RdKafka::err2str(event.err()));
       break;
     case RdKafka::Event::Type::EVENT_STATS:
     case RdKafka::Event::Type::EVENT_LOG:
@@ -432,15 +435,16 @@ void Consumer::StartConsuming() {
         continue;
       }
 
-      spdlog::info("Kafka consumer {} is processing a batch", info_.consumer_name);
+      memgraph::logging::Info("Kafka consumer {} is processing a batch", info_.consumer_name);
 
       try {
         TryToConsumeBatch(*consumer_, info_, consumer_function_, batch);
       } catch (const std::exception &e) {
-        spdlog::warn("Error happened in consumer {} while processing a batch: {}!", info_.consumer_name, e.what());
+        memgraph::logging::Warn(
+            "Error happened in consumer {} while processing a batch: {}!", info_.consumer_name, e.what());
         break;
       }
-      spdlog::info("Kafka consumer {} finished processing", info_.consumer_name);
+      memgraph::logging::Info("Kafka consumer {} finished processing", info_.consumer_name);
     }
     is_running_.store(false);
   });
@@ -476,11 +480,11 @@ void Consumer::StartConsumingWithLimit(uint64_t limit_batches, std::optional<std
     }
     ++batch_count;
 
-    spdlog::info("Kafka consumer {} is processing a batch", info_.consumer_name);
+    memgraph::logging::Info("Kafka consumer {} is processing a batch", info_.consumer_name);
 
     TryToConsumeBatch(*consumer_, info_, consumer_function_, batch);
 
-    spdlog::info("Kafka consumer {} finished processing", info_.consumer_name);
+    memgraph::logging::Info("Kafka consumer {} finished processing", info_.consumer_name);
   }
 }
 
@@ -518,7 +522,7 @@ void Consumer::ConsumerRebalanceCb::rebalance_cb(RdKafka::KafkaConsumer *consume
     return;
   }
   if (err != RdKafka::ERR__ASSIGN_PARTITIONS) {
-    spdlog::critical("Consumer {} received an unexpected error {}", consumer_name_, RdKafka::err2str(err));
+    memgraph::logging::Critical("Consumer {} received an unexpected error {}", consumer_name_, RdKafka::err2str(err));
     return;
   }
   if (offset_) {
@@ -529,11 +533,13 @@ void Consumer::ConsumerRebalanceCb::rebalance_cb(RdKafka::KafkaConsumer *consume
   }
   auto maybe_error = consumer->assign(partitions);
   if (maybe_error != RdKafka::ErrorCode::ERR_NO_ERROR) {
-    spdlog::warn("Assigning offset of consumer {} failed: {}", consumer_name_, RdKafka::err2str(maybe_error));
+    memgraph::logging::Warn(
+        "Assigning offset of consumer {} failed: {}", consumer_name_, RdKafka::err2str(maybe_error));
   }
   maybe_error = consumer->commitSync(partitions);
   if (maybe_error != RdKafka::ErrorCode::ERR_NO_ERROR) {
-    spdlog::warn("Commiting offsets of consumer {} failed: {}", consumer_name_, RdKafka::err2str(maybe_error));
+    memgraph::logging::Warn(
+        "Commiting offsets of consumer {} failed: {}", consumer_name_, RdKafka::err2str(maybe_error));
   }
 }
 

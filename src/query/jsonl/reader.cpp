@@ -14,6 +14,7 @@ module;
 #include <functional>
 #include <string>
 #include <utility>
+#include "logging/log.hpp"
 
 #include "ctre.hpp"
 #include "flags/run_time_configurable.hpp"
@@ -90,7 +91,7 @@ auto ToTypedValue(simdjson::ondemand::value &val, memgraph::utils::MemoryResourc
       return TypedValue{std::move(t_map), resource};
     }
     case json_type::unknown: {
-      spdlog::trace(
+      memgraph::logging::Trace(
           "Found bad token in the JSON document. Null value will be used instead of this token. The rest of the "
           "document will be processed normally.");
       return TypedValue{resource};

@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "rpc/file_replication_handler.hpp"
+#include "logging/log.hpp"
 
 #include <ranges>
 
@@ -55,7 +56,7 @@ std::optional<size_t> FileReplicationHandler::OpenFile(const uint8_t *data, size
   auto const save_dir = std::filesystem::path{FLAGS_data_directory} / gp_path / "tmp" / file_type;
 
   if (!utils::EnsureDir(save_dir)) {
-    spdlog::error("Failed to create directory {}", save_dir.string());
+    memgraph::logging::Error("Failed to create directory {}", save_dir.string());
     return std::nullopt;
   }
 
@@ -66,10 +67,10 @@ std::optional<size_t> FileReplicationHandler::OpenFile(const uint8_t *data, size
   auto const path = save_dir / filename;
   paths_.emplace_back(path);
 
-  spdlog::trace("Replica will be using file {} with size {}", path, file_size_);
+  memgraph::logging::Trace("Replica will be using file {} with size {}", path, file_size_);
   if (!file_.Open(path, utils::OutputFile::Mode::OVERWRITE_EXISTING)) {
-    spdlog::error("Failed to open file {}. This is not a fatal failure, main will retry the sending of the file.",
-                  path);
+    memgraph::logging::Error(
+        "Failed to open file {}. This is not a fatal failure, main will retry the sending of the file.", path);
     return std::nullopt;
   }
 
@@ -80,18 +81,18 @@ std::optional<size_t> FileReplicationHandler::OpenFile(const uint8_t *data, size
 
 bool FileReplicationHandler::ValidateFilename(std::optional<std::string> const &maybe_filename) {
   if (!maybe_filename) {
-    spdlog::error("Filename missing for the received file over the RPC");
+    memgraph::logging::Error("Filename missing for the received file over the RPC");
     return false;
   }
 
   auto const &filename = *maybe_filename;
   if (filename.empty()) {
-    spdlog::error("Filename is empty");
+    memgraph::logging::Error("Filename is empty");
     return false;
   }
 
   if (filename.contains('.')) {
-    spdlog::error("Filename must not contain extension: {}", filename);
+    memgraph::logging::Error("Filename must not contain extension: {}", filename);
     return false;
   }
 
@@ -100,7 +101,7 @@ bool FileReplicationHandler::ValidateFilename(std::optional<std::string> const &
 
 bool FileReplicationHandler::ValidateFileSize(std::optional<uint64_t> const &maybe_filesize) {
   if (!maybe_filesize) {
-    spdlog::error("Failed to read file size");
+    memgraph::logging::Error("Failed to read file size");
     return false;
   }
   return true;

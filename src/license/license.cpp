@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "license/license.hpp"
+#include "logging/log.hpp"
 
 #include <fmt/format.h>
 #include <spdlog/spdlog.h>
@@ -132,7 +133,7 @@ LicenseChecker global_license_checker;
 LicenseChecker::~LicenseChecker() { Finalize(); }
 
 void LicenseChecker::RevalidateLicense(utils::Settings &settings) {
-  spdlog::trace("License revalidation started");
+  memgraph::logging::Trace("License revalidation started");
 
   // Passing 0 to SetHardLimit restores the limit to maximum_hard_limit_ (the --memory-limit flag value)
   // if --memory-limit was configured. If it was not (maximum_hard_limit_ == 0), this is a no-op.
@@ -182,19 +183,20 @@ void LicenseChecker::RevalidateLicense(utils::Settings &settings) {
   auto try_add = [&](std::string_view key, std::string_view org, int priority, std::string_view source_name) {
     if (key.empty() && org.empty()) return;
     if (key.empty() || org.empty()) {
-      spdlog::warn("[{}] Both license key and organization name are required.", source_name);
+      memgraph::logging::Warn("[{}] Both license key and organization name are required.", source_name);
       return;
     }
     const auto maybe_license = GetLicense(key);
     if (!maybe_license) {
-      spdlog::warn("[{}] {}",
-                   source_name,
-                   LicenseCheckErrorToString(LicenseCheckError::INVALID_LICENSE_KEY_STRING, "Enterprise features"));
+      memgraph::logging::Warn(
+          "[{}] {}",
+          source_name,
+          LicenseCheckErrorToString(LicenseCheckError::INVALID_LICENSE_KEY_STRING, "Enterprise features"));
       return;
     }
     const auto check = IsValidLicenseInternal(*maybe_license, org);
     if (!check) {
-      spdlog::warn("[{}] {}", source_name, LicenseCheckErrorToString(check.error(), "Enterprise features"));
+      memgraph::logging::Warn("[{}] {}", source_name, LicenseCheckErrorToString(check.error(), "Enterprise features"));
       return;
     }
     valid_candidates.push_back({*maybe_license, std::string{key}, std::string{org}, priority});
@@ -210,7 +212,7 @@ void LicenseChecker::RevalidateLicense(utils::Settings &settings) {
   if (valid_candidates.empty()) {
     auto locked = previous_license_info_.Lock();
     if (*locked) {
-      spdlog::warn("No valid license found. Running in community mode.");
+      memgraph::logging::Warn("No valid license found. Running in community mode.");
       locked->reset();
     }
     is_valid_.store(false, std::memory_order_relaxed);
@@ -237,7 +239,7 @@ void LicenseChecker::RevalidateLicense(utils::Settings &settings) {
     auto locked = previous_license_info_.Lock();
     const bool changed = !*locked || (*locked)->license_key != winner.key || (*locked)->organization_name != winner.org;
     if (changed) {
-      spdlog::info("{} license is active.", LicenseTypeToString(winner.license.type));
+      memgraph::logging::Info("{} license is active.", LicenseTypeToString(winner.license.type));
       locked->emplace(winner.key, winner.org);
       (*locked)->is_valid = true;
       (*locked)->license = winner.license;
@@ -261,7 +263,7 @@ void LicenseChecker::EnableTesting(const LicenseType license_type) {
     (*locked)->license.type = license_type;
   }
   is_valid_.store(true, std::memory_order_release);
-  spdlog::info("The license type {} is set for testing.", LicenseTypeToString(license_type));
+  memgraph::logging::Info("The license type {} is set for testing.", LicenseTypeToString(license_type));
 }
 
 void LicenseChecker::DisableTesting() {
@@ -271,7 +273,7 @@ void LicenseChecker::DisableTesting() {
     locked->reset();
   }
   is_valid_.store(false, std::memory_order_relaxed);
-  spdlog::info("The license is disabled for testing.");
+  memgraph::logging::Info("The license is disabled for testing.");
 }
 
 void LicenseChecker::CheckEnvLicense(utils::Settings &settings) {
@@ -280,13 +282,13 @@ void LicenseChecker::CheckEnvLicense(utils::Settings &settings) {
   if (!license_key || !organization_name) {
     return;
   }
-  spdlog::warn("License info found in environment variables.");
+  memgraph::logging::Warn("License info found in environment variables.");
   env_license_info_.emplace(license_key, organization_name);
   RevalidateLicense(settings);
 }
 
 void LicenseChecker::SetCliLicense(std::string license_key, std::string organization_name, utils::Settings &settings) {
-  spdlog::warn("License info found in command-line flags.");
+  memgraph::logging::Warn("License info found in command-line flags.");
   cli_license_info_.emplace(std::move(license_key), std::move(organization_name));
   RevalidateLicense(settings);
 }

@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "auth/profiles/user_profiles.hpp"
+#include "logging/log.hpp"
 
 #include <mutex>
 #include <shared_mutex>
@@ -62,7 +63,7 @@ void from_json(const nlohmann::json &data, memgraph::auth::UserProfiles::Profile
 UserProfiles::UserProfiles(kvstore::KVStore &durability) : durability_{&durability} {
   // No migration at the moment
   if (!durability_->Put(kUserProfilesVersionKey, kUserProfilesVersion)) {
-    spdlog::error("Failed to put user profiles version");
+    memgraph::logging::Error("Failed to put user profiles version");
   }
 
   // Populate local storage
@@ -76,7 +77,7 @@ UserProfiles::UserProfiles(kvstore::KVStore &durability) : durability_{&durabili
       profile.name = name;
       profiles_.emplace(std::move(profile));
     } catch (const nlohmann::json::parse_error &) {
-      spdlog::warn("Failed to parse user profile {}", name);
+      memgraph::logging::Warn("Failed to parse user profile {}", name);
     }
   }
 };

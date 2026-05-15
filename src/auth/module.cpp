@@ -7,6 +7,7 @@
 //
 
 #include "auth/module.hpp"
+#include "logging/log.hpp"
 
 #include <fcntl.h>
 #include <poll.h>
@@ -327,13 +328,13 @@ bool Module::Startup() {
 
   // Setup communication pipes.
   if (pipe2(pipe_to_module_.data(), O_CLOEXEC) != 0) {
-    spdlog::error(
+    memgraph::logging::Error(
         "Couldn't create communication pipe from the database to "
         "the auth module!");
     return false;
   }
   if (pipe2(pipe_from_module_.data(), O_CLOEXEC) != 0) {
-    spdlog::error(
+    memgraph::logging::Error(
         "Couldn't create communication pipe from the auth module to "
         "the database!");
     close(pipe_to_module_[kPipeReadEnd]);
@@ -352,7 +353,7 @@ bool Module::Startup() {
   // Create the process.
   pid_ = clone(Target, stack_top, CLONE_VFORK, target_arguments_.get());
   if (pid_ == -1) {
-    spdlog::error("Couldn't start the auth module process!");
+    memgraph::logging::Error("Couldn't start the auth module process!");
     close(pipe_to_module_[kPipeReadEnd]);
     close(pipe_to_module_[kPipeWriteEnd]);
     close(pipe_from_module_[kPipeReadEnd]);
@@ -362,7 +363,7 @@ bool Module::Startup() {
 
   // Check whether the process is still running.
   if (waitpid(pid_, &status_, WNOHANG | WUNTRACED) != 0) {
-    spdlog::error("The auth module process couldn't be started!");
+    memgraph::logging::Error("The auth module process couldn't be started!");
     return false;
   }
 
@@ -387,7 +388,7 @@ nlohmann::json Module::Call(nlohmann::json params, int timeout_millisec) {
 
   // Put the request to the module process.
   if (!PutData(pipe_to_module_[kPipeWriteEnd], params, timeout_millisec)) {
-    spdlog::error("Couldn't send data to the auth module process!");
+    memgraph::logging::Error("Couldn't send data to the auth module process!");
     return {};
   }
 
@@ -396,11 +397,11 @@ nlohmann::json Module::Call(nlohmann::json params, int timeout_millisec) {
   for (int i = 0; i < kMaxResponses; ++i) {
     auto ret = GetData(pipe_from_module_[kPipeReadEnd], timeout_millisec);
     if (ret.is_null()) {
-      spdlog::error("Couldn't receive data from the auth module process!");
+      memgraph::logging::Error("Couldn't receive data from the auth module process!");
       return {};
     }
     if (!ret.is_object()) {
-      spdlog::error("Data received from the auth module is of wrong type!");
+      memgraph::logging::Error("Data received from the auth module is of wrong type!");
       continue;
     }
     if (ret.contains(kMemgraphCallIdKey) && ret[kMemgraphCallIdKey].is_number_integer() &&
@@ -408,9 +409,10 @@ nlohmann::json Module::Call(nlohmann::json params, int timeout_millisec) {
       return ret;
     }
     // Stale or wrong call_id, skip and read next response
-    spdlog::trace("Auth module response had wrong memgraph_call_id, reading next.");
+    memgraph::logging::Trace("Auth module response had wrong memgraph_call_id, reading next.");
   }
-  spdlog::error("Auth module did not return response with matching memgraph_call_id after {} attempts.", kMaxResponses);
+  memgraph::logging::Error("Auth module did not return response with matching memgraph_call_id after {} attempts.",
+                           kMaxResponses);
   return {};
 }
 
@@ -420,7 +422,7 @@ void Module::Shutdown() {
   // Try to terminate the process gracefully in `kTerminateTimeoutSec`.
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   for (int i = 0; i < kTerminateTimeoutSec * 10; ++i) {
-    spdlog::info("Terminating the auth module process with pid {}", pid_);
+    memgraph::logging::Info("Terminating the auth module process with pid {}", pid_);
     kill(pid_, SIGTERM);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     int ret = waitpid(pid_, &status_, WNOHANG | WUNTRACED);
@@ -431,7 +433,7 @@ void Module::Shutdown() {
 
   // If the process is still alive, kill it and wait for it to die.
   if (waitpid(pid_, &status_, WNOHANG | WUNTRACED) == 0) {
-    spdlog::warn("Killing the auth module process with pid {}", pid_);
+    memgraph::logging::Warn("Killing the auth module process with pid {}", pid_);
     kill(pid_, SIGKILL);
     waitpid(pid_, &status_, 0);
   }

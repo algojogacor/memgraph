@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "license/license_sender.hpp"
+#include "logging/log.hpp"
 
 #include <spdlog/spdlog.h>
 #include <algorithm>
@@ -86,7 +87,7 @@ void LicenseInfoSender::SendData() {
   if (!requests::RequestPostJson(url_,
                                  data,
                                  /* timeout_in_seconds = */ 2 * 60)) {
-    spdlog::trace("Cannot send license information, enable {} availability!", url_);
+    memgraph::logging::Trace("Cannot send license information, enable {} availability!", url_);
   }
 }
 

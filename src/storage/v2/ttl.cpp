@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "storage/v2/ttl.hpp"
+#include "logging/log.hpp"
 #include "memory/db_arena_fwd.hpp"
 
 #include "storage/v2/access_type.hpp"
@@ -176,7 +177,7 @@ void TTL::Configure(bool should_run_edge_ttl) {
 
   if (info_.should_run_edge_ttl && (storage_ptr_->GetStorageMode() == StorageMode::ON_DISK_TRANSACTIONAL ||
                                     !storage_ptr_->config_.salient.items.properties_on_edges)) {
-    spdlog::warn("Memgraph configuration doesn't support edge TTL. Edge TTL will be disabled.");
+    memgraph::logging::Warn("Memgraph configuration doesn't support edge TTL. Edge TTL will be disabled.");
     info_.should_run_edge_ttl = false;
   }
 
@@ -190,8 +191,8 @@ void TTL::Configure(bool should_run_edge_ttl) {
     const auto now = std::chrono::system_clock::now();
     const auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch());
 
-    spdlog::trace("Running TTL at {}",
-                  std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count());
+    memgraph::logging::Trace("Running TTL at {}",
+                             std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count());
 
     const auto ttl_label = storage_ptr_->NameToLabel("TTL");
     const auto ttl_property = storage_ptr_->NameToProperty("ttl");
@@ -214,7 +215,7 @@ void TTL::Configure(bool should_run_edge_ttl) {
         bool const missing_edge_index = !batch_accessor->EdgePropertyIndexExists(ttl_property);
 
         if (missing_lp_index) {
-          spdlog::warn(
+          memgraph::logging::Warn(
               "TTL requires label+property index on :TTL(ttl) but it doesn't exist. Will create it automatically.");
           std::vector<PropertyPath> ttl_property_path = {storage_ptr_->NameToProperty("ttl")};
 
@@ -231,7 +232,7 @@ void TTL::Configure(bool should_run_edge_ttl) {
         }
 
         if (info_.should_run_edge_ttl && missing_edge_index) {
-          spdlog::warn(
+          memgraph::logging::Warn(
               "TTL requires edge property index on ttl property but it doesn't exist. Will create it automatically.");
           if (storage_ptr_->GetStorageMode() == StorageMode::IN_MEMORY_TRANSACTIONAL) {
             auto *mem_storage = static_cast<storage::InMemoryStorage *>(storage_ptr_);
@@ -308,7 +309,7 @@ void TTL::Configure(bool should_run_edge_ttl) {
 
           finished_edge = edges_to_delete.size() < batch_size;
         } else if (!lp_index_ready || (info_.should_run_edge_ttl && !edge_index_ready)) {
-          spdlog::info("TTL indices not ready, skipping this run.");
+          memgraph::logging::Info("TTL indices not ready, skipping this run.");
         } else {
           DMG_ASSERT(false, "Unsupported TTL state.");
         }
@@ -331,15 +332,15 @@ void TTL::Configure(bool should_run_edge_ttl) {
         memgraph::metrics::IncrementCounter(memgraph::metrics::DeletedEdges, n_edges_deleted);
 
       } catch (const std::exception &e) {
-        spdlog::trace("TTL error; retrying later: {}", e.what());
+        memgraph::logging::Trace("TTL error; retrying later: {}", e.what());
         std::this_thread::sleep_for(std::chrono::milliseconds{10});
       }
 
       std::this_thread::yield();
     }
 
-    spdlog::trace("Finished TTL run from {}",
-                  std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count());
+    memgraph::logging::Trace("Finished TTL run from {}",
+                             std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count());
   };
 
   // Starts the TTL job, but will not run until the period is set

@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "telemetry/telemetry.hpp"
+#include "logging/log.hpp"
 
 #include <chrono>
 #include <filesystem>
@@ -144,7 +145,7 @@ void Telemetry::CollectData(const std::string &event) {
           data[name] = std::move(*res);
         }
       } catch (std::exception &e) {
-        spdlog::warn(fmt::format(
+        memgraph::logging::Warn(fmt::format(
             "Unknown exception occurred on in telemetry server {}, please contact support on https://memgr.ph/unknown ",
             e.what()));
       }

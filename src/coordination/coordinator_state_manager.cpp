@@ -12,6 +12,7 @@
 #ifdef MG_ENTERPRISE
 
 #include "coordination/coordinator_state_manager.hpp"
+#include "logging/log.hpp"
 
 #include <fmt/format.h>
 #include <spdlog/spdlog.h>
@@ -147,7 +148,7 @@ CoordinatorStateManager::CoordinatorStateManager(CoordinatorStateManagerConfig c
 void CoordinatorStateManager::TryUpdateClusterConfigFromDisk() {
   auto const maybe_cluster_config = durability_.Get(kClusterConfigKey);
   if (!maybe_cluster_config) {
-    spdlog::trace("Didn't find anything stored on disk for cluster config.");
+    memgraph::logging::Trace("Didn't find anything stored on disk for cluster config.");
     return;
   }
   try {
@@ -157,7 +158,7 @@ void CoordinatorStateManager::TryUpdateClusterConfigFromDisk() {
     LOG_FATAL("Error occurred while parsing cluster config {}", e.what());
   }
 
-  spdlog::trace("Loaded cluster config from the durable storage.");
+  memgraph::logging::Trace("Loaded cluster config from the durable storage.");
 }
 
 // Called when application is starting up
@@ -184,14 +185,14 @@ auto CoordinatorStateManager::save_config(cluster_config const &config) -> void 
 }
 
 void CoordinatorStateManager::NotifyObserver(std::vector<CoordinatorInstanceAux> const &coord_instances_aux) const {
-  spdlog::trace("Notifying observer about cluster config change.");
+  memgraph::logging::Trace("Notifying observer about cluster config change.");
   if (observer_) {
     observer_->Update(coord_instances_aux);
   }
 }
 
 auto CoordinatorStateManager::save_state(srv_state const &state) -> void {
-  spdlog::trace("Saving server state in coordinator state manager.");
+  memgraph::logging::Trace("Saving server state in coordinator state manager.");
 
   nlohmann::json json;
   to_json(json, state);
@@ -202,7 +203,7 @@ auto CoordinatorStateManager::save_state(srv_state const &state) -> void {
 }
 
 auto CoordinatorStateManager::read_state() -> std::shared_ptr<srv_state> {
-  spdlog::trace("Reading server state in coordinator state manager.");
+  memgraph::logging::Trace("Reading server state in coordinator state manager.");
 
   auto const maybe_server_state = durability_.Get(kServerStateKey);
   if (!maybe_server_state) {
@@ -227,7 +228,7 @@ auto CoordinatorStateManager::server_id() -> int32 { return my_id_; }
 
 auto CoordinatorStateManager::system_exit(int const exit_code) -> void {
   try {
-    spdlog::critical("NuRaft triggered system exit with code: {}", exit_code);
+    memgraph::logging::Critical("NuRaft triggered system exit with code: {}", exit_code);
     // NOLINTNEXTLINE(bugprone-empty-catch)
   } catch (std::exception const & /*e*/) {
   }

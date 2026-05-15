@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "communication/websocket/session.hpp"
+#include "logging/log.hpp"
 
 #include <functional>
 #include <memory>
@@ -29,7 +30,7 @@
 namespace memgraph::communication::websocket {
 namespace {
 void LogError(const boost::beast::error_code ec, const std::string_view what) {
-  spdlog::warn("Websocket session failed on {}: {}", what, ec.message());
+  memgraph::logging::Warn("Websocket session failed on {}: {}", what, ec.message());
 }
 }  // namespace
 
@@ -60,7 +61,7 @@ bool Session::Run() {
       boost::beast::get_lowest_layer(*ssl_ws).expires_after(std::chrono::seconds(30));
       ssl_ws->next_layer().handshake(boost::asio::ssl::stream_base::server);
     } catch (const boost::system::system_error &e) {
-      spdlog::warn("Failed on SSL handshake: {}", e.what());
+      memgraph::logging::Warn("Failed on SSL handshake: {}", e.what());
       return false;
     }
   }
@@ -208,12 +209,12 @@ void Session::OnRead(const boost::beast::error_code ec, const size_t /*bytes_tra
       DoWrite();
     } catch (const nlohmann::json::out_of_range &out_of_range) {
       const auto err_msg = fmt::format("Invalid JSON for authentication received: {}!", out_of_range.what());
-      spdlog::error(err_msg);
+      memgraph::logging::Error(err_msg);
       std::invoke(auth_failed, err_msg);
       return;
     } catch (const nlohmann::json::parse_error &parse_error) {
       const auto err_msg = fmt::format("Cannot parse JSON for WebSocket authentication: {}!", parse_error.what());
-      spdlog::error(err_msg);
+      memgraph::logging::Error(err_msg);
       std::invoke(auth_failed, err_msg);
       return;
     }

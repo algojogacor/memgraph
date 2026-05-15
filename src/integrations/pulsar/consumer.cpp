@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "integrations/pulsar/consumer.hpp"
+#include "logging/log.hpp"
 
 #include <fmt/format.h>
 #include <pulsar/Client.h>
@@ -86,7 +87,7 @@ std::expected<std::vector<Message>, std::string> GetBatch(TConsumer &consumer, c
         }
         break;
       default:
-        spdlog::warn(fmt::format(
+        memgraph::logging::Warn(fmt::format(
             "Unexpected error while consuming message from consumer {}, error: {}", info.consumer_name, result));
         return std::unexpected{pulsar_client::strResult(result)};
     }
@@ -104,7 +105,7 @@ class SpdlogLogger : public pulsar_client::Logger {
   bool isEnabled(Level /*level*/) override { return spdlog::should_log(spdlog::level::trace); }
 
   void log(Level /*level*/, int /*line*/, const std::string &message) override {
-    spdlog::trace("[Pulsar] {}", message);
+    memgraph::logging::Trace("[Pulsar] {}", message);
   }
 };
 
@@ -126,7 +127,7 @@ void TryToConsumeBatch(TConsumer &consumer, const ConsumerInfo &info, const Cons
 
   auto has_message_failed = [&consumer, &info, &last_message_id, &message_getter](const auto &message) {
     if (const auto result = consumer.acknowledge(message_getter(message)); result != pulsar_client::ResultOk) {
-      spdlog::warn("Acknowledging a message of consumer {} failed: {}", info.consumer_name, result);
+      memgraph::logging::Warn("Acknowledging a message of consumer {} failed: {}", info.consumer_name, result);
       return true;
     }
     last_message_id = message_getter(message).getMessageId();
@@ -285,7 +286,7 @@ void Consumer::Check(std::optional<std::chrono::milliseconds> timeout, std::opti
     try {
       check_consumer_function(batch);
     } catch (const std::exception &e) {
-      spdlog::warn("Pulsar consumer {} check failed with error {}", info_.consumer_name, e.what());
+      memgraph::logging::Warn("Pulsar consumer {} check failed with error {}", info_.consumer_name, e.what());
       throw ConsumerCheckFailedException(info_.consumer_name, e.what());
     }
   }
@@ -319,7 +320,7 @@ void Consumer::StartConsuming() {
         continue;
       }
 
-      spdlog::info("Pulsar consumer {} is processing a batch", info_.consumer_name);
+      memgraph::logging::Info("Pulsar consumer {} is processing a batch", info_.consumer_name);
 
       try {
         TryToConsumeBatch(consumer_,
@@ -329,11 +330,12 @@ void Consumer::StartConsuming() {
                           batch,
                           [&](const Message &message) -> const pulsar_client::Message & { return message.message_; });
       } catch (const std::exception &e) {
-        spdlog::warn("Error happened in consumer {} while processing a batch: {}!", info_.consumer_name, e.what());
+        memgraph::logging::Warn(
+            "Error happened in consumer {} while processing a batch: {}!", info_.consumer_name, e.what());
         break;
       }
 
-      spdlog::info("Pulsar consumer {} finished processing", info_.consumer_name);
+      memgraph::logging::Info("Pulsar consumer {} finished processing", info_.consumer_name);
     }
     is_running_.store(false);
   });
@@ -367,7 +369,7 @@ void Consumer::StartConsumingWithLimit(uint64_t limit_batches, std::optional<std
     }
     ++batch_count;
 
-    spdlog::info("Pulsar consumer {} is processing a batch", info_.consumer_name);
+    memgraph::logging::Info("Pulsar consumer {} is processing a batch", info_.consumer_name);
 
     TryToConsumeBatch(consumer_,
                       info_,
@@ -376,7 +378,7 @@ void Consumer::StartConsumingWithLimit(uint64_t limit_batches, std::optional<std
                       batch,
                       [](const Message &message) -> const pulsar_client::Message & { return message.message_; });
 
-    spdlog::info("Pulsar consumer {} finished processing", info_.consumer_name);
+    memgraph::logging::Info("Pulsar consumer {} finished processing", info_.consumer_name);
   }
 }
 
