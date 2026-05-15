@@ -129,6 +129,7 @@ LOAD                    : L O A D ;
 LOCALDATETIME           : L O C A L D A T E T I M E ;
 LOCALTIME               : L O C A L T I M E ;
 LOCK                    : L O C K ;
+LOG                     : L O G ;
 MAIN                    : M A I N ;
 MAP                     : M A P ;
 MAPPINGS                : M A P P I N G S ;

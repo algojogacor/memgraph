@@ -1354,6 +1354,11 @@ class CypherMainVisitor : public antlropencypher::MemgraphCypherBaseVisitor {
   antlrcpp::Any visitSetSessionTraceQuery(MemgraphCypher::SetSessionTraceQueryContext *ctx) override;
 
   /**
+   * @return SetSessionLogLevelQuery*
+   */
+  antlrcpp::Any visitSetSessionLogLevelQuery(MemgraphCypher::SetSessionLogLevelQueryContext *ctx) override;
+
+  /**
    * @return std::pair<std::string, UserProfileQuery::LimitValueResult>
    */
   antlrcpp::Any visitLimitKV(MemgraphCypher::LimitKVContext *ctx) override;

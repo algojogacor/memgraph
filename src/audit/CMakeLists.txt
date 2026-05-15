@@ -6,4 +6,4 @@ find_package(gflags REQUIRED)
 add_library(mg-audit STATIC ${audit_src_files})
 target_link_libraries(mg-audit
     PUBLIC mg-communication
-    PRIVATE nlohmann_json::nlohmann_json gflags fmt::fmt mg-utils)
+    PRIVATE nlohmann_json::nlohmann_json gflags fmt::fmt mg-utils mg-logging)

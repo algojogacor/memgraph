@@ -4430,6 +4430,17 @@ antlrcpp::Any CypherMainVisitor::visitSetSessionTraceQuery(MemgraphCypher::SetSe
   return session_trace_query;
 }
 
+antlrcpp::Any CypherMainVisitor::visitSetSessionLogLevelQuery(MemgraphCypher::SetSessionLogLevelQueryContext *ctx) {
+  auto *q = storage_->Create<SessionLogLevelQuery>();
+  if (!ctx->settingValue()->literal()->StringLiteral()) {
+    throw SemanticException("Log level should be a string literal");
+  }
+  q->level_ = std::any_cast<Expression *>(ctx->settingValue()->accept(this));
+  MG_ASSERT(q->level_);
+  query_ = q;
+  return q;
+}
+
 antlrcpp::Any CypherMainVisitor::visitLimitKV(MemgraphCypher::LimitKVContext *ctx) {
   auto key = utils::ToLowerCase(std::any_cast<std::string>(ctx->key->accept(this)));
   auto value = VisitLimitValue(ctx->val, this);

@@ -3248,7 +3248,7 @@ std::optional<plan::ProfilingStatsWithTotalTime> PullPlan::Pull(AnyStream *strea
   summary->insert_or_assign("plan_execution_time", execution_time_.count());
   summary->insert_or_assign("number_of_hops", ctx_.number_of_hops);
 
-  memgraph::logging::Trace("Query execution time: {}", execution_time_.count());
+  memgraph::logging::EmitSessionTraceEvent(fmt::format("Query execution time: {}", execution_time_.count()));
 
   memgraph::metrics::Measure(memgraph::metrics::QueryExecutionLatency_us,
                              std::chrono::duration_cast<std::chrono::microseconds>(execution_time_).count());
@@ -3262,7 +3262,7 @@ std::optional<plan::ProfilingStatsWithTotalTime> PullPlan::Pull(AnyStream *strea
     for (size_t i = 0; i < ctx_.execution_stats.counters.size(); ++i) {
       auto key = ExecutionStatsKeyToString(ExecutionStats::Key(i));
       stats.emplace(key, ctx_.execution_stats.counters[i]);
-      memgraph::logging::Trace("{}: {}", key, ctx_.execution_stats.counters[i]);
+      memgraph::logging::EmitSessionTraceEvent(fmt::format("{}: {}", key, ctx_.execution_stats.counters[i]));
     }
     summary->insert_or_assign("stats", std::move(stats));
   }
@@ -3276,7 +3276,8 @@ std::optional<plan::ProfilingStatsWithTotalTime> PullPlan::Pull(AnyStream *strea
 
   auto stats_and_total_time = GetStatsWithTotalTime(ctx_);
 
-  memgraph::logging::Trace("Profile plan\n{}", ProfilingStatsToJson(stats_and_total_time).dump());
+  memgraph::logging::EmitSessionTraceEvent(
+      fmt::format("Profile plan\n{}", ProfilingStatsToJson(stats_and_total_time).dump()));
 
   return stats_and_total_time;
 }
@@ -8132,14 +8133,12 @@ PreparedQuery PrepareSessionTraceQuery(ParsedQuery parsed_query, CurrentDB &curr
   handler = [interpreter, enabled = session_trace_query->enabled_] {
     std::vector<std::vector<TypedValue>> results;
 
-    // ON = lower this session's level to trace; OFF = follow global level
-    // again. The new wrapper consults the session context installed by the
-    // RAII guard at Session::Execute() entry.
+    // Session trace is the debugging tool; toggles the structured query-trace
+    // event stream. Independent of the per-session log level set by
+    // SET SESSION LOG LEVEL TO '<level>'.
+    interpreter->session_log_ctx_.trace_enabled.store(enabled, std::memory_order_relaxed);
     if (enabled) {
-      interpreter->session_log_ctx_.level.store(spdlog::level::trace, std::memory_order_relaxed);
       interpreter->LogQueryMessage("Session initialized!");
-    } else {
-      interpreter->session_log_ctx_.level.store(memgraph::logging::GetGlobalLevel(), std::memory_order_relaxed);
     }
 
     results.emplace_back(std::vector<TypedValue>{TypedValue(interpreter->session_info_.uuid)});
@@ -8159,6 +8158,50 @@ PreparedQuery PrepareSessionTraceQuery(ParsedQuery parsed_query, CurrentDB &curr
           pull_plan = std::make_shared<PullPlanVector>(std::move(results));
         }
 
+        if (pull_plan->Pull(stream, n)) {
+          return action;
+        }
+        return std::nullopt;
+      },
+      .rw_type = RWType::NONE};
+}
+
+PreparedQuery PrepareSessionLogLevelQuery(ParsedQuery parsed_query, Interpreter *interpreter) {
+  auto *log_level_query = utils::Downcast<SessionLogLevelQuery>(parsed_query.query);
+  MG_ASSERT(log_level_query);
+
+  // Grammar guarantees a string literal (visitor rejects non-strings).
+  auto *literal = utils::Downcast<PrimitiveLiteral>(log_level_query->level_);
+  if (literal == nullptr || !literal->value_.IsString()) {
+    throw QueryException("Log level must be a string literal");
+  }
+  const auto &level_str = literal->value_.ValueString();
+  const auto level_enum = memgraph::logging::LogLevelToEnum(level_str);
+  if (!level_enum) {
+    throw QueryException(
+        fmt::format("Invalid log level '{}'. Allowed values: {}", level_str, memgraph::logging::GetAllowedLogLevels()));
+  }
+
+  std::function<std::pair<std::vector<std::vector<TypedValue>>, QueryHandlerResult>()> handler;
+  handler = [interpreter, level = *level_enum] {
+    interpreter->session_log_ctx_.level.store(level, std::memory_order_relaxed);
+    std::vector<std::vector<TypedValue>> results;
+    results.emplace_back(std::vector<TypedValue>{TypedValue(interpreter->session_info_.uuid)});
+    return std::pair{results, QueryHandlerResult::NOTHING};
+  };
+
+  return PreparedQuery{
+      .header = {"session uuid"},
+      .privileges = std::move(parsed_query.required_privileges),
+      .query_handler = [handler = std::move(handler),
+                        action = QueryHandlerResult::NOTHING,
+                        pull_plan = std::shared_ptr<PullPlanVector>(nullptr)](
+                           AnyStream *stream, std::optional<int> n) mutable -> std::optional<QueryHandlerResult> {
+        if (!pull_plan) {
+          auto [results, action_on_complete] = handler();
+          action = action_on_complete;
+          pull_plan = std::make_shared<PullPlanVector>(std::move(results));
+        }
         if (pull_plan->Pull(stream, n)) {
           return action;
         }
@@ -9192,6 +9235,8 @@ struct QueryTransactionRequirements : QueryVisitor<void> {
 
   void Visit(SessionTraceQuery & /*unused*/) override {}
 
+  void Visit(SessionLogLevelQuery & /*unused*/) override {}
+
   void Visit(ReloadSSLQuery & /*unused*/) override { /*No need for storage*/ }
 
   // Some queries require an active transaction in order to be prepared.
@@ -9741,6 +9786,8 @@ Interpreter::PrepareResult Interpreter::Prepare(ParseRes parse_res, UserParamete
       );
     } else if (utils::Downcast<SessionTraceQuery>(parsed_query.query)) {
       prepared_query = PrepareSessionTraceQuery(std::move(parsed_query), current_db_, this);
+    } else if (utils::Downcast<SessionLogLevelQuery>(parsed_query.query)) {
+      prepared_query = PrepareSessionLogLevelQuery(std::move(parsed_query), this);
     } else if (utils::Downcast<UserProfileQuery>(parsed_query.query)) {
       prepared_query = PrepareUserProfileQuery(std::move(parsed_query), interpreter_context_, this);
     } else if (utils::Downcast<TenantProfileQuery>(parsed_query.query)) {
@@ -10331,7 +10378,7 @@ void Interpreter::Commit() {
     throw ReplicationException(*replication_error_msg);
   }
 
-  memgraph::logging::Trace("Commit successfully finished!");
+  memgraph::logging::EmitSessionTraceEvent("Commit successfully finished!");
 }
 
 void Interpreter::AdvanceCommand() {
@@ -10412,15 +10459,17 @@ void Interpreter::ResetUser() {
 }
 
 bool Interpreter::IsQueryLoggingActive() const {
-  // "Active" = this session has lowered its level below the global gate, i.e.
-  // the user explicitly bumped verbosity for this session.
-  return session_log_ctx_.level.load(std::memory_order_relaxed) < memgraph::logging::GetGlobalLevel();
+  // "Active" = the user has run SET SESSION TRACE ON for this session,
+  // turning on the structured query-trace debugging stream. Independent of
+  // per-session log level.
+  return session_log_ctx_.trace_enabled.load(std::memory_order_relaxed);
 }
 
 void Interpreter::LogQueryMessage(std::string message) {
-  // Goes through the wrapper which consults the per-thread session context
-  // (installed at Session::Execute() entry) for level + tag prefix.
-  memgraph::logging::Trace("{}", message);
+  // Session trace stream. Bypasses the per-session level filter — when
+  // session trace is on, every interpreter-emitted event lands in the main
+  // log with the session prefix; when off, nothing is emitted.
+  memgraph::logging::EmitSessionTraceEvent(message);
 }
 
 }  // namespace memgraph::query

@@ -13,6 +13,7 @@
 
 #include <fmt/format.h>
 #include <spdlog/common.h>
+#include <spdlog/spdlog.h>
 #include <atomic>
 #include <string>
 
@@ -23,9 +24,19 @@ namespace memgraph::logging {
 // session's work; read by the wrapper under the RAII guard installed by
 // Session::Execute().
 struct SessionLogContext {
-  // Per-session level override. Initialized at session create to the global
-  // level. SET SESSION TRACE ON stores trace; OFF restores the global level.
+  // Per-session level override. Defaults to off, meaning "follow the global
+  // level". When SET SESSION LOG LEVEL TO '<level>' is run, this is set and
+  // takes precedence over the global level for any log call on a thread that
+  // has installed this context via ScopedSessionLog.
   std::atomic<spdlog::level::level_enum> level{spdlog::level::off};
+
+  // Independent of level. Controls whether structured query-trace events
+  // (parse/plan/exec/commit markers in the interpreter) are emitted at all.
+  // When true, EmitSessionTraceEvent() emits unconditionally regardless of
+  // the level gate above. SET SESSION TRACE ON toggles this; the old
+  // QueryLogger semantics — trace as a debugging stream, not a level — are
+  // preserved.
+  std::atomic<bool> trace_enabled{false};
 
   std::string session_uuid;
   std::string user;
@@ -79,5 +90,21 @@ class ScopedSessionLog {
  private:
   SessionLogContext *prev_;
 };
+
+// Emit a structured query-trace event. Distinct from the level-gated wrapper:
+// these events are a debugging tool (SET SESSION TRACE ON), not regular log
+// output, so they bypass the per-session level filter and always emit when
+// the session has trace enabled. Spdlog's logger is pinned to trace so the
+// underlying write is unconditional from spdlog's perspective.
+inline void EmitSessionTraceEvent(std::string_view msg) {
+  auto *ctx = ScopedSessionLog::Current();
+  if (ctx == nullptr || !ctx->trace_enabled.load(std::memory_order_relaxed)) return;
+  auto prefix = ctx->Prefix();
+  if (prefix.empty()) {
+    spdlog::default_logger_raw()->log(spdlog::level::trace, msg);
+  } else {
+    spdlog::default_logger_raw()->log(spdlog::level::trace, "{} {}", prefix, msg);
+  }
+}
 
 }  // namespace memgraph::logging

@@ -4385,6 +4385,28 @@ class SessionTraceQuery : public memgraph::query::Query {
   friend class AstStorage;
 };
 
+class SessionLogLevelQuery : public memgraph::query::Query {
+ public:
+  static const utils::TypeInfo kType;
+
+  const utils::TypeInfo &GetTypeInfo() const override { return kType; }
+
+  SessionLogLevelQuery() = default;
+
+  DEFVISITABLE(QueryVisitor<void>);
+
+  Expression *level_{nullptr};
+
+  SessionLogLevelQuery *Clone(AstStorage *storage) const override {
+    auto *object = storage->Create<SessionLogLevelQuery>();
+    object->level_ = level_ ? level_->Clone(storage) : nullptr;
+    return object;
+  }
+
+ private:
+  friend class AstStorage;
+};
+
 class DescriptionQuery : public memgraph::query::Query {
  public:
   static const utils::TypeInfo kType;

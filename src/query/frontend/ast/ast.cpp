@@ -461,6 +461,10 @@ constexpr utils::TypeInfo query::TtlQuery::kType{
 constexpr utils::TypeInfo query::SessionTraceQuery::kType{
     .id = utils::TypeId::AST_SESSION_TRACE_QUERY, .name = "SessionTraceQuery", .superclass = &query::Query::kType};
 
+constexpr utils::TypeInfo query::SessionLogLevelQuery::kType{.id = utils::TypeId::AST_SESSION_LOG_LEVEL_QUERY,
+                                                             .name = "SessionLogLevelQuery",
+                                                             .superclass = &query::Query::kType};
+
 constexpr utils::TypeInfo query::UserProfileQuery::kType{
     .id = utils::TypeId::AST_USER_PROFILE_QUERY, .name = "UserProfileQuery", .superclass = &query::Query::kType};
 
