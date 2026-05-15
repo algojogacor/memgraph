@@ -8,7 +8,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
-#include "flags/logging.hpp"
+#include "logging/init.hpp"
 
 #include <spdlog/async_logger.h>
 #include <spdlog/logger.h>
@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <ctime>
 #include <expected>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <limits>
@@ -25,7 +26,6 @@
 #include <utility>
 #include <vector>
 
-#include "flags/run_time_configurable.hpp"
 #include "gflags/gflags.h"
 #include "spdlog/async.h"
 #include "spdlog/common.h"
@@ -47,10 +47,17 @@ constexpr auto kAsync = "async";
 spdlog::level::level_enum ParseLogLevel() {
   std::string ll;
   gflags::GetCommandLineOption("log_level", &ll);
-  const auto log_level = memgraph::flags::LogLevelToEnum(ll);
+  const auto log_level = memgraph::logging::LogLevelToEnum(ll);
   MG_ASSERT(log_level, "Invalid log level");
   return *log_level;
 }
+
+bool GetAlsoLogToStderr() {
+  std::string s;
+  gflags::GetCommandLineOption("also_log_to_stderr", &s);
+  return s == "true";
+}
+
 }  // namespace
 
 // Logging flags
@@ -80,7 +87,8 @@ inline constexpr std::array log_level_mappings{std::pair{"TRACE"sv, spdlog::leve
                                                std::pair{"ERROR"sv, spdlog::level::err},
                                                std::pair{"CRITICAL"sv, spdlog::level::critical}};
 
-namespace memgraph::flags {
+namespace memgraph::logging {
+
 const std::string &GetAllowedLogLevels() {
   static const std::string allowed_levels = memgraph::utils::GetAllowedEnumValuesString(log_level_mappings);
   return allowed_levels;
@@ -113,7 +121,7 @@ std::optional<spdlog::level::level_enum> LogLevelToEnum(std::string_view value) 
 // This allows us MT safe
 void InitializeLogger() {
   // stderr subsink
-  stderr_sink()->set_level(run_time::GetAlsoLogToStderr() ? spdlog::level::trace : spdlog::level::off);
+  stderr_sink()->set_level(GetAlsoLogToStderr() ? spdlog::level::trace : spdlog::level::off);
 
   std::vector<spdlog::sink_ptr> sub_sinks;
   sub_sinks.emplace_back(stderr_sink());
@@ -195,4 +203,4 @@ void CleanLogsDir() {
   }
 }
 
-}  // namespace memgraph::flags
+}  // namespace memgraph::logging

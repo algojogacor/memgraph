@@ -14,7 +14,6 @@ target_sources(mg-flags
         experimental.hpp
         general.hpp
         isolation_level.hpp
-        logging.hpp
         memory_limit.hpp
         replication.hpp
         run_time_configurable.hpp
@@ -30,7 +29,6 @@ target_sources(mg-flags
         experimental.cpp
         general.cpp
         isolation_level.cpp
-        logging.cpp
         memory_limit.cpp
         replication.cpp
         run_time_configurable.cpp
@@ -44,5 +42,5 @@ find_package(range-v3 REQUIRED)
 
 
 target_link_libraries(mg-flags
-        PUBLIC spdlog::spdlog mg-settings mg-utils gflags
+        PUBLIC spdlog::spdlog mg-settings mg-utils mg-logging gflags
         PRIVATE range-v3::range-v3 croncpp::croncpp mg-license)

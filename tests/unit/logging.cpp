@@ -9,7 +9,7 @@
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
 
-#include "flags/logging.hpp"
+#include "logging/init.hpp"
 
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
@@ -68,7 +68,7 @@ class CleanLogsDirTest : public ::testing::Test {
 TEST_F(CleanLogsDirTest, EmptyLogFileFlag) {
   FLAGS_log_file = "";
   CreateFile("old.log", std::chrono::days{10});
-  memgraph::flags::CleanLogsDir();
+  memgraph::logging::CleanLogsDir();
   EXPECT_EQ(RemainingFiles().size(), 1);
 }
 
@@ -80,7 +80,7 @@ TEST_F(CleanLogsDirTest, AllFilesWithinRetention) {
   CreateFile("recent_2.log", std::chrono::days{1});
   CreateFile("recent_3.log", std::chrono::days{0});
 
-  memgraph::flags::CleanLogsDir();
+  memgraph::logging::CleanLogsDir();
 
   EXPECT_EQ(RemainingFiles().size(), 3);
 }
@@ -96,7 +96,7 @@ TEST_F(CleanLogsDirTest, OldFilesDeleted) {
   CreateFile("recent_1.log", std::chrono::days{1});
   CreateFile("recent_2.log", std::chrono::days{0});
 
-  memgraph::flags::CleanLogsDir();
+  memgraph::logging::CleanLogsDir();
 
   auto remaining = RemainingFiles();
   EXPECT_EQ(remaining.size(), 2);
@@ -112,7 +112,7 @@ TEST_F(CleanLogsDirTest, AllFilesOld) {
   CreateFile("old_2.log", std::chrono::days{9});
   CreateFile("old_3.log", std::chrono::days{8});
 
-  memgraph::flags::CleanLogsDir();
+  memgraph::logging::CleanLogsDir();
 
   EXPECT_TRUE(RemainingFiles().empty());
 }
@@ -124,7 +124,7 @@ TEST_F(CleanLogsDirTest, DirectoriesAreNotDeleted) {
   CreateFile("old.log", std::chrono::days{10});
   fs::create_directory(test_dir_ / "subdir");
 
-  memgraph::flags::CleanLogsDir();
+  memgraph::logging::CleanLogsDir();
 
   auto remaining = RemainingFiles();
   EXPECT_TRUE(remaining.empty());
@@ -135,7 +135,7 @@ TEST_F(CleanLogsDirTest, DirectoriesAreNotDeleted) {
 TEST_F(CleanLogsDirTest, NonExistentDirectory) {
   FLAGS_log_file = "/tmp/mg_nonexistent_dir_test/memgraph.log";
   FLAGS_log_retention_days = 2;
-  EXPECT_NO_THROW(memgraph::flags::CleanLogsDir());
+  EXPECT_NO_THROW(memgraph::logging::CleanLogsDir());
 }
 
 }  // namespace

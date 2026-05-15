@@ -23,9 +23,9 @@
 
 #include "croncpp.h"
 #include "flags/coord_flag_env_handler.hpp"
-#include "flags/logging.hpp"
 #include "gflags/gflags.h"
 #include "license/license.hpp"
+#include "logging/init.hpp"
 #include "spdlog/spdlog.h"
 #include "utils/exceptions.hpp"
 #include "utils/flag_validation.hpp"
@@ -61,8 +61,8 @@ DEFINE_string(bolt_server_name_for_init, "Neo4j/v5.11.0 compatible graph databas
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 DEFINE_HIDDEN_bool(also_log_to_stderr, false, "Log messages go to stderr in addition to logfiles");
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables, misc-unused-parameters)
-DEFINE_VALIDATED_string(log_level, "WARNING", memgraph::flags::GetLogLevelHelpString(),
-                        { return memgraph::flags::ValidLogLevel(value); });
+DEFINE_VALIDATED_string(log_level, "WARNING", memgraph::logging::GetLogLevelHelpString(),
+                        { return memgraph::logging::ValidLogLevel(value); });
 
 // Query flags
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
@@ -214,7 +214,7 @@ class PeriodicObservable : public memgraph::utils::Observable<memgraph::utils::S
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 auto ToLLEnum(std::string_view val) {
-  const auto ll_enum = memgraph::flags::LogLevelToEnum(val);
+  const auto ll_enum = memgraph::logging::LogLevelToEnum(val);
   if (!ll_enum) {
     throw memgraph::utils::BasicException("Unsupported log level {}", val);
   }
@@ -380,9 +380,9 @@ void Initialize(utils::Settings &settings) {
         spdlog::set_level(ll_enum);
       },
       [](auto in) -> utils::Settings::ValidatorResult {
-        if (!memgraph::flags::ValidLogLevel(in)) {
+        if (!memgraph::logging::ValidLogLevel(in)) {
           return std::unexpected{"Unsupported log level. Log level must be defined as one of the following strings: " +
-                                 memgraph::flags::GetAllowedLogLevels()};
+                                 memgraph::logging::GetAllowedLogLevels()};
         }
         return {};
       });
@@ -396,9 +396,9 @@ void Initialize(utils::Settings &settings) {
       !kRestore,
       [](const std::string &val) {
         if (val == "true") {
-          TurnOnStdErr();
+          memgraph::logging::TurnOnStdErr();
         } else {
-          TurnOffStdErr();
+          memgraph::logging::TurnOffStdErr();
         }
       },
       ValidBoolStr);
