@@ -41,7 +41,7 @@ using nuraft::log_entry;
 class CoordinatorLogStoreTests : public ::testing::Test {
  public:
   static auto GetLogger() -> memgraph::coordination::LoggerWrapper {
-    static auto logger{memgraph::coordination::Logger("")};
+    static auto logger{memgraph::logging::NuRaftLogger("")};
     return memgraph::coordination::LoggerWrapper(&logger);
   }
 

@@ -13,11 +13,11 @@
 
 #include "coordination/logger_wrapper.hpp"
 
-#include "coordination/logger.hpp"
+#include "logging/nuraft_logger.hpp"
 
 namespace memgraph::coordination {
 
-LoggerWrapper::LoggerWrapper(Logger *logger) : logger_(logger) {}
+LoggerWrapper::LoggerWrapper(memgraph::logging::NuRaftLogger *logger) : logger_(logger) {}
 
 void LoggerWrapper::Log(nuraft_log_level level, std::string const &log_line, std::source_location location) const {
   logger_->put_details(

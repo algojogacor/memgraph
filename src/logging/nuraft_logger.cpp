@@ -11,7 +11,7 @@
 
 #ifdef MG_ENTERPRISE
 
-#include "coordination/logger.hpp"
+#include "logging/nuraft_logger.hpp"
 
 #include <spdlog/logger.h>
 #include <spdlog/sinks/daily_file_sink.h>
@@ -24,9 +24,9 @@ constexpr int log_retention_count = 35;
 
 }  // namespace
 
-namespace memgraph::coordination {
+namespace memgraph::logging {
 
-Logger::Logger(std::string log_file) {
+NuRaftLogger::NuRaftLogger(std::string log_file) {
   std::vector<spdlog::sink_ptr> sinks;
   if (!log_file.empty()) {
     time_t current_time{0};
@@ -45,34 +45,34 @@ Logger::Logger(std::string log_file) {
   set_level(static_cast<int>(nuraft_log_level::TRACE));
 }
 
-Logger::~Logger() {
+NuRaftLogger::~NuRaftLogger() {
   logger_->flush();
   logger_.reset();
   logger_ = nullptr;
 }
 
-void Logger::debug(const std::string &log_line) { logger_->log(spdlog::level::debug, log_line); }
+void NuRaftLogger::debug(const std::string &log_line) { logger_->log(spdlog::level::debug, log_line); }
 
-void Logger::info(const std::string &log_line) { logger_->log(spdlog::level::info, log_line); }
+void NuRaftLogger::info(const std::string &log_line) { logger_->log(spdlog::level::info, log_line); }
 
-void Logger::warn(const std::string &log_line) { logger_->log(spdlog::level::warn, log_line); }
+void NuRaftLogger::warn(const std::string &log_line) { logger_->log(spdlog::level::warn, log_line); }
 
-void Logger::err(const std::string &log_line) { logger_->log(spdlog::level::err, log_line); }
+void NuRaftLogger::err(const std::string &log_line) { logger_->log(spdlog::level::err, log_line); }
 
-void Logger::put_details(int level, const char *source_file, const char *func_name, size_t line_number,
-                         const std::string &log_line) {
+void NuRaftLogger::put_details(int level, const char *source_file, const char *func_name, size_t line_number,
+                               const std::string &log_line) {
   logger_->log(
       spdlog::source_loc{source_file, static_cast<int>(line_number), func_name}, GetSpdlogLevel(level), log_line);
 }
 
-void Logger::set_level(int l) { logger_->set_level(GetSpdlogLevel(l)); }
+void NuRaftLogger::set_level(int l) { logger_->set_level(GetSpdlogLevel(l)); }
 
-int Logger::get_level() {
+int NuRaftLogger::get_level() {
   auto const nuraft_log_level = GetNuRaftLevel(logger_->level());
   return static_cast<int>(nuraft_log_level);
 }
 
-spdlog::level::level_enum Logger::GetSpdlogLevel(int nuraft_log_level) {
+spdlog::level::level_enum NuRaftLogger::GetSpdlogLevel(int nuraft_log_level) {
   auto const nuraft_level = static_cast<enum nuraft_log_level>(nuraft_log_level);
 
   switch (nuraft_level) {
@@ -93,7 +93,7 @@ spdlog::level::level_enum Logger::GetSpdlogLevel(int nuraft_log_level) {
   }
 }
 
-nuraft_log_level Logger::GetNuRaftLevel(spdlog::level::level_enum spdlog_level) {
+nuraft_log_level NuRaftLogger::GetNuRaftLevel(spdlog::level::level_enum spdlog_level) {
   switch (spdlog_level) {
     case spdlog::level::trace:
       return nuraft_log_level::TRACE;
@@ -112,6 +112,6 @@ nuraft_log_level Logger::GetNuRaftLevel(spdlog::level::level_enum spdlog_level) 
   }
 }
 
-}  // namespace memgraph::coordination
+}  // namespace memgraph::logging
 
 #endif

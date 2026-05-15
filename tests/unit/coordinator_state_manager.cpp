@@ -11,7 +11,7 @@
 
 #include "coordination/coordinator_state_manager.hpp"
 #include "coordination/coordinator_communication_config.hpp"
-#include "coordination/logger.hpp"
+#include "logging/nuraft_logger.hpp"
 
 #include <gtest/gtest.h>
 #include <libnuraft/nuraft.hxx>
@@ -65,10 +65,10 @@ TEST_F(CoordinatorStateManagerTest, SingleCoord) {
       .log_store_durability_ = LogStoreDurability{
           .durability_store_ = std::make_shared<KVStore>(test_folder_ / "high_availability" / "logs"),
           .stored_log_store_version_ = LogStoreVersion::kV2}};
-  using memgraph::coordination::Logger;
   using memgraph::coordination::LoggerWrapper;
+  using memgraph::logging::NuRaftLogger;
 
-  Logger logger("");
+  NuRaftLogger logger("");
   LoggerWrapper my_logger(&logger);
   ptr<cluster_config> old_config;
   {
@@ -101,10 +101,10 @@ TEST_F(CoordinatorStateManagerTest, MultipleCoords) {
       .log_store_durability_ = LogStoreDurability{
           .durability_store_ = std::make_shared<KVStore>(test_folder_ / "high_availability" / "logs"),
           .stored_log_store_version_ = LogStoreVersion::kV2}};
-  using memgraph::coordination::Logger;
   using memgraph::coordination::LoggerWrapper;
+  using memgraph::logging::NuRaftLogger;
 
-  Logger logger("");
+  NuRaftLogger logger("");
   LoggerWrapper my_logger(&logger);
   {
     ptr<CoordinatorStateManager> state_manager_ = cs_new<CoordinatorStateManager>(config, my_logger);

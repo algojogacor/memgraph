@@ -54,12 +54,12 @@
 #include "coordination/coordinator_ops_status.hpp"
 #include "coordination/coordinator_state_machine.hpp"
 #include "coordination/coordinator_state_manager.hpp"
-#include "coordination/logger.hpp"
 #include "coordination/logger_wrapper.hpp"
 #include "coordination/raft_state.hpp"
 #include "coordination/utils.hpp"
 #include "io/network/endpoint.hpp"
 #include "kvstore/kvstore.hpp"
+#include "logging/nuraft_logger.hpp"
 #include "utils/counter.hpp"
 #include "utils/file.hpp"
 #include "utils/logging.hpp"
@@ -223,10 +223,10 @@ RaftState::RaftState(CoordinatorInstanceInitConfig const &config, BecomeLeaderCb
                      BecomeFollowerCb become_follower_cb, std::optional<CoordinationClusterChangeObserver> observer)
     : coordinator_port_(config.coordinator_port),
       coordinator_id_(config.coordinator_id),
-      logger_(std::make_shared<Logger>(config.nuraft_log_file)),
+      logger_(std::make_shared<memgraph::logging::NuRaftLogger>(config.nuraft_log_file)),
       become_leader_cb_(std::move(become_leader_cb)),
       become_follower_cb_(std::move(become_follower_cb)) {
-  auto logger_wrapper = LoggerWrapper(static_cast<Logger *>(logger_.get()));
+  auto logger_wrapper = LoggerWrapper(static_cast<memgraph::logging::NuRaftLogger *>(logger_.get()));
   auto const log_store_path = config.durability_dir / kLogStoreDurabilityPath;
   utils::EnsureDirOrDie(log_store_path);
 

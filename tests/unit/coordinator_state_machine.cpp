@@ -101,12 +101,12 @@ class CoordinatorStateMachineTestParam : public ::testing::TestWithParam<memgrap
 
 TEST_P(CoordinatorStateMachineTestParam, SerializeDeserializeSnapshot) {
   std::shared_ptr<cluster_config> old_config;
-  using memgraph::coordination::Logger;
   using memgraph::coordination::LoggerWrapper;
+  using memgraph::logging::NuRaftLogger;
 
   const memgraph::coordination::LogStoreVersion version = GetParam();
 
-  Logger logger("");
+  NuRaftLogger logger("");
   LoggerWrapper my_logger(&logger);
   auto const path = test_folder_ / "serialize_deserialize_snapshot" / "state_machine";
   {

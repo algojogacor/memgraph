@@ -18,19 +18,19 @@
 #include <type_traits>
 
 #include "coordination/log_level.hpp"
-#include "coordination/logger.hpp"
+#include "logging/nuraft_logger.hpp"
 
 namespace memgraph::coordination {
 
 class LoggerWrapper {
  public:
-  explicit LoggerWrapper(Logger *logger);
+  explicit LoggerWrapper(memgraph::logging::NuRaftLogger *logger);
 
   void Log(nuraft_log_level level, std::string const &log_line,
            std::source_location location = std::source_location::current()) const;
 
  private:
-  Logger *logger_;
+  memgraph::logging::NuRaftLogger *logger_;
 };
 
 static_assert(std::is_trivially_copyable_v<LoggerWrapper>, "LoggerWrapper must be trivially copyable");

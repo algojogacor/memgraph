@@ -28,24 +28,25 @@
 
 // clang-format on
 
-namespace memgraph::coordination {
+namespace memgraph::logging {
 
+using memgraph::coordination::nuraft_log_level;
 using nuraft::logger;
 
 /**
  * Logger class that wraps the spdlog logger. NuRaft uses directly this object. However, devs should use @LoggerWrapper
  * to log messages.
  */
-class Logger final : public logger {
+class NuRaftLogger final : public logger {
  public:
-  explicit Logger(std::string log_file);
+  explicit NuRaftLogger(std::string log_file);
 
-  Logger(const Logger &) = delete;
-  Logger &operator=(const Logger &) = delete;
-  Logger(Logger &&) = delete;
-  Logger &operator=(Logger &&) = delete;
+  NuRaftLogger(const NuRaftLogger &) = delete;
+  NuRaftLogger &operator=(const NuRaftLogger &) = delete;
+  NuRaftLogger(NuRaftLogger &&) = delete;
+  NuRaftLogger &operator=(NuRaftLogger &&) = delete;
 
-  ~Logger() override;
+  ~NuRaftLogger() override;
 
   // Deprecated
   void debug(const std::string &log_line) override;
@@ -77,6 +78,6 @@ class Logger final : public logger {
   std::shared_ptr<spdlog::logger> logger_;
 };
 
-}  // namespace memgraph::coordination
+}  // namespace memgraph::logging
 
 #endif
