@@ -12,6 +12,7 @@
 
 #include <spdlog/common.h>
 #include <spdlog/sinks/ansicolor_sink.h>
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
@@ -21,6 +22,12 @@
 #include "spdlog/sinks/stdout_color_sinks.h"
 
 namespace memgraph::logging {
+
+namespace detail {
+// Inlined so the wrapper template can read/write without a link-time symbol
+// from mg-logging.
+inline std::atomic<spdlog::level::level_enum> g_global_level{spdlog::level::warn};
+}  // namespace detail
 
 inline std::shared_ptr<spdlog::sinks::sink> &stderr_sink() {
   static std::shared_ptr<spdlog::sinks::sink> sink = std::make_shared<spdlog::sinks::stderr_color_sink_st>();
@@ -35,6 +42,16 @@ constexpr const char *GetLogLevelHelpString() {
 
 bool ValidLogLevel(std::string_view value);
 std::optional<spdlog::level::level_enum> LogLevelToEnum(std::string_view value);
+
+// Global log level. Wrapper consults this (or the per-session override if a
+// session log context is active on the current thread) before deciding to log.
+// Spdlog's logger itself is pinned to trace so it never short-circuits the
+// wrapper.
+inline void SetGlobalLevel(spdlog::level::level_enum lvl) {
+  detail::g_global_level.store(lvl, std::memory_order_relaxed);
+}
+
+inline spdlog::level::level_enum GetGlobalLevel() { return detail::g_global_level.load(std::memory_order_relaxed); }
 
 void InitializeLogger();
 void AddLoggerSink(spdlog::sink_ptr new_sink);

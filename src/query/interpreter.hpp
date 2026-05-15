@@ -17,10 +17,10 @@
 
 #include "dbms/database.hpp"
 #include "dbms/database_protector.hpp"
+#include "logging/session_context.hpp"
 #include "memory/db_arena_fwd.hpp"
 #include "query/context.hpp"
 #include "query/db_accessor.hpp"
-#include "query/query_logger.hpp"
 #include "query/stream.hpp"
 #include "query/trigger_context.hpp"
 #include "system/transaction.hpp"
@@ -497,7 +497,7 @@ class Interpreter final {
     return system_transaction_ ? &*system_transaction_ : nullptr;
   }
 
-  std::optional<QueryLogger> query_logger_{};
+  memgraph::logging::SessionLogContext session_log_ctx_{};
 
   bool IsQueryLoggingActive() const;
   void LogQueryMessage(std::string message);

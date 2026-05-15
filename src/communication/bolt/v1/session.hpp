@@ -12,6 +12,8 @@
 #pragma once
 
 #include <optional>
+#include "logging/log.hpp"
+#include "logging/session_context.hpp"
 
 #include "communication/bolt/v1/constants.hpp"
 #include "communication/bolt/v1/decoder/chunked_decoder_buffer.hpp"
@@ -80,6 +82,15 @@ class Session {
    */
   template <typename TImpl>
   bool Execute_(TImpl &impl) {
+    // Install per-message log context so any log call made from this thread
+    // during this message's handler sees the session's per-session level and
+    // tag prefix. The RAII dtor restores on return, including unwinding paths.
+    // Test sessions may not expose a log context; treat as nullptr (no-op).
+    memgraph::logging::SessionLogContext *_log_ctx = nullptr;
+    if constexpr (requires { impl.GetLogContext(); }) {
+      _log_ctx = impl.GetLogContext();
+    }
+    memgraph::logging::ScopedSessionLog _log_guard(_log_ctx);
     if (state_ == State::Handshake) [[unlikely]] {
       // Resize the input buffer to ensure that a whole chunk can fit into it.
       // This can be done only once because the buffer holds its size.
@@ -87,7 +98,7 @@ class Session {
 
       // Receive the handshake.
       if (input_stream_.size() < kHandshakeSize) {
-        spdlog::trace("Received partial handshake of size {}", input_stream_.size());
+        memgraph::logging::Trace("Received partial handshake of size {}", input_stream_.size());
         return false;  // no more data
       }
       state_ = StateHandshakeRun(impl);
@@ -162,7 +173,7 @@ class Session {
 
   void HandleError() {
     if (!at_least_one_run_) {
-      spdlog::info("Sudden connection loss. Make sure the client supports Memgraph.");
+      memgraph::logging::Info("Sudden connection loss. Make sure the client supports Memgraph.");
     }
   }
 

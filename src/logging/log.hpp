@@ -15,69 +15,108 @@
 #include <spdlog/spdlog.h>
 #include <utility>
 
-// Wrapper API mirroring spdlog's overload set. Behaves identically to a
-// direct spdlog::* call today; a follow-up commit adds per-session level
-// gating and prefix tagging.
+#include "logging/init.hpp"
+#include "logging/session_context.hpp"
+
 namespace memgraph::logging {
+
+namespace detail {
+
+inline spdlog::level::level_enum EffectiveLevel() noexcept {
+  if (auto *ctx = ScopedSessionLog::Current()) {
+    return ctx->level.load(std::memory_order_relaxed);
+  }
+  return GetGlobalLevel();
+}
+
+template <typename... Args>
+inline void LogWithCtx(spdlog::level::level_enum lvl, spdlog::format_string_t<Args...> fmt, Args &&...args) {
+  if (lvl < EffectiveLevel()) return;
+  auto *ctx = ScopedSessionLog::Current();
+  if (ctx != nullptr) {
+    auto prefix = ctx->Prefix();
+    if (!prefix.empty()) {
+      spdlog::default_logger_raw()->log(lvl, "{} {}", prefix, fmt::format(fmt, std::forward<Args>(args)...));
+      return;
+    }
+  }
+  spdlog::default_logger_raw()->log(lvl, fmt, std::forward<Args>(args)...);
+}
+
+template <typename T>
+inline void LogMsgWithCtx(spdlog::level::level_enum lvl, const T &msg) {
+  if (lvl < EffectiveLevel()) return;
+  auto *ctx = ScopedSessionLog::Current();
+  if (ctx != nullptr) {
+    auto prefix = ctx->Prefix();
+    if (!prefix.empty()) {
+      spdlog::default_logger_raw()->log(lvl, "{} {}", prefix, msg);
+      return;
+    }
+  }
+  spdlog::default_logger_raw()->log(lvl, msg);
+}
+
+}  // namespace detail
 
 template <typename... Args>
 void Trace(spdlog::format_string_t<Args...> fmt, Args &&...args) {
-  spdlog::default_logger_raw()->trace(fmt, std::forward<Args>(args)...);
+  detail::LogWithCtx(spdlog::level::trace, fmt, std::forward<Args>(args)...);
 }
 
 template <typename T>
 void Trace(const T &msg) {
-  spdlog::default_logger_raw()->trace(msg);
+  detail::LogMsgWithCtx(spdlog::level::trace, msg);
 }
 
 template <typename... Args>
 void Debug(spdlog::format_string_t<Args...> fmt, Args &&...args) {
-  spdlog::default_logger_raw()->debug(fmt, std::forward<Args>(args)...);
+  detail::LogWithCtx(spdlog::level::debug, fmt, std::forward<Args>(args)...);
 }
 
 template <typename T>
 void Debug(const T &msg) {
-  spdlog::default_logger_raw()->debug(msg);
+  detail::LogMsgWithCtx(spdlog::level::debug, msg);
 }
 
 template <typename... Args>
 void Info(spdlog::format_string_t<Args...> fmt, Args &&...args) {
-  spdlog::default_logger_raw()->info(fmt, std::forward<Args>(args)...);
+  detail::LogWithCtx(spdlog::level::info, fmt, std::forward<Args>(args)...);
 }
 
 template <typename T>
 void Info(const T &msg) {
-  spdlog::default_logger_raw()->info(msg);
+  detail::LogMsgWithCtx(spdlog::level::info, msg);
 }
 
 template <typename... Args>
 void Warn(spdlog::format_string_t<Args...> fmt, Args &&...args) {
-  spdlog::default_logger_raw()->warn(fmt, std::forward<Args>(args)...);
+  detail::LogWithCtx(spdlog::level::warn, fmt, std::forward<Args>(args)...);
 }
 
 template <typename T>
 void Warn(const T &msg) {
-  spdlog::default_logger_raw()->warn(msg);
+  detail::LogMsgWithCtx(spdlog::level::warn, msg);
 }
 
 template <typename... Args>
 void Error(spdlog::format_string_t<Args...> fmt, Args &&...args) {
-  spdlog::default_logger_raw()->error(fmt, std::forward<Args>(args)...);
+  detail::LogWithCtx(spdlog::level::err, fmt, std::forward<Args>(args)...);
 }
 
 template <typename T>
 void Error(const T &msg) {
-  spdlog::default_logger_raw()->error(msg);
+  detail::LogMsgWithCtx(spdlog::level::err, msg);
 }
 
 template <typename... Args>
 void Critical(spdlog::format_string_t<Args...> fmt, Args &&...args) {
-  spdlog::default_logger_raw()->critical(fmt, std::forward<Args>(args)...);
+  detail::LogWithCtx(spdlog::level::critical, fmt, std::forward<Args>(args)...);
 }
 
 template <typename T>
 void Critical(const T &msg) {
-  spdlog::default_logger_raw()->critical(msg);
+  detail::LogMsgWithCtx(spdlog::level::critical, msg);
 }
 
 }  // namespace memgraph::logging

@@ -154,9 +154,13 @@ void InitializeLogger() {
     }
   });
 
-  logger->set_level(ParseLogLevel());
+  // Spdlog logger pinned to trace; gating is owned by the wrapper.
+  logger->set_level(spdlog::level::trace);
   logger->flush_on(spdlog::level::trace);
   spdlog::set_default_logger(std::move(logger));
+  // Wrapper-level gate: configured by the --log_level flag at startup; can be
+  // mutated at runtime via SetGlobalLevel.
+  SetGlobalLevel(ParseLogLevel());
 }
 
 // This is thread-safe now because add_sink takes a lock from base_sink before adding subsink

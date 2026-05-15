@@ -10,6 +10,7 @@
 // licenses/APL.txt.
 
 #include "flags/run_time_configurable.hpp"
+#include "logging/log.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -85,9 +86,6 @@ DEFINE_bool(debug_query_plans, false, "Enable DEBUG logging of potential query p
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables, misc-unused-parameters)
 DEFINE_VALIDATED_string(timezone, "UTC", "Define instance's timezone (IANA format).", { return ValidTimezone(value); });
 
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
-DEFINE_string(query_log_directory, "", "Path to directory where the query logs should be stored.");
-
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables, misc-unused-parameters)
 DEFINE_string(storage_snapshot_interval, "",
               "Define periodic snapshot schedule via cron format or as a period in seconds.");
@@ -150,9 +148,6 @@ constexpr auto kDebugQueryPlansGFlagsKey = "debug-query-plans";
 
 constexpr auto kStorageGcAggressiveSettingKey = "storage-gc-aggressive";
 constexpr auto kStorageGcAggressiveGFlagsKey = "storage-gc-aggressive";
-
-constexpr auto kQueryLogDirectorySettingKey = "query-log-directory";
-constexpr auto kQueryLogDirectoryGFlagsKey = "query-log-directory";
 
 constexpr auto kTimezoneSettingKey = "timezone";
 constexpr auto kTimezoneGFlagsKey = kTimezoneSettingKey;
@@ -242,7 +237,7 @@ auto GetTimezone(std::string_view tz) -> const std::chrono::time_zone * {
   try {
     return std::chrono::locate_zone(tz);
   } catch (const std::runtime_error &e) {
-    spdlog::warn("Unsupported timezone: {}", e.what());
+    memgraph::logging::Warn("Unsupported timezone: {}", e.what());
     return nullptr;
   }
 }
@@ -286,7 +281,7 @@ bool ValidPeriodicSnapshot(const std::string_view def) {
       if constexpr (FATAL) {
         LOG_FATAL(msg);
       }
-      spdlog::error(msg);
+      memgraph::logging::Error(msg);
       return false;
     }
     return true;
@@ -377,7 +372,7 @@ void Initialize(utils::Settings &settings) {
       !kRestore,
       [](const std::string &val) {
         const auto ll_enum = ToLLEnum(val);
-        spdlog::set_level(ll_enum);
+        memgraph::logging::SetGlobalLevel(ll_enum);
       },
       [](auto in) -> utils::Settings::ValidatorResult {
         if (!memgraph::logging::ValidLogLevel(in)) {
@@ -453,11 +448,6 @@ void Initialize(utils::Settings &settings) {
       });
 
   /*
-   * Register query log directory setting
-   */
-  register_flag(kQueryLogDirectoryGFlagsKey, kQueryLogDirectorySettingKey, kRestore);
-
-  /*
    * Register periodic snapshot setting. In the case both flags are defined, --storage-snapshot-interval flag will be
    * used. Ideally, we rely on just a single flag but --storage-snapshot-interval-sec is for community,
    * --storage-snapshot-interval for enterprise.
@@ -466,7 +456,7 @@ void Initialize(utils::Settings &settings) {
     if (FLAGS_storage_snapshot_interval.empty()) {
       FLAGS_storage_snapshot_interval = std::to_string(FLAGS_storage_snapshot_interval_sec);
     } else {
-      spdlog::warn(
+      memgraph::logging::Warn(
           "Periodic snapshot schedule defined via both --storage-snapshot-interval-sec and "
           "--storage-snapshot-interval. Memgraph will use the configuration flag from --storage-snapshot-interval!");
     }
@@ -568,13 +558,6 @@ bool GetDebugQueryPlans() { return debug_query_plans_; }
 bool GetStorageGcAggressive() { return storage_gc_aggressive_; }
 
 const std::chrono::time_zone *GetTimezone() { return timezone_; }
-
-std::string GetQueryLogDirectory() {
-  std::string s;
-  // Thread safe read of gflag
-  gflags::GetCommandLineOption(kQueryLogDirectoryGFlagsKey, &s);
-  return s;
-}
 
 bool GetAlsoLogToStderr() {
   std::string v;

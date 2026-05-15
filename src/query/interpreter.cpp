@@ -12,6 +12,9 @@
 #include "query/interpreter.hpp"
 #include <fmt/core.h>
 #include "ctre.hpp"
+#include "logging/init.hpp"
+#include "logging/log.hpp"
+#include "logging/session_context.hpp"
 #include "memory/db_arena_fwd.hpp"
 
 #include <algorithm>
@@ -176,7 +179,7 @@ auto ParseConfigMap(std::unordered_map<Expression *, Expression *> const &config
         auto value_expr = entry.second->Accept(evaluator);
         return !key_expr.IsString() || !value_expr.IsString();
       })) {
-    spdlog::error("Config map must contain only string keys and values!");
+    memgraph::logging::Error("Config map must contain only string keys and values!");
     return std::nullopt;
   }
 
@@ -232,7 +235,7 @@ void memgraph::query::CurrentDB::SetupDatabaseTransaction(
       break;
     default:
       // TODO: no access case
-      spdlog::error("Unknown accessor type: {}", static_cast<int>(acc_type));
+      memgraph::logging::Error("Unknown accessor type: {}", static_cast<int>(acc_type));
       throw QueryRuntimeException("Failed to gain storage access! Unknown accessor type.");
   }
   execution_db_accessor_.emplace(db_transactional_accessor_.get());
@@ -648,7 +651,7 @@ class CoordQueryHandler final : public query::CoordinatorQueryHandler {
   void YieldLeadership() override {
     switch (coordinator_handler_.YieldLeadership()) {
       case coordination::YieldLeadershipStatus::SUCCESS: {
-        spdlog::info(
+        memgraph::logging::Info(
             "The request for yielding leadership was submitted successfully. Please monitor the cluster state with "
             "'SHOW INSTANCES' to see changes applied.");
         break;
@@ -662,7 +665,7 @@ class CoordQueryHandler final : public query::CoordinatorQueryHandler {
   void SetCoordinatorSetting(std::string_view const setting_name, std::string_view const setting_value) override {
     switch (coordinator_handler_.SetCoordinatorSetting(setting_name, setting_value)) {
       case coordination::SetCoordinatorSettingStatus::SUCCESS: {
-        spdlog::info("The request for updating coordinator setting was accepted by Raft storage.");
+        memgraph::logging::Info("The request for updating coordinator setting was accepted by Raft storage.");
         break;
       }
       case coordination::SetCoordinatorSettingStatus::RAFT_LOG_ERROR:
@@ -836,7 +839,7 @@ class CoordQueryHandler final : public query::CoordinatorQueryHandler {
       case SUCCESS:
         break;
     }
-    spdlog::info("Removed coordinator {}.", coordinator_id);
+    memgraph::logging::Info("Removed coordinator {}.", coordinator_id);
   }
 
   auto AddCoordinatorInstance(int32_t coordinator_id, std::string_view bolt_server, std::string_view coordinator_server,
@@ -928,7 +931,7 @@ class CoordQueryHandler final : public query::CoordinatorQueryHandler {
       case SUCCESS:
         break;
     }
-    spdlog::info("Added instance on coordinator server {}", maybe_coordinator_server->SocketAddress());
+    memgraph::logging::Info("Added instance on coordinator server {}", maybe_coordinator_server->SocketAddress());
   }
 
   void SetReplicationInstanceToMain(std::string_view instance_name) override {
@@ -1089,7 +1092,7 @@ Callback HandleAuthQuery(AuthQuery *auth_query, InterpreterContext *interpreter_
                 "and roles. In addition you can rerun the current query with IF NOT EXISTS.",
                 username);
           }
-          spdlog::warn("User '{}' already exists.", username);
+          memgraph::logging::Warn("User '{}' already exists.", username);
           runtime_notifications->emplace_back(SeverityLevel::WARNING,
                                               NotificationCode::CREATE_USER,
                                               fmt::format("User '{}' already exists.", username));
@@ -1098,7 +1101,7 @@ Callback HandleAuthQuery(AuthQuery *auth_query, InterpreterContext *interpreter_
 
         // If the license is not valid we create users with admin access
         if (!valid_enterprise_license) {
-          spdlog::warn(
+          memgraph::logging::Warn(
               "Granting all the privileges to {}. You're currently using Memgraph Community License and all the users "
               "will have full privileges to access Memgraph database. If you want to ensure privileges are applied, "
               "please add Memgraph Enterprise License and restart Memgraph for the configuration to apply.",
@@ -1230,7 +1233,7 @@ Callback HandleAuthQuery(AuthQuery *auth_query, InterpreterContext *interpreter_
                 "and users. In addition you can rerun the current query with IF NOT EXISTS.",
                 rolename);
           }
-          spdlog::warn("Role '{}' already exists.", rolename);
+          memgraph::logging::Warn("Role '{}' already exists.", rolename);
           runtime_notifications->emplace_back(SeverityLevel::WARNING,
                                               NotificationCode::CREATE_ROLE,
                                               fmt::format("Role '{}' already exists.", rolename));
@@ -2404,7 +2407,7 @@ Callback HandleCoordinatorQuery(CoordinatorQuery *coordinator_query, const Param
         results.reserve(coord_settings.size());
 
         for (const auto &[k, v] : coord_settings) {
-          spdlog::info("Setting name: {} Setting value: {}", k, v);
+          memgraph::logging::Info("Setting name: {} Setting value: {}", k, v);
           std::vector<TypedValue> setting_info;
           setting_info.reserve(2);
 
@@ -2967,7 +2970,7 @@ Callback HandleParameterQuery(ParameterQuery *parameter_query, const Parameters 
           default:
             std::unreachable();
         }
-        spdlog::info("Set parameter '{}' with value '{}' (scope: {})", parameter_name, value_str, scope);
+        memgraph::logging::Info("Set parameter '{}' with value '{}' (scope: {})", parameter_name, value_str, scope);
         return std::vector<std::vector<TypedValue>>{};
       };
       return callback;
@@ -2981,7 +2984,7 @@ Callback HandleParameterQuery(ParameterQuery *parameter_query, const Parameters 
         if (!parameters->UnsetParameter(parameter_name, scope, &*interpreter->system_transaction_)) {
           throw QueryRuntimeException("Parameter '{}' does not exist", parameter_name);
         }
-        spdlog::info("Unset parameter '{}' (scope: {})", parameter_name, scope);
+        memgraph::logging::Info("Unset parameter '{}' (scope: {})", parameter_name, scope);
         return std::vector<std::vector<TypedValue>>{};
       };
       return callback;
@@ -3010,7 +3013,7 @@ Callback HandleParameterQuery(ParameterQuery *parameter_query, const Parameters 
         if (!parameters->DeleteAllParameters(&*interpreter->system_transaction_)) {
           throw QueryRuntimeException("Failed to delete all parameters");
         }
-        spdlog::info("Deleted all parameters");
+        memgraph::logging::Info("Deleted all parameters");
         return std::vector<std::vector<TypedValue>>{};
       };
       return callback;
@@ -3063,7 +3066,7 @@ struct PullPlan {
   explicit PullPlan(std::shared_ptr<PlanWrapper> plan, const Parameters &parameters, bool is_profile_query,
                     DbAccessor *dba, InterpreterContext *interpreter_context, utils::MemoryResource *execution_memory,
                     std::shared_ptr<QueryUserOrRole> user_or_role, StoppingContext stopping_context,
-                    storage::DatabaseProtectorPtr protector, std::optional<QueryLogger> &query_logger,
+                    storage::DatabaseProtectorPtr protector,
                     TriggerContextCollector *trigger_context_collector = nullptr,
                     std::optional<size_t> memory_limit = {}, FrameChangeCollector *frame_change_collector_ = nullptr,
                     std::optional<int64_t> hops_limit = {}, utils::PriorityThreadPool *worker_pool = nullptr,
@@ -3085,8 +3088,6 @@ struct PullPlan {
   Frame frame_;
   ExecutionContext ctx_;
   std::optional<size_t> memory_limit_;
-  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
-  std::optional<QueryLogger> &query_logger_;
 #ifdef MG_ENTERPRISE
   std::shared_ptr<utils::UserResources> user_resource_{};
 #endif
@@ -3107,10 +3108,10 @@ struct PullPlan {
 PullPlan::PullPlan(const std::shared_ptr<PlanWrapper> plan, const Parameters &parameters, const bool is_profile_query,
                    DbAccessor *dba, InterpreterContext *interpreter_context, utils::MemoryResource *execution_memory,
                    std::shared_ptr<QueryUserOrRole> user_or_role, StoppingContext stopping_context,
-                   storage::DatabaseProtectorPtr protector, std::optional<QueryLogger> &query_logger,
-                   TriggerContextCollector *trigger_context_collector, const std::optional<size_t> memory_limit,
-                   FrameChangeCollector *frame_change_collector, const std::optional<int64_t> hops_limit,
-                   utils::PriorityThreadPool *worker_pool, memory::ArenaPool *db_arena_pool
+                   storage::DatabaseProtectorPtr protector, TriggerContextCollector *trigger_context_collector,
+                   const std::optional<size_t> memory_limit, FrameChangeCollector *frame_change_collector,
+                   const std::optional<int64_t> hops_limit, utils::PriorityThreadPool *worker_pool,
+                   memory::ArenaPool *db_arena_pool
 #ifdef MG_ENTERPRISE
                    ,
                    std::optional<size_t> parallel_execution, std::shared_ptr<utils::UserResources> user_resource
@@ -3119,8 +3120,7 @@ PullPlan::PullPlan(const std::shared_ptr<PlanWrapper> plan, const Parameters &pa
     : plan_(plan),
       cursor_(plan->plan().MakeCursor(execution_memory)),
       frame_(plan->symbol_table().max_position(), execution_memory),
-      memory_limit_(memory_limit),
-      query_logger_(query_logger)
+      memory_limit_(memory_limit)
 #ifdef MG_ENTERPRISE
       ,
       user_resource_{std::move(user_resource)}
@@ -3248,9 +3248,7 @@ std::optional<plan::ProfilingStatsWithTotalTime> PullPlan::Pull(AnyStream *strea
   summary->insert_or_assign("plan_execution_time", execution_time_.count());
   summary->insert_or_assign("number_of_hops", ctx_.number_of_hops);
 
-  if (query_logger_) {
-    query_logger_->trace(fmt::format("Query execution time: {}", execution_time_.count()));
-  }
+  memgraph::logging::Trace("Query execution time: {}", execution_time_.count());
 
   memgraph::metrics::Measure(memgraph::metrics::QueryExecutionLatency_us,
                              std::chrono::duration_cast<std::chrono::microseconds>(execution_time_).count());
@@ -3264,9 +3262,7 @@ std::optional<plan::ProfilingStatsWithTotalTime> PullPlan::Pull(AnyStream *strea
     for (size_t i = 0; i < ctx_.execution_stats.counters.size(); ++i) {
       auto key = ExecutionStatsKeyToString(ExecutionStats::Key(i));
       stats.emplace(key, ctx_.execution_stats.counters[i]);
-      if (query_logger_) {
-        query_logger_->trace(fmt::format("{}: {}", key, ctx_.execution_stats.counters[i]));
-      }
+      memgraph::logging::Trace("{}: {}", key, ctx_.execution_stats.counters[i]);
     }
     summary->insert_or_assign("stats", std::move(stats));
   }
@@ -3280,9 +3276,7 @@ std::optional<plan::ProfilingStatsWithTotalTime> PullPlan::Pull(AnyStream *strea
 
   auto stats_and_total_time = GetStatsWithTotalTime(ctx_);
 
-  if (query_logger_) {
-    query_logger_->trace(fmt::format("Profile plan\n{}", ProfilingStatsToJson(stats_and_total_time).dump()));
-  }
+  memgraph::logging::Trace("Profile plan\n{}", ProfilingStatsToJson(stats_and_total_time).dump());
 
   return stats_and_total_time;
 }
@@ -3441,7 +3435,7 @@ void CheckParallelExecution(std::optional<size_t> &parallel_execution, plan::Log
         dba->SetParallelExecution();  // Internal flag needed to disable delta cache for parallel queries
       } else {
         parallel_execution.reset();
-        spdlog::trace(
+        memgraph::logging::Trace(
             R"(Parallel execution is not supported while using "asio" scheduler. Please switch to "priority_queue" scheduler "
             "and try again. Falling back to single threaded execution.)");
         notifications->emplace_back(
@@ -3451,7 +3445,7 @@ void CheckParallelExecution(std::optional<size_t> &parallel_execution, plan::Log
       }
     } else {
       parallel_execution.reset();
-      spdlog::trace("Query was not parallelized. Falling back to single threaded execution.");
+      memgraph::logging::Trace("Query was not parallelized. Falling back to single threaded execution.");
       notifications->emplace_back(SeverityLevel::INFO,
                                   NotificationCode::PARALLEL_EXECUTION_FALLBACK,
                                   "Plan was not successfully parallelized. Falling back to single threaded execution.");
@@ -3479,12 +3473,12 @@ PreparedQuery PrepareCypherQuery(ParsedQuery parsed_query, std::map<std::string,
 
   const auto memory_limit = EvaluateMemoryLimit(evaluator, cypher_query->memory_limit_, cypher_query->memory_scale_);
   if (memory_limit) {
-    spdlog::info("Running query with memory limit of {}", utils::GetReadableSize(*memory_limit));
+    memgraph::logging::Info("Running query with memory limit of {}", utils::GetReadableSize(*memory_limit));
   }
 
   const auto hops_limit = EvaluateHopsLimit(evaluator, cypher_query->pre_query_directives_.hops_limit_);
   if (hops_limit) {
-    spdlog::debug("Running query with hops limit of {}", *hops_limit);
+    memgraph::logging::Debug("Running query with hops limit of {}", *hops_limit);
   }
 
 #ifdef MG_ENTERPRISE
@@ -3569,7 +3563,6 @@ PreparedQuery PrepareCypherQuery(ParsedQuery parsed_query, std::map<std::string,
                                               std::move(user_or_role),
                                               std::move(stopping_context),
                                               dbms::DatabaseProtector{*current_db.db_acc_}.clone(),
-                                              interpreter.query_logger_,
                                               trigger_context_collector,
                                               memory_limit,
                                               frame_change_collector->AnyCaches() ? frame_change_collector : nullptr,
@@ -3773,10 +3766,9 @@ PreparedQuery PrepareProfileQuery(ParsedQuery parsed_query, bool in_explicit_tra
                                          stopping_context = std::move(stopping_context),
                                          db_acc = *current_db.db_acc_,
                                          hops_limit,
-                                         db_arena_pool = &current_db.db_acc_->get()->Arena(),
-                                         &query_logger = interpreter.query_logger_
+                                         db_arena_pool = &current_db.db_acc_->get()->Arena()
 #ifdef MG_ENTERPRISE
-                                         ,
+                                             ,
                                          parallel_execution,
                                          user_resource = std::move(user_resource)
 #endif
@@ -3793,7 +3785,6 @@ PreparedQuery PrepareProfileQuery(ParsedQuery parsed_query, bool in_explicit_tra
                                         std::move(user_or_role),
                                         std::move(stopping_context),
                                         dbms::DatabaseProtector{db_acc}.clone(),
-                                        query_logger,
                                         nullptr,
                                         memory_limit,
                                         frame_change_collector->AnyInListCaches() ? frame_change_collector : nullptr,
@@ -5893,7 +5884,7 @@ PreparedQuery PrepareStorageModeQuery(ParsedQuery parsed_query, const bool in_ex
   } else {
     // TODO: this needs to be filtered to just db_acc->storage()
     if (ActiveTransactionsExist(interpreter_context)) {
-      spdlog::info(
+      memgraph::logging::Info(
           "Storage mode will be modified when there are no other active transactions. Check the status of the "
           "transactions using 'SHOW TRANSACTIONS' query and ensure no other transactions are active.");
     }
@@ -5992,8 +5983,8 @@ PreparedQuery PrepareCreateSnapshotQuery(ParsedQuery parsed_query, bool in_expli
     if (!maybe_path) {
       switch (maybe_path.error()) {
         case storage::InMemoryStorage::CreateSnapshotError::ReachedMaxNumTries:
-          spdlog::warn("Failed to create snapshot. {}. Please contact support.",
-                       storage::InMemoryStorage::CreateSnapshotErrorToString(maybe_path.error()));
+          memgraph::logging::Warn("Failed to create snapshot. {}. Please contact support.",
+                                  storage::InMemoryStorage::CreateSnapshotErrorToString(maybe_path.error()));
           break;
         case storage::InMemoryStorage::CreateSnapshotError::AbortSnapshot:
           throw utils::BasicException("Failed to create snapshot. {}.",
@@ -8141,19 +8132,14 @@ PreparedQuery PrepareSessionTraceQuery(ParsedQuery parsed_query, CurrentDB &curr
   handler = [interpreter, enabled = session_trace_query->enabled_] {
     std::vector<std::vector<TypedValue>> results;
 
-    auto query_log_directory = flags::run_time::GetQueryLogDirectory();
-
-    if (query_log_directory.empty()) {
-      throw QueryException("The flag --query-log-directory has to be present in order to enable session trace.");
-    }
-
+    // ON = lower this session's level to trace; OFF = follow global level
+    // again. The new wrapper consults the session context installed by the
+    // RAII guard at Session::Execute() entry.
     if (enabled) {
-      interpreter->query_logger_.emplace(fmt::format("{}/{}.log", query_log_directory, interpreter->session_info_.uuid),
-                                         interpreter->session_info_.uuid,
-                                         interpreter->session_info_.username);
+      interpreter->session_log_ctx_.level.store(spdlog::level::trace, std::memory_order_relaxed);
       interpreter->LogQueryMessage("Session initialized!");
     } else {
-      interpreter->query_logger_.reset();
+      interpreter->session_log_ctx_.level.store(memgraph::logging::GetGlobalLevel(), std::memory_order_relaxed);
     }
 
     results.emplace_back(std::vector<TypedValue>{TypedValue(interpreter->session_info_.uuid)});
@@ -9073,11 +9059,12 @@ Interpreter::ParseRes Interpreter::Parse(const std::string &query_string, UserPa
   const bool is_begin = trimmed_query == "BEGIN";
 
   // Explicit transactions define the metadata at the beginning and reuse it
-  spdlog::debug("{}",
-                QueryLogWrapper{.query = query_string,
-                                .metadata = (in_explicit_transaction_ && metadata_ && !is_begin) ? &*metadata_
-                                                                                                 : &extras.metadata_pv,
-                                .db_name = current_db_.name()});
+  memgraph::logging::Debug(
+      "{}",
+      QueryLogWrapper{
+          .query = query_string,
+          .metadata = (in_explicit_transaction_ && metadata_ && !is_begin) ? &*metadata_ : &extras.metadata_pv,
+          .db_name = current_db_.name()});
 
   if (is_begin) {
     return TransactionQuery::BEGIN;
@@ -9851,9 +9838,7 @@ void Interpreter::SetupInterpreterTransaction(const QueryExtras &extras) {
   transaction_start_steady_ = std::chrono::steady_clock::now();
   // Release publishes the start-time writes above to verifier-holding readers.
   transaction_status_.store(TransactionStatus::ACTIVE, std::memory_order_release);
-  if (query_logger_) {
-    query_logger_->SetTransactionId(std::to_string(tx_id));
-  }
+  session_log_ctx_.tx_id = std::to_string(tx_id);
   metadata_ = GenOptional(extras.metadata_pv);
 }
 
@@ -9880,9 +9865,7 @@ void Interpreter::Abort() {
   LogQueryMessage("Query abort started.");
   utils::OnScopeExit const abort_end([this]() {
     this->LogQueryMessage("Query abort ended.");
-    if (query_logger_) {
-      query_logger_->ResetTransactionId();
-    }
+    this->session_log_ctx_.tx_id.clear();
   });
 
   bool decrement = true;
@@ -10007,7 +9990,7 @@ void RunTriggersAfterCommit(dbms::DatabaseAccess db_acc, InterpreterContext *int
                       triggering_user,
                       interpreter_context->auth_checker);
     } catch (const utils::BasicException &exception) {
-      spdlog::warn("Trigger '{}' failed with exception:\n{}", trigger.Name(), exception.what());
+      memgraph::logging::Warn("Trigger '{}' failed with exception:\n{}", trigger.Name(), exception.what());
       db_accessor.Abort();
       continue;
     }
@@ -10025,7 +10008,8 @@ void RunTriggersAfterCommit(dbms::DatabaseAccess db_acc, InterpreterContext *int
           [&trigger, &db_accessor]<typename T>(T &&arg) {
             using ErrorType = std::remove_cvref_t<T>;
             if constexpr (std::is_same_v<ErrorType, storage::ReplicationError>) {
-              spdlog::warn("Trigger '{}' replication: {}", trigger.Name(), storage::FormatReplicationError(arg));
+              memgraph::logging::Warn(
+                  "Trigger '{}' replication: {}", trigger.Name(), storage::FormatReplicationError(arg));
             } else if constexpr (std::is_same_v<ErrorType, storage::ConstraintViolation>) {
               const auto &constraint_violation = arg;
               switch (constraint_violation.type) {
@@ -10033,10 +10017,11 @@ void RunTriggersAfterCommit(dbms::DatabaseAccess db_acc, InterpreterContext *int
                   const auto &label_name = db_accessor.LabelToName(constraint_violation.label);
                   MG_ASSERT(constraint_violation.properties.size() == 1U);
                   const auto &property_name = db_accessor.PropertyToName(*constraint_violation.properties.begin());
-                  spdlog::warn("Trigger '{}' failed to commit due to existence constraint violation on: {}({}) ",
-                               trigger.Name(),
-                               label_name,
-                               property_name);
+                  memgraph::logging::Warn(
+                      "Trigger '{}' failed to commit due to existence constraint violation on: {}({}) ",
+                      trigger.Name(),
+                      label_name,
+                      property_name);
                   break;
                 }
                 case storage::ConstraintViolation::Type::UNIQUE: {
@@ -10047,21 +10032,22 @@ void RunTriggersAfterCommit(dbms::DatabaseAccess db_acc, InterpreterContext *int
                       constraint_violation.properties,
                       ", ",
                       [&](auto &stream, const auto &prop) { stream << db_accessor.PropertyToName(prop); });
-                  spdlog::warn("Trigger '{}' failed to commit due to unique constraint violation on :{}({})",
-                               trigger.Name(),
-                               label_name,
-                               property_names_stream.str());
+                  memgraph::logging::Warn("Trigger '{}' failed to commit due to unique constraint violation on :{}({})",
+                                          trigger.Name(),
+                                          label_name,
+                                          property_names_stream.str());
                   break;
                 }
                 case storage::ConstraintViolation::Type::TYPE: {
                   MG_ASSERT(constraint_violation.properties.size() == 1U);
                   const auto &property_name = db_accessor.PropertyToName(*constraint_violation.properties.begin());
                   const auto &label_name = db_accessor.LabelToName(constraint_violation.label);
-                  spdlog::warn("Trigger '{}' failed to commit due to type constraint violation on: {}({}) IS TYPED {}",
-                               trigger.Name(),
-                               label_name,
-                               property_name,
-                               storage::TypeConstraintKindToString(*constraint_violation.constraint_kind));
+                  memgraph::logging::Warn(
+                      "Trigger '{}' failed to commit due to type constraint violation on: {}({}) IS TYPED {}",
+                      trigger.Name(),
+                      label_name,
+                      property_name,
+                      storage::TypeConstraintKindToString(*constraint_violation.constraint_kind));
 
                   break;
                 }
@@ -10098,9 +10084,7 @@ void Interpreter::Commit() {
   LogQueryMessage("Query commit started.");
   utils::OnScopeExit const commit_end([this]() {
     this->LogQueryMessage("Query commit ended.");
-    if (query_logger_) {
-      query_logger_->ResetTransactionId();
-    }
+    this->session_log_ctx_.tx_id.clear();
   });
 
   // It's possible that some queries did not finish because the user did
@@ -10347,9 +10331,7 @@ void Interpreter::Commit() {
     throw ReplicationException(*replication_error_msg);
   }
 
-  if (IsQueryLoggingActive()) {
-    query_logger_->trace("Commit successfully finished!");
-  }
+  memgraph::logging::Trace("Commit successfully finished!");
 }
 
 void Interpreter::AdvanceCommand() {
@@ -10390,13 +10372,8 @@ void Interpreter::SetSessionIsolationLevel(const storage::IsolationLevel isolati
 void Interpreter::SetUser(std::shared_ptr<QueryUserOrRole> user_or_role,
                           std::shared_ptr<utils::UserResources> user_resource) {
   user_or_role_ = std::move(user_or_role);
-  if (query_logger_) {
-    std::string username;
-    if (user_or_role_ && user_or_role_->username()) {
-      username = user_or_role_->username().value();
-    }
-    query_logger_->SetUser(username);
-  }
+  session_log_ctx_.user =
+      (user_or_role_ && user_or_role_->username()) ? user_or_role_->username().value() : std::string{};
   // Pre-existsing user resource; decrement session (since it is not being used anymore)
   if (user_resource_) {
     user_resource_->DecrementSessions();
@@ -10413,28 +10390,19 @@ void Interpreter::SetUser(std::shared_ptr<QueryUserOrRole> user_or_role,
 #else
 void Interpreter::SetUser(std::shared_ptr<QueryUserOrRole> user_or_role) {
   user_or_role_ = std::move(user_or_role);
-  if (query_logger_) {
-    std::string username;
-    if (user_or_role_ && user_or_role_->username()) {
-      username = user_or_role_->username().value();
-    }
-    query_logger_->SetUser(username);
-  }
+  session_log_ctx_.user =
+      (user_or_role_ && user_or_role_->username()) ? user_or_role_->username().value() : std::string{};
 }
 #endif
 
 void Interpreter::SetSessionInfo(std::string uuid, std::string username, std::string login_timestamp) {
   session_info_ = {.uuid = uuid, .username = username, .login_timestamp = login_timestamp};
-  if (query_logger_) {
-    query_logger_->SetSessionId(uuid);
-  }
+  session_log_ctx_.session_uuid = uuid;
 }
 
 void Interpreter::ResetUser() {
   user_or_role_.reset();
-  if (query_logger_) {
-    query_logger_->ResetUser();
-  }
+  session_log_ctx_.user.clear();
 #ifdef MG_ENTERPRISE
   if (user_resource_) {
     user_resource_->DecrementSessions();
@@ -10443,12 +10411,16 @@ void Interpreter::ResetUser() {
 #endif
 }
 
-bool Interpreter::IsQueryLoggingActive() const { return query_logger_.has_value(); }
+bool Interpreter::IsQueryLoggingActive() const {
+  // "Active" = this session has lowered its level below the global gate, i.e.
+  // the user explicitly bumped verbosity for this session.
+  return session_log_ctx_.level.load(std::memory_order_relaxed) < memgraph::logging::GetGlobalLevel();
+}
 
 void Interpreter::LogQueryMessage(std::string message) {
-  if (query_logger_) {
-    (*query_logger_).trace(message);
-  }
+  // Goes through the wrapper which consults the per-thread session context
+  // (installed at Session::Execute() entry) for level + tag prefix.
+  memgraph::logging::Trace("{}", message);
 }
 
 }  // namespace memgraph::query
